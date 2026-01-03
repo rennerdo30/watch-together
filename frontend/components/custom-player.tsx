@@ -5,6 +5,7 @@ import Hls from 'hls.js';
 import { cn } from '@/lib/utils';
 import { Loader2, Info, Activity, Ear } from 'lucide-react';
 import { PlayerControls } from './player-controls';
+import { QualityOption, AudioOption } from '@/lib/api';
 
 interface CustomPlayerProps {
     url: string | { src: string; type: string };
@@ -13,12 +14,21 @@ interface CustomPlayerProps {
     autoPlay?: boolean;
     className?: string;
     isLive?: boolean;
+    initialTime?: number; // Add initialTime prop
     onPlay?: () => void;
     onPause?: () => void;
     onSeeked?: (time: number) => void;
     onEnd?: () => void;
     playerRef?: React.MutableRefObject<any>;
     onTimeUpdate?: (time: number, isPlaying: boolean) => void;
+    syncThreshold?: number;
+    onSyncThresholdChange?: (val: number) => void;
+    // DASH-specific props for separate video/audio streams
+    streamType?: 'hls' | 'dash' | 'combined' | 'video_only' | 'default' | 'unknown';
+    videoUrl?: string;
+    audioUrl?: string;
+    availableQualities?: QualityOption[];
+    audioOptions?: AudioOption[];
 }
 
 export function CustomPlayer({
@@ -28,34 +38,86 @@ export function CustomPlayer({
     autoPlay = false,
     className,
     isLive,
+    initialTime = 0, // Default to 0
     onPlay,
     onPause,
     onSeeked,
     onEnd,
     playerRef,
-    onTimeUpdate
+    onTimeUpdate,
+    syncThreshold,
+    onSyncThresholdChange,
+    streamType,
+    videoUrl,
+    audioUrl,
+    availableQualities,
+    audioOptions
 }: CustomPlayerProps) {
     const videoRef = useRef<HTMLVideoElement>(null);
+    const audioRef = useRef<HTMLAudioElement>(null); // For DASH separate audio
     const containerRef = useRef<HTMLDivElement>(null);
     const hlsRef = useRef<Hls | null>(null);
+    const isAutoPlaying = useRef(false);
+    const dashInitialized = useRef<string | null>(null); // Track which DASH URL we initialized
+    const isDashMode = streamType === 'dash' && videoUrl && audioUrl;
+
+    // Debug: Log stream type detection (only on actual changes)
+    const lastLoggedConfig = useRef<string>('');
+    useEffect(() => {
+        const configKey = `${streamType}-${!!videoUrl}-${!!audioUrl}`;
+        if (configKey !== lastLoggedConfig.current) {
+            lastLoggedConfig.current = configKey;
+            console.log('[CustomPlayer] Stream config:', {
+                streamType,
+                hasVideoUrl: !!videoUrl,
+                hasAudioUrl: !!audioUrl,
+                isDashMode
+            });
+        }
+    }, [streamType, videoUrl, audioUrl, isDashMode]);
 
     // State
     const [isPlaying, setIsPlaying] = useState(false);
-    const [isMuted, setIsMuted] = useState(false);
-    const [volume, setVolume] = useState(1);
+    const [isMuted, setIsMuted] = useState(() => {
+        if (typeof window !== 'undefined') {
+            return localStorage.getItem('w2g-player-muted') === 'true';
+        }
+        return false;
+    });
+    const [volume, setVolume] = useState(() => {
+        if (typeof window !== 'undefined') {
+            const saved = localStorage.getItem('w2g-player-volume');
+            return saved !== null ? parseFloat(saved) : 1.0;
+        }
+        return 1.0;
+    });
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [showControls, setShowControls] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [currentQuality, setCurrentQuality] = useState<number>(-1);
     const [qualities, setQualities] = useState<{ height: number; index: number; bitrate: number }[]>([]);
+    const [currentDashQuality, setCurrentDashQuality] = useState<number>(0); // Index into availableQualities
+    const [currentAudioOption, setCurrentAudioOption] = useState<number>(0); // Index into audioOptions
     const [showStats, setShowStats] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
     const [liveLatency, setLiveLatency] = useState(0);
     const [seekableRange, setSeekableRange] = useState({ start: 0, end: 0 });
-    const [isNormalizationEnabled, setIsNormalizationEnabled] = useState(false);
+    const [isNormalizationEnabled, setIsNormalizationEnabled] = useState(() => {
+        if (typeof window !== 'undefined') {
+            return localStorage.getItem('w2g-player-normalization') !== 'false'; // Default true
+        }
+        return true;
+    });
+    const [normalizationGain, setNormalizationGain] = useState(() => {
+        if (typeof window !== 'undefined') {
+            const saved = localStorage.getItem('w2g-player-normalization-gain');
+            return saved !== null ? parseFloat(saved) : 1.0;
+        }
+        return 1.0;
+    });
 
     // Audio Context Refs
     const audioContextRef = useRef<AudioContext | null>(null);
@@ -97,26 +159,29 @@ export function CustomPlayer({
         }
     }, [playerRef, isLive]);
 
-    // Load volume settings
+    // Apply initial volume/mute settings to video/audio refs
     useEffect(() => {
-        const savedVolume = localStorage.getItem('w2g-player-volume');
-        const savedMuted = localStorage.getItem('w2g-player-muted');
-        const savedNorm = localStorage.getItem('w2g-player-normalization');
+        if (isDashMode) {
+            // In DASH mode, video is always muted, audio element handles sound
+            if (audioRef.current) {
+                audioRef.current.volume = volume;
+                audioRef.current.muted = isMuted;
+            }
+            if (videoRef.current) {
+                videoRef.current.muted = true; // Always muted in DASH
+            }
+        } else {
+            if (videoRef.current) {
+                videoRef.current.volume = volume;
+                videoRef.current.muted = isMuted;
+                videoRef.current.defaultMuted = isMuted;
+            }
+        }
+    }, [volume, isMuted, isDashMode]); // Run whenever volume/mute state changes to sync ref
 
-        if (savedVolume !== null && videoRef.current) {
-            const vol = parseFloat(savedVolume);
-            setVolume(vol);
-            videoRef.current.volume = vol;
-        }
-        if (savedMuted !== null && videoRef.current) {
-            const muted = savedMuted === 'true';
-            setIsMuted(muted);
-            videoRef.current.muted = muted;
-        }
-        if (savedNorm !== null) {
-            setIsNormalizationEnabled(savedNorm === 'true');
-        }
-    }, []);
+    // Note: Removed aggressive auto-unmute logic that fought with browser autoplay policy.
+    // Users must click the unmute button or interact with the page to enable audio.
+    // This is required by Chrome/Safari autoplay policies.
 
     // Audio Normalization Logic
     useEffect(() => {
@@ -143,7 +208,7 @@ export function CustomPlayer({
                     compressorNodeRef.current.release.value = 0.25;
 
                     // Makeup gain since compression reduces overall level
-                    gainNodeRef.current.gain.value = 2.0;
+                    gainNodeRef.current.gain.value = normalizationGain;
 
                     // Connect graph: Source -> Compressor -> Gain -> Destination
                     sourceNodeRef.current.connect(compressorNodeRef.current);
@@ -152,6 +217,12 @@ export function CustomPlayer({
                 }
             } else if (audioContextRef.current.state === 'suspended') {
                 audioContextRef.current.resume();
+            }
+
+            // Apply current gain dynamically
+            if (gainNodeRef.current) {
+                const currentTime = audioContextRef.current?.currentTime || 0;
+                gainNodeRef.current.gain.setTargetAtTime(normalizationGain, currentTime, 0.1);
             }
         } else {
             // Bypass logic: ideally we disconnect but WebAudio graph management is tricky.
@@ -180,7 +251,7 @@ export function CustomPlayer({
         }
 
         // Cleanup not strictly necessary since context persists with component
-    }, [isNormalizationEnabled]);
+    }, [isNormalizationEnabled, normalizationGain]);
 
     const toggleNormalization = () => {
         const newVal = !isNormalizationEnabled;
@@ -188,8 +259,194 @@ export function CustomPlayer({
         localStorage.setItem('w2g-player-normalization', String(newVal));
     };
 
-    // Initialize HLS
+    const updateNormalizationGain = (val: number) => {
+        setNormalizationGain(val);
+        localStorage.setItem('w2g-player-normalization-gain', String(val));
+    };
+
+    // Initialize DASH with separate video/audio streams
     useEffect(() => {
+        if (!isDashMode) {
+            dashInitialized.current = null;
+            return;
+        }
+
+        const video = videoRef.current;
+        const audio = audioRef.current;
+        if (!video || !audio || !videoUrl || !audioUrl) return;
+
+        // Prevent re-initialization if already initialized with same URLs
+        const initKey = `${videoUrl}|${audioUrl}`;
+        if (dashInitialized.current === initKey) {
+            return;
+        }
+        dashInitialized.current = initKey;
+
+        console.log('[DASH] Initializing with separate video/audio streams');
+        console.log('[DASH] Video URL:', videoUrl.substring(0, 100) + '...');
+        console.log('[DASH] Audio URL:', audioUrl.substring(0, 100) + '...');
+        setError(null);
+        setIsLoading(true);
+
+        // Set up video (will be muted, audio comes from audio element)
+        video.src = videoUrl;
+        video.muted = true; // Video element ALWAYS muted in DASH mode
+        video.load();
+
+        // Set up audio - apply user's saved preferences
+        audio.src = audioUrl;
+        const savedMuted = localStorage.getItem('w2g-player-muted') === 'true';
+        const savedVolume = localStorage.getItem('w2g-player-volume');
+        audio.muted = savedMuted;
+        audio.volume = savedVolume !== null ? parseFloat(savedVolume) : 1.0;
+        console.log('[DASH] Audio muted:', savedMuted, 'volume:', audio.volume);
+        audio.load();
+
+        // Set up qualities from availableQualities
+        if (availableQualities && availableQualities.length > 0) {
+            const dashQualities = availableQualities.map((q, index) => ({
+                height: q.height,
+                bitrate: q.tbr ? q.tbr * 1000 : (q.height * 5000), // Estimate bitrate if not provided
+                index,
+            }));
+            console.log('[DASH] Available qualities:', dashQualities);
+            setQualities(dashQualities);
+            setCurrentQuality(0); // Start with best quality
+        }
+
+        const onVideoLoaded = () => {
+            console.log('[DASH] Video loaded, duration:', video.duration);
+        };
+
+        const onAudioLoaded = () => {
+            console.log('[DASH] Audio loaded, duration:', audio.duration);
+        };
+
+        const onBothLoaded = () => {
+            setIsLoading(false);
+            setDuration(video.duration || audio.duration);
+
+            if (initialTime > 0 && Number.isFinite(initialTime) && !isLive) {
+                video.currentTime = initialTime;
+                audio.currentTime = initialTime;
+                setCurrentTime(initialTime);
+            }
+
+            if (autoPlay) {
+                isAutoPlaying.current = true;
+                console.log('[DASH] Attempting autoplay...');
+                // Play both - video is muted, audio handles sound
+                // Try to play video first (muted), then audio
+                video.play()
+                    .then(() => {
+                        console.log('[DASH] Video playing');
+                        return audio.play();
+                    })
+                    .then(() => {
+                        console.log('[DASH] Audio playing');
+                        setIsPlaying(true);
+                    })
+                    .catch((err) => {
+                        console.warn('[DASH] Autoplay blocked:', err);
+                        // Try with audio muted too
+                        audio.muted = true;
+                        setIsMuted(true);
+                        Promise.all([video.play(), audio.play()])
+                            .then(() => setIsPlaying(true))
+                            .catch(() => setIsPlaying(false));
+                    })
+                    .finally(() => {
+                        setTimeout(() => { isAutoPlaying.current = false; }, 1000);
+                    });
+            }
+        };
+
+        let videoLoaded = false;
+        let audioLoaded = false;
+
+        const checkBothLoaded = () => {
+            if (videoLoaded && audioLoaded) {
+                onBothLoaded();
+            }
+        };
+
+        const onVideoLoadedMeta = () => {
+            onVideoLoaded();
+            videoLoaded = true;
+            checkBothLoaded();
+        };
+
+        const onAudioLoadedMeta = () => {
+            onAudioLoaded();
+            audioLoaded = true;
+            checkBothLoaded();
+        };
+
+        const onVideoError = (e: Event) => {
+            console.error('[DASH] Video error:', video.error);
+            setError(`Video load failed: ${video.error?.message || 'Unknown error'}`);
+        };
+
+        const onAudioError = (e: Event) => {
+            console.error('[DASH] Audio error:', audio.error);
+            setError(`Audio load failed: ${audio.error?.message || 'Unknown error'}`);
+        };
+
+        video.addEventListener('loadedmetadata', onVideoLoadedMeta, { once: true });
+        audio.addEventListener('loadedmetadata', onAudioLoadedMeta, { once: true });
+        video.addEventListener('error', onVideoError, { once: true });
+        audio.addEventListener('error', onAudioError, { once: true });
+
+        // Sync audio with video on seek
+        const syncAudioToVideo = () => {
+            if (audio && video && Math.abs(audio.currentTime - video.currentTime) > 0.3) {
+                audio.currentTime = video.currentTime;
+            }
+        };
+
+        video.addEventListener('seeked', syncAudioToVideo);
+        video.addEventListener('seeking', () => {
+            if (audio) audio.currentTime = video.currentTime;
+        });
+
+        // Handle play/pause sync
+        const onVideoPlay = () => {
+            audio?.play().catch(console.warn);
+        };
+        const onVideoPause = () => {
+            audio?.pause();
+        };
+
+        video.addEventListener('play', onVideoPlay);
+        video.addEventListener('pause', onVideoPause);
+
+        // Periodic sync to prevent drift
+        const syncInterval = setInterval(() => {
+            if (video && audio && !video.paused) {
+                const drift = Math.abs(audio.currentTime - video.currentTime);
+                if (drift > 0.2) {
+                    console.log(`[DASH] Correcting drift: ${drift.toFixed(3)}s`);
+                    audio.currentTime = video.currentTime;
+                }
+            }
+        }, 1000);
+
+        return () => {
+            clearInterval(syncInterval);
+            video.removeEventListener('play', onVideoPlay);
+            video.removeEventListener('pause', onVideoPause);
+            // Reset init tracking on cleanup
+            dashInitialized.current = null;
+        };
+        // Only depend on URL changes - other props are read from refs or current values
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [videoUrl, audioUrl]);
+
+    // ... (HLS init logic)
+    // Initialize HLS (skip if DASH mode)
+    useEffect(() => {
+        if (isDashMode) return; // Skip HLS init when using DASH
+
         const video = videoRef.current;
         if (!video || !src) return;
 
@@ -198,8 +455,11 @@ export function CustomPlayer({
 
         const initPlayer = () => {
             const isHlsSource = (typeof url === 'object' && url.type === 'application/x-mpegurl') ||
-                (src.includes('.m3u8') || src.includes('.m3u') || src.includes('manifest'));
+                (typeof src === 'string' && (src.includes('.m3u8') || src.includes('.m3u') || src.includes('manifest')));
 
+            // Determine if we should attempt HLS.js
+            // If it's Safari (native HLS), Hls.isSupported() might be true but we might prefer native or vice-versa.
+            // Usually check Hls.isSupported() first.
             if (isHlsSource && Hls.isSupported()) {
                 if (hlsRef.current) hlsRef.current.destroy();
 
@@ -208,7 +468,6 @@ export function CustomPlayer({
                     lowLatencyMode: true,
                     backBufferLength: 90,
                     liveSyncDurationCount: 3,
-                    // Robust retry logic for proxied segments
                     fragLoadingRetryDelay: 1000,
                     manifestLoadingRetryDelay: 1000,
                     levelLoadingRetryDelay: 1000,
@@ -221,22 +480,47 @@ export function CustomPlayer({
 
                 hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
                     setIsLoading(false);
-                    console.log('HLS Manifest Parsed:', data.levels.length, 'levels');
+                    console.log('HLS Manifest Parsed:', data.levels.length, 'levels', data.levels);
+
                     const levels = data.levels.map((level, index) => ({
                         height: level.height || 0,
                         bitrate: level.bitrate || 0,
                         index,
                     }));
-                    // Filter out levels with no height (might be audio-only)
-                    const videoLevels = levels.filter(l => l.height > 0 || l.bitrate > 0);
-                    setQualities(videoLevels.length > 0 ? videoLevels : levels);
-                    console.log('Quality levels:', videoLevels);
+
+                    // More permissive filter: Just ensure we have distinct levels. 
+                    // Sometimes audio-only or low-res streams have height=0.
+                    // We want to show them if they are distinct bitrates.
+                    const uniqueLevels = levels.filter((l, i, self) =>
+                        i === self.findIndex((t) => (
+                            t.height === l.height && t.bitrate === l.bitrate
+                        ))
+                    );
+
+                    // Sort by bitrate desc
+                    uniqueLevels.sort((a, b) => b.bitrate - a.bitrate);
+
+                    setQualities(uniqueLevels);
+
+                    // Set initial time if provided
+                    if (initialTime > 0 && Number.isFinite(initialTime) && !isLive) {
+                        video.currentTime = initialTime;
+                        setCurrentTime(initialTime);
+                    }
+
                     if (autoPlay) {
-                        // Try to autoplay, fallback to muted autoplay if blocked
+                        const savedMuted = localStorage.getItem('w2g-player-muted') === 'true';
+                        video.muted = savedMuted;
+                        setIsMuted(savedMuted);
+
+                        isAutoPlaying.current = true;
                         video.play().catch(() => {
-                            // Browser blocked autoplay - try muted
+                            console.log('Autoplay blocked, falling back to muted');
                             video.muted = true;
+                            setIsMuted(true);
                             video.play().catch(() => setIsPlaying(false));
+                        }).finally(() => {
+                            setTimeout(() => { isAutoPlaying.current = false; }, 1000);
                         });
                     }
                 });
@@ -272,25 +556,42 @@ export function CustomPlayer({
                 hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
                     setCurrentQuality(data.level);
                     const level = hls.levels[data.level];
-                    setStats(prev => ({
-                        ...prev,
-                        videoCodec: level.videoCodec || '',
-                        audioCodec: level.audioCodec || '',
-                    }));
+                    if (level) {
+                        setStats(prev => ({
+                            ...prev,
+                            videoCodec: level.videoCodec || '',
+                            audioCodec: level.audioCodec || '',
+                        }));
+                    }
                 });
 
                 hlsRef.current = hls;
             } else {
                 // Standard Native Playback (MP4 / Native HLS on Safari)
                 video.src = src;
-                video.load(); // Ensure reload
+                video.load();
 
                 const onLoadedMetadata = () => {
                     setIsLoading(false);
+
+                    if (initialTime > 0 && Number.isFinite(initialTime) && !isLive) {
+                        video.currentTime = initialTime;
+                        setCurrentTime(initialTime);
+                    }
+
                     if (autoPlay) {
+                        const savedMuted = localStorage.getItem('w2g-player-muted') === 'true';
+                        video.muted = savedMuted;
+                        setIsMuted(savedMuted);
+
+                        isAutoPlaying.current = true;
                         video.play().catch(() => {
+                            console.log('Autoplay blocked, falling back to muted');
                             video.muted = true;
+                            setIsMuted(true);
                             video.play().catch(() => setIsPlaying(false));
+                        }).finally(() => {
+                            setTimeout(() => { isAutoPlaying.current = false; }, 1000);
                         });
                     }
                 };
@@ -307,64 +608,56 @@ export function CustomPlayer({
                 hlsRef.current = null;
             }
         };
-    }, [src, autoPlay]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [src, autoPlay, isLive]);
 
     // Video Event Handlers
     useEffect(() => {
         const video = videoRef.current;
         if (!video) return;
 
-        const onVideoPlay = () => { setIsPlaying(true); onPlay?.(); };
-        const onVideoPause = () => { setIsPlaying(false); onPause?.(); };
+        const onVideoPlay = () => {
+            setIsPlaying(true);
+            if (!isAutoPlaying.current) onPlay?.();
+        };
+        const onVideoPause = () => {
+            setIsPlaying(false);
+            onPause?.();
+        };
+        const onVideoSeeked = () => {
+            if (!isAutoPlaying.current) onSeeked?.(video.currentTime);
+        };
+        const onVideoEnded = () => {
+            setIsPlaying(false);
+            onEnd?.();
+        };
         const onVideoTimeUpdate = () => {
             setCurrentTime(video.currentTime);
-            setDuration(video.duration);
-            if (video.seekable.length > 0) {
-                const end = video.seekable.end(video.seekable.length - 1);
-                setSeekableRange({ start: video.seekable.start(0), end });
-                setLiveLatency(Math.max(0, end - video.currentTime));
-            }
+            onTimeUpdate?.(video.currentTime, !video.paused);
+            if (video.duration) setDuration(video.duration);
 
-            // Update stats
-            const quality = (video as any).getVideoPlaybackQuality?.() || {};
-            setStats(prev => ({
-                ...prev,
-                fps: quality.totalVideoFrames ? (quality.totalVideoFrames / video.currentTime) : 0,
-                dropped: quality.droppedVideoFrames || 0,
-                bufferForward: video.buffered.length > 0 ? (video.buffered.end(video.buffered.length - 1) - video.currentTime) : 0,
-            }));
+            if (isLive && video.seekable.length > 0) {
+                const end = video.seekable.end(video.seekable.length - 1);
+                setLiveLatency(Math.max(0, end - video.currentTime));
+                setSeekableRange({ start: video.seekable.start(0), end });
+            }
         };
-        const onVideoEnded = () => onEnd?.();
-        const onVideoWaiting = () => setIsLoading(true);
-        const onVideoPlaying = () => setIsLoading(false);
-        const onVideoVolumeChange = () => {
-            setIsMuted(video.muted);
-            setVolume(video.volume);
-            localStorage.setItem('w2g-player-volume', String(video.volume));
-            localStorage.setItem('w2g-player-muted', String(video.muted));
-        };
-        const onVideoSeeked = () => onSeeked?.(video.currentTime);
 
         video.addEventListener('play', onVideoPlay);
         video.addEventListener('pause', onVideoPause);
-        video.addEventListener('timeupdate', onVideoTimeUpdate);
-        video.addEventListener('ended', onVideoEnded);
-        video.addEventListener('waiting', onVideoWaiting);
-        video.addEventListener('playing', onVideoPlaying);
-        video.addEventListener('volumechange', onVideoVolumeChange);
         video.addEventListener('seeked', onVideoSeeked);
+        video.addEventListener('ended', onVideoEnded);
+        video.addEventListener('timeupdate', onVideoTimeUpdate);
 
         return () => {
             video.removeEventListener('play', onVideoPlay);
             video.removeEventListener('pause', onVideoPause);
-            video.removeEventListener('timeupdate', onVideoTimeUpdate);
-            video.removeEventListener('ended', onVideoEnded);
-            video.removeEventListener('waiting', onVideoWaiting);
-            video.removeEventListener('playing', onVideoPlaying);
-            video.removeEventListener('volumechange', onVideoVolumeChange);
             video.removeEventListener('seeked', onVideoSeeked);
+            video.removeEventListener('ended', onVideoEnded);
+            video.removeEventListener('timeupdate', onVideoTimeUpdate);
         };
-    }, [onPlay, onPause, onSeeked, onEnd]);
+    }, [isLive, onPlay, onPause, onSeeked, onEnd, onTimeUpdate]);
+
 
     // Control visibility timeout
     useEffect(() => {
@@ -402,6 +695,38 @@ export function CustomPlayer({
         }
     };
 
+    const handleQualityChange = (index: number) => {
+        if (isDashMode && availableQualities && availableQualities[index]) {
+            // DASH quality change - switch video URL while maintaining playback position
+            const video = videoRef.current;
+            const audio = audioRef.current;
+            if (!video) return;
+
+            const currentTime = video.currentTime;
+            const wasPlaying = !video.paused;
+
+            console.log(`[DASH] Switching to quality ${index}: ${availableQualities[index].height}p`);
+
+            video.src = availableQualities[index].video_url;
+            video.load();
+
+            video.addEventListener('loadedmetadata', () => {
+                video.currentTime = currentTime;
+                if (audio) audio.currentTime = currentTime;
+                if (wasPlaying) {
+                    video.play().catch(console.warn);
+                    audio?.play().catch(console.warn);
+                }
+            }, { once: true });
+
+            setCurrentQuality(index);
+            setCurrentDashQuality(index);
+        } else if (hlsRef.current) {
+            hlsRef.current.currentLevel = index;
+            setCurrentQuality(index);
+        }
+    };
+
     return (
         <div
             ref={containerRef}
@@ -420,6 +745,14 @@ export function CustomPlayer({
                     if (isLive) return; // Disable click-to-pause for live
                     isPlaying ? videoRef.current?.pause() : safePlay();
                 }}
+            />
+
+            {/* Hidden audio element for DASH mode (separate video/audio streams) */}
+            {/* Always render but hide - ensures ref is available when DASH mode activates */}
+            <audio
+                ref={audioRef}
+                style={{ display: 'none' }}
+                preload="auto"
             />
 
             {/* Overlays */}
@@ -494,21 +827,88 @@ export function CustomPlayer({
                 visible={showControls || !isPlaying}
                 normalizationActive={isNormalizationEnabled}
                 onToggleNormalization={toggleNormalization}
+                normalizationGain={normalizationGain}
+                onNormalizationGainChange={updateNormalizationGain}
+                syncThreshold={syncThreshold}
+                onSyncThresholdChange={onSyncThresholdChange}
                 onPlayToggle={() => {
+                    // Start AudioContext on user gesture
+                    if (audioContextRef.current?.state === 'suspended') {
+                        audioContextRef.current.resume();
+                    }
                     if (isLive && isPlaying) return; // Prevent pausing live
-                    isPlaying ? videoRef.current?.pause() : videoRef.current?.play();
+
+                    if (isDashMode) {
+                        // In DASH mode, sync both video and audio
+                        if (isPlaying) {
+                            videoRef.current?.pause();
+                            audioRef.current?.pause();
+                        } else {
+                            videoRef.current?.play();
+                            audioRef.current?.play();
+                        }
+                    } else {
+                        isPlaying ? videoRef.current?.pause() : videoRef.current?.play();
+                    }
                 }}
-                onMuteToggle={() => videoRef.current && (videoRef.current.muted = !videoRef.current.muted)}
-                onVolumeChange={(val) => videoRef.current && (videoRef.current.volume = val)}
+                onMuteToggle={() => {
+                    if (isDashMode && audioRef.current) {
+                        // In DASH mode, control the audio element
+                        const newMuted = !audioRef.current.muted;
+                        audioRef.current.muted = newMuted;
+                        setIsMuted(newMuted);
+                        localStorage.setItem('w2g-player-muted', String(newMuted));
+                        console.log('[DASH] Mute toggled to:', newMuted);
+                    } else if (videoRef.current) {
+                        // Resume AudioContext if needed (often required for audio to start/unmute in some browsers)
+                        if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+                            audioContextRef.current.resume();
+                        }
+
+                        const newMuted = !videoRef.current.muted;
+                        videoRef.current.muted = newMuted;
+                        setIsMuted(newMuted);
+                        localStorage.setItem('w2g-player-muted', String(newMuted));
+                        console.log('[CustomPlayer] Mute toggled to:', newMuted);
+                    }
+                }}
+                onVolumeChange={(val) => {
+                    if (isDashMode && audioRef.current) {
+                        // In DASH mode, control the audio element
+                        audioRef.current.volume = val;
+                        setVolume(val);
+                        localStorage.setItem('w2g-player-volume', String(val));
+                        // Unmute if dragging volume slider
+                        if (val > 0 && isMuted) {
+                            audioRef.current.muted = false;
+                            setIsMuted(false);
+                            localStorage.setItem('w2g-player-muted', 'false');
+                        }
+                    } else if (videoRef.current) {
+                        videoRef.current.volume = val;
+                        setVolume(val);
+                        localStorage.setItem('w2g-player-volume', String(val));
+                        // Unmute if dragging volume slider
+                        if (val > 0 && isMuted) {
+                            videoRef.current.muted = false;
+                            setIsMuted(false);
+                            localStorage.setItem('w2g-player-muted', 'false');
+                        }
+                    }
+                }}
                 onFullscreenToggle={toggleFullscreen}
                 onPiPToggle={() => videoRef.current?.requestPictureInPicture()}
                 onSettingsToggle={() => setShowSettings(!showSettings)}
                 onStatsToggle={() => setShowStats(!showStats)}
-                onQualityChange={(index) => {
-                    if (hlsRef.current) hlsRef.current.currentLevel = index;
-                    setShowSettings(false);
+                onQualityChange={handleQualityChange}
+                onSeek={(time) => {
+                    if (videoRef.current) {
+                        videoRef.current.currentTime = time;
+                    }
+                    if (isDashMode && audioRef.current) {
+                        audioRef.current.currentTime = time;
+                    }
                 }}
-                onSeek={(time) => videoRef.current && (videoRef.current.currentTime = time)}
                 onGoToLive={() => {
                     if (videoRef.current && seekableRange.end) {
                         videoRef.current.currentTime = seekableRange.end - 2;

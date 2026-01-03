@@ -1,0 +1,19 @@
+# Temp/runtime data
+data/
+cache/
+
+# Python virtual environment
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Git
+.git/
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log

@@ -3,3 +3,5 @@ __pycache__
 .DS_Store
 cookies.txt
 rooms.json
+backend/data/cache
+backend/data/cookies

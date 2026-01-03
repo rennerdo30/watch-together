@@ -1,6 +1,22 @@
 // When running server-side (SSG/SSR), use internal docker URL. Client-side use relative path.
 const API_BASE_URL = typeof window === 'undefined' ? (process.env.BACKEND_URL || 'http://backend:8000') : '';
 
+export interface QualityOption {
+    height: number;
+    width: number;
+    video_url: string;
+    format_id: string;
+    vcodec: string;
+    tbr?: number;
+}
+
+export interface AudioOption {
+    abr: number;
+    audio_url: string;
+    format_id: string;
+    acodec: string;
+}
+
 export interface ResolveResponse {
     original_url: string;
     stream_url: string;
@@ -8,12 +24,30 @@ export interface ResolveResponse {
     is_live: boolean;
     thumbnail?: string;
     backend_engine: string;
+    pinned?: boolean;
+    quality?: string;
+    has_audio?: boolean;
+    stream_type?: 'hls' | 'dash' | 'combined' | 'video_only' | 'default' | 'unknown';
+    // DASH-specific fields
+    video_url?: string;
+    audio_url?: string;
+    available_qualities?: QualityOption[];
+    audio_options?: AudioOption[];
 }
 
 export async function resolveUrl(url: string): Promise<ResolveResponse> {
     const encodedUrl = encodeURIComponent(url);
     const ua = typeof window !== 'undefined' ? encodeURIComponent(navigator.userAgent) : '';
-    const res = await fetch(`${API_BASE_URL}/api/resolve?url=${encodedUrl}&user_agent=${ua}`);
+
+    // Pass user identity for cookie lookup (dev mode uses query param)
+    let userParam = '';
+    if (typeof window !== 'undefined') {
+        const searchParams = new URLSearchParams(window.location.search);
+        const mockUser = searchParams.get('user');
+        if (mockUser) userParam = `&user=${encodeURIComponent(mockUser)}`;
+    }
+
+    const res = await fetch(`${API_BASE_URL}/api/resolve?url=${encodedUrl}&user_agent=${ua}${userParam}`);
 
     if (!res.ok) {
         const errorData = await res.json().catch(() => ({ detail: 'Unknown error' }));

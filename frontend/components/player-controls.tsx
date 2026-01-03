@@ -1,8 +1,8 @@
 'use client';
 
-import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, Settings, Activity, PictureInPicture, SkipBack, Info, Ear } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, Settings, Activity, PictureInPicture, Ear } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useState, useRef, useEffect } from 'react';
+
 
 interface PlayerControlsProps {
     isPlaying: boolean;
@@ -32,7 +32,11 @@ interface PlayerControlsProps {
     // Non-essential but for matching the requested snippet
     normalizationActive?: boolean;
     onToggleNormalization?: () => void;
+    normalizationGain?: number;
+    onNormalizationGainChange?: (val: number) => void;
     isLive?: boolean;
+    syncThreshold?: number;
+    onSyncThresholdChange?: (val: number) => void;
 }
 
 export function PlayerControls({
@@ -59,12 +63,16 @@ export function PlayerControls({
     onStatsToggle,
     onQualityChange,
     onSeek,
-    onGoToLive,
+    // onGoToLive, // Unused currently
     normalizationActive,
     onToggleNormalization,
+    normalizationGain,
+    onNormalizationGainChange,
     isLive,
+    syncThreshold,
+    onSyncThresholdChange
 }: PlayerControlsProps) {
-    const [isHoveringVolume, setIsHoveringVolume] = useState(false);
+
 
     const formatTime = (seconds: number) => {
         if (!seconds || isNaN(seconds)) return '0:00';
@@ -150,21 +158,15 @@ export function PlayerControls({
                 {/* Right Side: Volume/Stats/Settings/Fullscreen */}
                 <div className="flex items-center gap-2">
                     {/* Volume Control */}
-                    <div
-                        className="flex items-center"
-                        onMouseEnter={() => setIsHoveringVolume(true)}
-                        onMouseLeave={() => setIsHoveringVolume(false)}
-                    >
+                    <div className="flex items-center group">
                         <button
                             onClick={onMuteToggle}
-                            className="p-2 rounded-full hover:bg-white/10 text-white transition-all"
+                            className="p-2 rounded-full hover:bg-white/10 text-white transition-all flex-shrink-0"
+                            title={isMuted ? "Unmute" : "Mute"}
                         >
                             {isMuted || volume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
                         </button>
-                        <div className={cn(
-                            "overflow-hidden transition-all duration-300 ease-in-out flex items-center",
-                            isHoveringVolume ? "w-24 px-2" : "w-0"
-                        )}>
+                        <div className="w-24 px-2 transition-all opacity-100 group-hover:w-28">
                             <input
                                 type="range"
                                 min="0"
@@ -172,7 +174,8 @@ export function PlayerControls({
                                 step="0.01"
                                 value={isMuted ? 0 : volume}
                                 onChange={(e) => onVolumeChange(parseFloat(e.target.value))}
-                                className="w-full accent-white h-1 rounded-full cursor-pointer"
+                                className="w-full accent-white h-1 rounded-full cursor-pointer touch-none"
+                                aria-label="Volume"
                             />
                         </div>
                     </div>
@@ -242,6 +245,51 @@ export function PlayerControls({
                         <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Quality Settings</span>
                     </div>
                     <div className="space-y-1">
+
+                        {normalizationActive && onNormalizationGainChange && typeof normalizationGain === 'number' && (
+                            <div className="px-3 py-2 border-b border-white/5 mb-1">
+                                <div className="flex justify-between items-center mb-2">
+                                    <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest flex items-center gap-1">
+                                        <Ear className="w-3 h-3" /> Makeup Gain
+                                    </span>
+                                    <span className="text-[9px] text-zinc-400">
+                                        {(20 * Math.log10(normalizationGain)).toFixed(1)} dB
+                                    </span>
+                                </div>
+                                <input
+                                    type="range"
+                                    min="0.5"
+                                    max="3.0"
+                                    step="0.1"
+                                    value={normalizationGain}
+                                    onChange={(e) => onNormalizationGainChange(parseFloat(e.target.value))}
+                                    className="w-full accent-indigo-500 h-1 rounded-full cursor-pointer touch-none"
+                                />
+                            </div>
+                        )}
+
+                        {onSyncThresholdChange && syncThreshold !== undefined && (
+                            <div className="px-3 py-2 border-b border-white/5 mb-1">
+                                <div className="flex justify-between items-center mb-2">
+                                    <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest flex items-center gap-1">
+                                        <Activity className="w-3 h-3" /> Sync Threshold
+                                    </span>
+                                    <span className="text-[9px] text-zinc-400">
+                                        {syncThreshold}s
+                                    </span>
+                                </div>
+                                <input
+                                    type="range"
+                                    min="1"
+                                    max="10"
+                                    step="0.5"
+                                    value={syncThreshold}
+                                    onChange={(e) => onSyncThresholdChange(parseFloat(e.target.value))}
+                                    className="w-full accent-emerald-500 h-1 rounded-full cursor-pointer touch-none"
+                                />
+                            </div>
+                        )}
+
                         <button
                             onClick={() => onQualityChange(-1)}
                             className={cn(
@@ -260,7 +308,7 @@ export function PlayerControls({
                                     currentQuality === q.index ? "bg-emerald-500/20 text-emerald-400" : "text-zinc-400 hover:bg-white/5 hover:text-white"
                                 )}
                             >
-                                <span>{q.height}p</span>
+                                <span>{q.height ? `${q.height}p` : `Level ${q.index}`}</span>
                                 <span className="text-[9px] text-zinc-600 group-hover:text-zinc-500">{(q.bitrate / 1000).toFixed(0)} kbps</span>
                             </button>
                         ))}

@@ -8,6 +8,12 @@
 
 ### Session: 2026-01-04
 - [x] **[PLAYBACK] Failed to find demuxer**: Fixed proxy manifest detection - was incorrectly treating `.ts` segments as manifests because URL contained `.m3u8`.
+- [x] **[AUDIO] Normalization UX**: Renamed to "Makeup Gain", changed unit to dB, fixed slider range.
+- [x] **[STABILITY] Player Flickering**: Fixed re-initialization loop caused by timestamp ticker dependency.
+- [x] **[SYNC] Status Badge**: Fixed desync/wrong timestamp using client-side ticker and optimistic updates.
+- [x] **[SYNC] Sync Threshold Setting**: Added user-configurable threshold slider (1-10s) to player settings.
+- [x] **[UX] Queue Drag & Drop**: Added drag handles, improved visual feedback, and clarified drop zones.
+- [x] **[PLAYBACK] Audio Autoplay**: Fixed `AudioContext` suspension logic to resume on play.
 - [x] **[PLAYBACK] Video Looping**: Fixed sync feedback loop caused by `currentTime(0)` on set_video.
 - [x] **[PLAYBACK] Autoplay**: Added muted fallback for browser autoplay policies.
 - [x] **[SYNC] Race Condition**: Changed `isInternalUpdate` from boolean to counter-based semaphore.
@@ -37,4 +43,4 @@
 
 ## Planned Features
 
-- [ ] **Drag-and-Drop Queue**: Use `dnd-kit` or similar to allow fluid reordering.
+- [x] **Drag-and-Drop Queue**: Improved native DnD with handles and visual cues.
