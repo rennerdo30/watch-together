@@ -1,0 +1,59 @@
+services:
+  backend:
+    build: ./backend
+    container_name: watch-together-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - ./backend/data:/app/data
+    restart: unless-stopped
+    networks:
+      - watch-network
+
+  frontend:
+    build: ./frontend
+    container_name: watch-together-frontend
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    depends_on:
+      - backend
+    networks:
+      - watch-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: watch-together-proxy
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    restart: unless-stopped
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      watch-network:
+        aliases:
+          - nginx
+          - proxy
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: watch-together-tunnel
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    depends_on:
+      - nginx
+    networks:
+      - watch-network
+
+volumes:
+  backend-data:
+
+
+networks:
+  watch-network:
