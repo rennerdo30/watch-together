@@ -201,21 +201,30 @@ export default function RoomPage() {
 
         switch (type) {
             case 'sync':
-                // On initial sync, if we don't have video data yet or it's a different video, re-resolve
+                // On sync (initial load or reconnect), set video data and re-resolve for fresh DASH URLs
                 if (payload.video_data) {
-                    const isDifferentVideo = !videoData || videoData.original_url !== payload.video_data.original_url;
-                    if (isDifferentVideo && payload.video_data.original_url) {
-                        console.log('[Room] Initial sync - resolving video...');
-                        resolveUrl(payload.video_data.original_url)
-                            .then((freshData) => {
-                                console.log('[Room] Sync resolved:', freshData.stream_type);
-                                setVideoData(freshData);
-                            })
-                            .catch(() => setVideoData(payload.video_data));
-                    } else if (isDifferentVideo) {
-                        setVideoData(payload.video_data);
+                    const isSameVideo = videoData?.original_url === payload.video_data.original_url;
+
+                    if (!videoData || !isSameVideo) {
+                        // New video or first load: Re-resolve for fresh stream URLs
+                        if (payload.video_data.original_url) {
+                            console.log('[Room] Sync: Re-resolving video for fresh stream URLs...');
+                            resolveUrl(payload.video_data.original_url)
+                                .then((freshData) => {
+                                    console.log('[Room] Sync: Got fresh stream:', freshData.stream_type, freshData.quality);
+                                    setVideoData(freshData);
+                                })
+                                .catch((err) => {
+                                    console.warn('[Room] Sync: Re-resolve failed, using cached data:', err.message);
+                                    setVideoData(payload.video_data);
+                                });
+                        } else {
+                            setVideoData(payload.video_data);
+                        }
+                    } else {
+                        // Same video already loaded, just update state if needed
+                        console.log('[Room] Sync: Same video already loaded, skip re-resolve');
                     }
-                    // If same video, keep current videoData (don't overwrite fresh data with stale)
                 }
                 if (payload.members) setMembers(payload.members);
                 if (payload.queue) setQueue(payload.queue);

@@ -1,4 +1,5 @@
 import os
+from typing import Dict, Tuple, Optional
 import asyncio
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,8 +21,14 @@ import time
 # Cache configuration
 CACHE_DIR = "data/cache"
 COOKIES_DIR = "data/cookies"
-MAX_CACHE_SIZE_BYTES = 500 * 1024 * 1024  # 500 MB
-CACHE_TTL_SECONDS = 3600  # 1 hour
+MAX_CACHE_SIZE_BYTES = 200 * 1024 * 1024  # 200 MB (reduced from 500MB)
+CACHE_TTL_SECONDS = 1800  # 30 minutes (reduced from 1 hour)
+MIN_DISK_FREE_BYTES = 500 * 1024 * 1024  # Keep at least 500MB free disk space
+MAX_CACHEABLE_FILE_BYTES = 50 * 1024 * 1024  # Don't cache files larger than 50MB
+
+# Format cache configuration - caches resolved video formats in memory
+FORMAT_CACHE_TTL_SECONDS = 900  # 15 minutes - YouTube URLs typically valid for 6 hours
+_format_cache: Dict[str, Tuple[dict, float]] = {}  # URL -> (resolved_data, expiry_time)
 
 if not os.path.exists(CACHE_DIR):
     os.makedirs(CACHE_DIR)
@@ -43,12 +50,39 @@ async def cleanup_task():
         await asyncio.sleep(60)  # Check every minute
         manager.cleanup_stale_rooms(ttl_seconds=300)  # 5 minute TTL
 
+def check_disk_space() -> tuple[bool, int]:
+    """
+    Check if there's enough disk space for caching.
+    Returns (ok_to_cache, free_bytes).
+    """
+    try:
+        usage = shutil.disk_usage(CACHE_DIR)
+        free_bytes = usage.free
+        ok_to_cache = free_bytes > MIN_DISK_FREE_BYTES
+        return ok_to_cache, free_bytes
+    except Exception as e:
+        logger.error(f"Failed to check disk space: {e}")
+        return False, 0  # Default to not caching if we can't check
+
+def get_current_cache_size() -> int:
+    """Get total size of cached files in bytes."""
+    total = 0
+    try:
+        if os.path.exists(CACHE_DIR):
+            for f in os.listdir(CACHE_DIR):
+                path = os.path.join(CACHE_DIR, f)
+                if os.path.isfile(path) and not f.endswith('.tmp') and not f.endswith('.meta'):
+                    total += os.path.getsize(path)
+    except Exception as e:
+        logger.error(f"Failed to get cache size: {e}")
+    return total
+
 async def cache_cleanup_task():
     """
     Background task to enforce cache limits (size and TTL).
     """
     while True:
-        await asyncio.sleep(300)  # Run every 5 minutes
+        await asyncio.sleep(120)  # Run every 2 minutes (more frequent)
         try:
             current_time = time.time()
             total_size = 0
@@ -187,6 +221,11 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 
             elif msg_type == "set_video":
                 video_data = payload.get("video_data")
+                if video_data:
+                    # Store the adding user's email for cookie fallback when others play the video
+                    video_data["added_by"] = user_email
+                    # Cache the resolved format for later use
+                    cache_format(video_data)
                 next_v, queue, playing_index = await manager.prepend_to_queue(room_id, video_data)
                 if next_v:
                     await manager.broadcast({"type": "set_video", "payload": {"video_data": next_v}}, room_id)
@@ -194,6 +233,11 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
 
             elif msg_type == "queue_add":
                 video_data = payload.get("video_data")
+                if video_data:
+                    # Store the adding user's email for cookie fallback when others play the video
+                    video_data["added_by"] = user_email
+                    # Cache the resolved format for later use
+                    cache_format(video_data)
                 queue = await manager.add_to_queue(room_id, video_data)
                 state = manager.room_states.get(room_id, {})
                 await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": state.get("playing_index", -1)}}, room_id)
@@ -347,26 +391,79 @@ async def delete_cookies(request: Request):
 def list_rooms():
     return manager.get_active_rooms()
 
+def cache_format(video_data: dict) -> None:
+    """Cache resolved video format for later reuse."""
+    if not video_data or not video_data.get("original_url"):
+        return
+    
+    original_url = video_data["original_url"]
+    expiry_time = time.time() + FORMAT_CACHE_TTL_SECONDS
+    _format_cache[original_url] = (video_data.copy(), expiry_time)
+    logger.info(f"Cached format for: {original_url[:60]}... (expires in {FORMAT_CACHE_TTL_SECONDS}s)")
+
+def get_cached_format(original_url: str) -> Optional[dict]:
+    """Get cached format if available and not expired."""
+    if original_url not in _format_cache:
+        return None
+    
+    cached_data, expiry_time = _format_cache[original_url]
+    if time.time() > expiry_time:
+        # Cache expired, remove it
+        del _format_cache[original_url]
+        logger.info(f"Format cache expired for: {original_url[:60]}...")
+        return None
+    
+    logger.info(f"Format cache HIT for: {original_url[:60]}...")
+    return cached_data.copy()
+
 async def refresh_video_url(video_data: dict, user_agent: str = None, user_email: str = None) -> dict:
     """
     Re-resolves the stream URL for a video using its original URL.
     This prevents playback failures from expired YouTube manifest URLs.
-    Uses the specified user's cookies if available.
+    
+    Cookie lookup order:
+    1. Requesting user's cookies (user_email parameter)
+    2. Adding user's cookies (video_data["added_by"] field) - fallback for shared videos
+    
+    Uses in-memory format cache to avoid redundant yt-dlp calls.
     """
     if not video_data or not video_data.get("original_url"):
         return video_data
 
     original_url = video_data["original_url"]
-    logger.info(f"Refreshing stream URL for: {original_url} (User: {user_email or 'anonymous'})")
+    added_by = video_data.get("added_by")
+    
+    # Check memory cache first
+    cached = get_cached_format(original_url)
+    if cached:
+        # Update video_data with cached values (preserving some original fields)
+        for key in ["stream_url", "video_url", "audio_url", "available_qualities", "audio_options", "stream_type", "quality"]:
+            if key in cached:
+                video_data[key] = cached[key]
+        return video_data
 
-    # Use user-specific cookies if available
-    cookie_path = get_user_cookie_path(user_email) if user_email else None
-    has_cookies = cookie_path and os.path.exists(cookie_path)
+    logger.info(f"Refreshing stream URL for: {original_url} (User: {user_email or 'anonymous'}, Added by: {added_by or 'unknown'})")
+
+    # Build list of cookie paths to try (requesting user first, then adding user)
+    cookie_paths_to_try = []
+    
+    if user_email:
+        path = get_user_cookie_path(user_email)
+        if path and os.path.exists(path):
+            cookie_paths_to_try.append((user_email, path))
+    
+    if added_by and added_by != user_email:
+        path = get_user_cookie_path(added_by)
+        if path and os.path.exists(path):
+            cookie_paths_to_try.append((added_by, path))
+    
+    # Also try without cookies as last resort
+    cookie_paths_to_try.append((None, None))
 
     # Ensure cache directory exists
     cache_dir = os.path.join("data", "yt_dlp_cache")
 
-    ydl_opts = {
+    base_ydl_opts = {
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
@@ -382,36 +479,71 @@ async def refresh_video_url(video_data: dict, user_agent: str = None, user_email
         'cache_dir': cache_dir,
     }
 
-    if has_cookies:
-        ydl_opts['cookiefile'] = cookie_path
+    loop = asyncio.get_event_loop()
+    last_error = None
 
-    try:
-        import asyncio
-        loop = asyncio.get_event_loop()
-
-        def do_resolve():
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(original_url, download=False, process=False)
-
-                if info.get('_type') == 'url':
-                    info = ydl.extract_info(info['url'], download=False, process=False)
-
-                # Use shared extraction logic
-                stream_info = _extract_stream_url(info, logger)
-                return stream_info.get('url') if stream_info else None
-
-        new_stream_url = await loop.run_in_executor(None, do_resolve)
-
-        if new_stream_url:
-            video_data["stream_url"] = new_stream_url
-            logger.info(f"Refreshed stream URL successfully")
+    for cookie_owner, cookie_path in cookie_paths_to_try:
+        ydl_opts = base_ydl_opts.copy()
+        if cookie_path:
+            ydl_opts['cookiefile'] = cookie_path
+            logger.info(f"Trying with cookies from: {cookie_owner}")
         else:
-            logger.warning(f"Could not refresh stream URL for {original_url}")
+            logger.info("Trying without cookies")
 
-        return video_data
-    except Exception as e:
-        logger.error(f"Failed to refresh stream URL: {e}")
-        return video_data
+        try:
+            def do_resolve():
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(original_url, download=False, process=False)
+
+                    if info.get('_type') == 'url':
+                        info = ydl.extract_info(info['url'], download=False, process=False)
+
+                    # Use shared extraction logic
+                    stream_info = _extract_stream_url(info, logger)
+                    return stream_info, info
+
+            result = await loop.run_in_executor(None, do_resolve)
+            stream_info, info = result
+
+            if stream_info and stream_info.get('url'):
+                # Update video_data with fresh stream info
+                video_data["stream_url"] = stream_info['url']
+                if stream_info.get('video_url'):
+                    video_data["video_url"] = stream_info['video_url']
+                if stream_info.get('audio_url'):
+                    video_data["audio_url"] = stream_info['audio_url']
+                if stream_info.get('available_qualities'):
+                    video_data["available_qualities"] = stream_info['available_qualities']
+                if stream_info.get('audio_options'):
+                    video_data["audio_options"] = stream_info['audio_options']
+                if stream_info.get('type'):
+                    video_data["stream_type"] = stream_info['type']
+                if stream_info.get('height'):
+                    video_data["quality"] = f"{stream_info['height']}p"
+
+                # Cache the result
+                cache_format(video_data)
+                
+                logger.info(f"Refreshed stream URL successfully (using {'cookies from ' + cookie_owner if cookie_owner else 'no cookies'})")
+                return video_data
+
+        except Exception as e:
+            last_error = e
+            error_msg = str(e)
+            if "Sign in to confirm your age" in error_msg:
+                logger.info(f"Age-restricted, trying next cookie source...")
+                continue
+            else:
+                logger.warning(f"Resolve failed with {cookie_owner or 'no cookies'}: {error_msg[:100]}")
+                continue
+
+    # All attempts failed
+    if last_error:
+        logger.error(f"Failed to refresh stream URL after all attempts: {last_error}")
+    else:
+        logger.warning(f"Could not refresh stream URL for {original_url}")
+    
+    return video_data
 
 
 def _extract_stream_url(info: dict, logger, prefer_dash: bool = True) -> dict:
@@ -804,6 +936,7 @@ async def proxy_stream(request: Request, url: str):
 
     try:
         if is_manifest:
+            logger.info(f"Proxying manifest for {url[:100]}...")
             response = await segment_client.get(url, headers=outgoing_headers)
             if response.status_code >= 400:
                 logger.warning(f"Upstream manifest error {response.status_code} for {url}")
@@ -812,6 +945,7 @@ async def proxy_stream(request: Request, url: str):
             content = response.text
             rewritten = rewrite_hls_manifest(content, url, proxy_base)
 
+            logger.info(f"Manifest Rewritten: {len(rewritten)} bytes, Content-Type: {response.headers.get('content-type')}")
             return Response(
                 content=rewritten,
                 media_type="application/vnd.apple.mpegurl",
@@ -824,8 +958,10 @@ async def proxy_stream(request: Request, url: str):
             )
         else:
 
-            # Handle Segment Caching
-            cache_key = hashlib.md5(url.encode()).hexdigest()
+            # Handle Segment Caching - Include Range in cache key to avoid collisions
+            range_header = outgoing_headers.get("Range", "")
+            cache_input = f"{url}|{range_header}"
+            cache_key = hashlib.md5(cache_input.encode()).hexdigest()
             cache_path = os.path.join(CACHE_DIR, cache_key)
             meta_path = cache_path + ".meta"
             
@@ -848,9 +984,12 @@ async def proxy_stream(request: Request, url: str):
                                     break
                                 yield chunk
                                 
-                    logger.info(f"Cache HIT for {url}")
+                    logger.info(f"Cache HIT for {url} [Range: {range_header or 'Full'}]")
+                    # Determine status code (206 for partial, 200 for full)
+                    status_code = 206 if range_header else 200
                     return StreamingResponse(
                         iter_file(),
+                        status_code=status_code,
                         headers=headers,
                         media_type=headers.get("content-type", "application/octet-stream")
                     )
@@ -859,12 +998,42 @@ async def proxy_stream(request: Request, url: str):
                     # Fallback to fetch if cache read fails
                     pass
 
-            logger.info(f"Cache MISS for {url}")
-            
-            # Fetch and Cache
+            logger.info(f"Cache MISS for {url} [Range: {range_header or 'Full'}]")
+
+            # Fetch and Cache (with disk space checks)
             req = segment_client.build_request("GET", url, headers=outgoing_headers)
             r = await segment_client.send(req, stream=True)
-            
+            logger.info(f"Fetch upstream: {r.status_code}, Content-Length: {r.headers.get('content-length')}, Content-Type: {r.headers.get('content-type')}")
+
+            # Check if we should cache this response
+            # Only cache successful responses (200 OK or 206 Partial Content)
+            should_cache = r.status_code in (200, 206)
+            skip_reason = None
+
+            # Check disk space
+            disk_ok, free_bytes = check_disk_space()
+            if should_cache and not disk_ok:
+                should_cache = False
+                skip_reason = f"Low disk space ({free_bytes / 1024 / 1024:.1f}MB free)"
+
+            # Check cache size limit
+            if should_cache:
+                current_cache = get_current_cache_size()
+                if current_cache >= MAX_CACHE_SIZE_BYTES:
+                    should_cache = False
+                    skip_reason = f"Cache full ({current_cache / 1024 / 1024:.1f}MB)"
+
+            # Check content-length for large files
+            # Note: For 206 responses, content-length is the size of the range, not the full file.
+            # We still apply the limit to prevent caching massive chunks.
+            content_length = int(r.headers.get("content-length", 0))
+            if should_cache and content_length > MAX_CACHEABLE_FILE_BYTES:
+                should_cache = False
+                skip_reason = f"Chunk too large ({content_length / 1024 / 1024:.1f}MB)"
+
+            if not should_cache and skip_reason:
+                logger.info(f"Skipping cache: {skip_reason} for {url[:80]}...")
+
             # Late-detection of Manifest via Content-Type
             # This handles cases where URL doesn't end in .m3u8 but returns a playlist
             ctype = r.headers.get("content-type", "").lower()
@@ -888,51 +1057,71 @@ async def proxy_stream(request: Request, url: str):
                     }
                 )
             
-            # Prepare headers
-            response_headers = {}
-            for key in ["content-type", "content-length", "content-range", "accept-ranges", "cache-control", "date", "last-modified"]:
+            # Prepare headers mapping from upstream
+            response_headers = {
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, OPTIONS",
+                "Access-Control-Allow-Headers": "*",
+                "Accept-Ranges": "bytes",
+            }
+            
+            # Copy relevant headers from upstream
+            for key in ["content-type", "content-length", "content-range", "cache-control", "date", "last-modified"]:
                 if key in r.headers:
                     response_headers[key] = r.headers[key]
             
-            response_headers["Access-Control-Allow-Origin"] = "*"
-            response_headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
-            response_headers["Access-Control-Allow-Headers"] = "*"
-            
-            # Save metadata
-            try:
-                async with aiofiles.open(meta_path, 'w') as f:
-                    await f.write(json.dumps(dict(response_headers)))
-            except Exception as e:
-                logger.error(f"Failed to write cache meta: {e}")
-
-            # Stream and write to file
-            async def stream_and_cache():
-                temp_path = cache_path + f".{time.time()}.tmp"
+            # Only save metadata if we're caching
+            if should_cache:
                 try:
-                    async with aiofiles.open(temp_path, 'wb') as f:
-                        async for chunk in r.aiter_bytes():
-                            await f.write(chunk)
-                            yield chunk
-                    
-                    # Rename temp to final only if fully downloaded
-                    if r.status_code == 200:
-                        os.rename(temp_path, cache_path)
-                    else:
-                        os.remove(temp_path)
+                    async with aiofiles.open(meta_path, 'w') as f:
+                        await f.write(json.dumps(dict(response_headers)))
                 except Exception as e:
-                    logger.error(f"Streaming error/interruption: {e}")
-                    if os.path.exists(temp_path):
-                        os.remove(temp_path)
-                    raise e
-                finally:
-                    await r.aclose()
+                    logger.error(f"Failed to write cache meta: {e}")
 
-            return StreamingResponse(
-                stream_and_cache(),
-                status_code=r.status_code,
-                headers=response_headers,
-                media_type=r.headers.get("content-type", "application/octet-stream")
-            )
+            # Stream and optionally cache
+            if should_cache:
+                async def stream_and_cache():
+                    temp_path = cache_path + f".{time.time()}.tmp"
+                    try:
+                        async with aiofiles.open(temp_path, 'wb') as f:
+                            async for chunk in r.aiter_bytes():
+                                await f.write(chunk)
+                                yield chunk
+
+                        # Rename temp to final only if fully downloaded and status is good
+                        if r.status_code in (200, 206):
+                            os.rename(temp_path, cache_path)
+                        else:
+                            if os.path.exists(temp_path): os.remove(temp_path)
+                    except Exception as e:
+                        logger.error(f"Streaming error/interruption: {e}")
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
+                        # We don't raise here to allow the client to receive what we got
+                    finally:
+                        await r.aclose()
+
+                return StreamingResponse(
+                    stream_and_cache(),
+                    status_code=r.status_code,
+                    headers=response_headers,
+                    media_type=r.headers.get("content-type", "application/octet-stream")
+                )
+            else:
+                # Stream without caching
+                async def stream_only():
+                    try:
+                        async for chunk in r.aiter_bytes():
+                            yield chunk
+                    finally:
+                        await r.aclose()
+
+                return StreamingResponse(
+                    stream_only(),
+                    status_code=r.status_code,
+                    headers=response_headers,
+                    media_type=r.headers.get("content-type", "application/octet-stream")
+                )
     except Exception as e:
         logger.error(f"Proxy error for {url}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Proxy error: {str(e)}")

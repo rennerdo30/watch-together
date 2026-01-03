@@ -2,11 +2,25 @@
 
 ## Active Issues (Bugs & Tech Debt)
 
-**None** - All tracked issues have been resolved.
+### Tech Debt
+- [ ] **[BACKEND] Refactor main.py**: Split into modules (api, core, services, tasks) for better maintainability.
+- [ ] **[BACKEND] Database Migration**: Replace JSON-based persistence in `ConnectionManager` with a robust database (e.g., SQLite).
+- [ ] **[BACKEND] Cache Request Deduplication**: Implement a tracker to prevent concurrent downloads of the same segment URL.
+- [ ] **[BACKEND] Proxy Cookie Isolation**: Ensure HLS segment proxy uses user-specific cookies when available.
+- [ ] **[FRONTEND] Component Decomposition**: Break down `RoomPage` and `CustomPlayer` into smaller, focused components.
+- [ ] **[FRONTEND] Sync Hook Extraction**: Move WebSocket logic into a custom `useRoomSync` hook.
+- [ ] **[FRONTEND] Normalization Hook**: Move Web Audio compressor logic into a dedicated `useNormalization` hook.
+- [ ] **[SECURITY] Non-Root Containers**: Update Dockerfiles to run backend/frontend services as non-root users.
 
 ## Resolved
 
 ### Session: 2026-01-04
+- [x] **[QUEUE] Cookie Sharing for Queue Items**: Videos added by users with cookies now store `added_by` field; other users can play using the adding user's cookies as fallback.
+- [x] **[PERFORMANCE] Format Caching**: Resolved video formats are cached in memory for 15 minutes to avoid redundant yt-dlp calls on queue playback.
+- [x] **[PLAYER] DASH Audio Loop During Buffering**: Implemented preemptive buffer monitoring in `useDashSync.ts` - pauses audio before video stalls.
+- [x] **[PLAYER] DASH Missing Audio Race Condition**: Replaced 1s setInterval with RAF-based sync loop, all state in refs eliminates stale closures.
+- [x] **[PLAYER] DASH Seeking Performance**: Proper seek handling with `seeking`/`seeked` events, graceful heavy sync with timeout recovery.
+- [x] **[PLAYER] Refactor CustomPlayer**: Reduced from 1,251 to ~500 lines. Extracted into `useDashSync`, `useHlsPlayer`, `useAudioNormalization` hooks.
 - [x] **[PLAYBACK] Failed to find demuxer**: Fixed proxy manifest detection - was incorrectly treating `.ts` segments as manifests because URL contained `.m3u8`.
 - [x] **[AUDIO] Normalization UX**: Renamed to "Makeup Gain", changed unit to dB, fixed slider range.
 - [x] **[STABILITY] Player Flickering**: Fixed re-initialization loop caused by timestamp ticker dependency.
