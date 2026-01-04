@@ -37,6 +37,7 @@ interface PlayerAPI {
     currentTime: (time?: number) => number;
     getDuration: () => number;
     setVolume: (val: number) => void;
+    getVideoElement: () => HTMLVideoElement | null;
 }
 
 /**
@@ -330,6 +331,7 @@ export function CustomPlayer({
                     if (isDashMode) dashSync.setVolume(val);
                     else if (videoRef.current) videoRef.current.volume = val;
                 },
+                getVideoElement: () => videoRef.current,
             };
         }
     }, [playerRef, isLive, isDashMode, dashSync]);
@@ -631,11 +633,6 @@ export function CustomPlayer({
                 onStatsToggle={() => setShowStats(!showStats)}
                 onQualityChange={handleQualityChange}
                 onSeek={handleSeek}
-                onGoToLive={() => {
-                    if (videoRef.current && seekableRange.end) {
-                        videoRef.current.currentTime = seekableRange.end - 2;
-                    }
-                }}
                 isLive={isLive}
             />
         </div>

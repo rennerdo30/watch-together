@@ -1,7 +1,7 @@
 import React from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, Trash2, ListVideo, Pin, Play, Loader2 } from 'lucide-react';
+import { Trash2, ListVideo, Pin, Play, Loader2 } from 'lucide-react';
 
 interface ResolveResponse {
     original_url: string;
@@ -57,27 +57,23 @@ export function SortableQueueItem({
         <div
             ref={setNodeRef}
             style={style}
+            {...attributes}
+            {...listeners}
             className={`
-                group flex items-center gap-2 p-2 rounded-xl border transition-all select-none
+                group flex items-center gap-1.5 p-1 rounded-lg border transition-all select-none
                 ${isActive
                     ? "bg-white/5 border-white/20"
-                    : "bg-neutral-800/20 border-transparent hover:bg-neutral-800/40 hover:border-neutral-700"
+                    : "bg-transparent border-transparent hover:bg-white/5 hover:border-white/10"
                 }
             `}
         >
-            {/* Drag Handle */}
-            <div
-                {...attributes}
-                {...listeners}
-                className="cursor-grab active:cursor-grabbing text-neutral-600 hover:text-neutral-400 p-0.5 rounded transition-colors touch-none shrink-0"
-            >
-                <GripVertical className="w-3.5 h-3.5" />
-            </div>
-
             {/* Thumbnail */}
             <div
-                className="relative w-16 h-10 rounded-lg overflow-hidden bg-neutral-800 shrink-0 cursor-pointer group/thumb"
-                onClick={() => !isLoading && onPlay(index)}
+                className="relative w-14 h-9 rounded-lg overflow-hidden bg-neutral-800 shrink-0 cursor-pointer group/thumb"
+                onClick={(e) => {
+                    e.stopPropagation();
+                    if (!isLoading) onPlay(index);
+                }}
             >
                 {item.thumbnail ? (
                     <img
@@ -115,7 +111,10 @@ export function SortableQueueItem({
             {/* Content - Click to Play */}
             <div
                 className="flex-1 min-w-0 cursor-pointer"
-                onClick={() => !isLoading && onPlay(index)}
+                onClick={(e) => {
+                    e.stopPropagation();
+                    if (!isLoading) onPlay(index);
+                }}
             >
                 <div className="flex items-center gap-1.5">
                     <p className={`font-medium truncate leading-tight ${isActive ? "text-white" : "text-neutral-300 group-hover:text-white"}`}
@@ -137,9 +136,9 @@ export function SortableQueueItem({
                             e.stopPropagation();
                             onPin(index);
                         }}
-                        className={`p-1.5 rounded-lg transition-all ${item.pinned
-                                ? "text-amber-400 bg-amber-500/10"
-                                : "opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-amber-400 hover:bg-amber-500/10"
+                        className={`p-1 rounded-lg transition-all ${item.pinned
+                            ? "text-amber-400 bg-amber-500/10"
+                            : "opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-amber-400 hover:bg-amber-500/10"
                             }`}
                         title={item.pinned ? "Unpin (won't auto-remove)" : "Pin (won't auto-remove)"}
                     >
@@ -152,9 +151,9 @@ export function SortableQueueItem({
                         onRemove(index);
                     }}
                     disabled={isActive || isLoading}
-                    className={`p-1.5 rounded-lg transition-all ${isActive
-                            ? "opacity-30 cursor-not-allowed text-neutral-600"
-                            : "opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-red-400 hover:bg-red-500/10"
+                    className={`p-1 rounded-lg transition-all ${isActive
+                        ? "opacity-30 cursor-not-allowed text-neutral-600"
+                        : "opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-red-400 hover:bg-red-500/10"
                         }`}
                     title={isActive ? "Cannot remove currently playing" : "Remove from queue"}
                 >
@@ -169,15 +168,11 @@ export function SortableQueueItem({
 export function QueueItemOverlay({ item, isActive, fontSize, accentColor }: Omit<SortableQueueItemProps, 'id' | 'index' | 'onRemove' | 'onPlay' | 'onPin'>) {
     return (
         <div className={`
-             flex items-center gap-2 p-2 rounded-xl border border-neutral-600 bg-neutral-900 shadow-2xl cursor-grabbing select-none
+             flex items-center gap-1.5 p-1.5 rounded-xl border border-neutral-600 bg-neutral-900 shadow-2xl cursor-grabbing select-none
              ${isActive ? "border-white/30" : ""}
         `}>
-            <div className="text-neutral-400 p-0.5 shrink-0">
-                <GripVertical className="w-3.5 h-3.5" />
-            </div>
-
             {/* Thumbnail */}
-            <div className="relative w-16 h-10 rounded-lg overflow-hidden bg-neutral-800 shrink-0">
+            <div className="relative w-14 h-9 rounded-lg overflow-hidden bg-neutral-800 shrink-0">
                 {item.thumbnail ? (
                     <img
                         src={item.thumbnail}

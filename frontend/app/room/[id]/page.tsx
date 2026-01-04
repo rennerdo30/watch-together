@@ -11,7 +11,7 @@ import {
 import { ResolveResponse, resolveUrl } from '@/lib/api';
 import { CustomPlayer } from '@/components/custom-player';
 import { ErrorBoundary } from '@/components/error-boundary';
-import { THEMES, DEFAULT_THEME, type Theme } from '@/lib/themes';
+import { THEMES, DEFAULT_THEME, type Theme, getThemeById, loadCustomTheme, saveCustomTheme, createCustomTheme } from '@/lib/themes';
 import toast, { Toaster } from 'react-hot-toast';
 
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragEndEvent, DragStartEvent, DragOverlay } from '@dnd-kit/core';
@@ -48,6 +48,7 @@ export default function RoomPage() {
     const [showDebug, setShowDebug] = useState(false);
     const [syncState, setSyncState] = useState({ isPlaying: false, timestamp: 0, lastSync: '' });
     const [loadingQueueIndex, setLoadingQueueIndex] = useState<number | null>(null);
+    const [actualPlayerTime, setActualPlayerTime] = useState(0); // Real player time for badge display
 
     // Layout resizing
     const [sidebarWidth, setSidebarWidth] = useState(320); // Default width
@@ -55,11 +56,21 @@ export default function RoomPage() {
     const [fontSize, setFontSize] = useState(15);
     const [cookieContent, setCookieContent] = useState('');
     const [isSavingCookies, setIsSavingCookies] = useState(false);
+    const [isLoadingCookies, setIsLoadingCookies] = useState(true);
     const [isCopyingDebug, setIsCopyingDebug] = useState(false);
 
-    // DnD Sensors
+    // Custom theme state
+    const [customBgColor, setCustomBgColor] = useState('#09090b');
+    const [customAccentColor, setCustomAccentColor] = useState('#8b5cf6');
+    const [showCustomTheme, setShowCustomTheme] = useState(false);
+
+    // DnD Sensors - require a small movement before dragging to allow clicks
     const sensors = useSensors(
-        useSensor(PointerSensor),
+        useSensor(PointerSensor, {
+            activationConstraint: {
+                distance: 8, // 8px movement required before drag starts
+            },
+        }),
         useSensor(KeyboardSensor, {
             coordinateGetter: sortableKeyboardCoordinates,
         })
@@ -71,6 +82,11 @@ export default function RoomPage() {
     const playerRef = useRef<any>(null);
     const internalUpdateCount = useRef(0); // Counter to prevent feedback loops during sync
     const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
+
+    // Latency tracking for sync compensation
+    const latencyRef = useRef<number>(0); // Average latency in ms
+    const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+    const videoElementRef = useRef<HTMLVideoElement | null>(null);
 
     const syncThresholdRef = useRef(4);
     const [syncThreshold, setSyncThresholdState] = useState(4);
@@ -121,17 +137,14 @@ export default function RoomPage() {
         const { active, over } = event;
 
         if (over && active.id !== over.id) {
-            setQueue((items) => {
-                const oldIndex = items.findIndex((item) => item.original_url === active.id);
-                const newIndex = items.findIndex((item) => item.original_url === over.id);
-                const newQueue = arrayMove(items, oldIndex, newIndex);
+            const oldIndex = queue.findIndex((item) => item.original_url === active.id);
+            const newIndex = queue.findIndex((item) => item.original_url === over.id);
 
-                // Optimistic update + Send to server
-                sendMsg('replace_queue', { queue: newQueue }); // Assuming 'replace_queue' or similar. 
-                // Wait, typically 'queue_add' or similar exists. I should check 'update_queue' implementation or reuse existing one. 
-                // I'll check 'sendMsg' usage.
-                return newQueue;
-            });
+            // Optimistic update for smoother UX
+            setQueue((items) => arrayMove(items, oldIndex, newIndex));
+
+            // Send reorder to server (server will broadcast queue_update)
+            sendMsg('queue_reorder', { old_index: oldIndex, new_index: newIndex });
         }
         setActiveDragId(null);
     };
@@ -144,12 +157,24 @@ export default function RoomPage() {
         if (mockUser) url += `?user=${encodeURIComponent(mockUser)}`;
 
         if (wsRef.current) wsRef.current.close();
+        if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+
         const ws = new WebSocket(url);
         wsRef.current = ws;
 
         ws.onopen = () => {
             setConnected(true);
             if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+
+            // Start ping interval for latency measurement
+            pingIntervalRef.current = setInterval(() => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'ping', payload: { client_time: performance.now() } }));
+                }
+            }, 5000); // Ping every 5 seconds
+
+            // Send initial ping
+            ws.send(JSON.stringify({ type: 'ping', payload: { client_time: performance.now() } }));
         };
         ws.onmessage = (event) => {
             try { handleWsMessage(JSON.parse(event.data)); }
@@ -157,6 +182,7 @@ export default function RoomPage() {
         };
         ws.onclose = () => {
             setConnected(false);
+            if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
             reconnectTimer.current = setTimeout(connect, 3000);
         };
         ws.onerror = () => ws.close();
@@ -166,14 +192,30 @@ export default function RoomPage() {
         connect();
         const savedTheme = localStorage.getItem('wt_theme');
         if (savedTheme) {
-            const t = THEMES.find(th => th.id === savedTheme);
-            if (t) setActiveTheme(t);
+            if (savedTheme === 'custom') {
+                const customTheme = loadCustomTheme();
+                if (customTheme) {
+                    setActiveTheme(customTheme);
+                    setCustomBgColor(customTheme.colors.bg);
+                    setCustomAccentColor(customTheme.colors.accent);
+                    setShowCustomTheme(true);
+                }
+            } else {
+                const t = getThemeById(savedTheme);
+                if (t) setActiveTheme(t);
+            }
         }
         const savedProxy = localStorage.getItem('wt_proxy');
         if (savedProxy !== null) {
             setUseProxy(savedProxy === 'true');
         } else {
             setUseProxy(true); // Default to true
+        }
+        // Load saved sidebar width
+        const savedWidth = localStorage.getItem('wt_sidebar_width');
+        if (savedWidth) {
+            const width = parseInt(savedWidth);
+            if (width >= 240 && width <= 600) setSidebarWidth(width);
         }
 
         return () => {
@@ -182,18 +224,36 @@ export default function RoomPage() {
         };
     }, [roomId]);
 
+    // Load saved cookies when user is available
     useEffect(() => {
-        let interval: NodeJS.Timeout;
-        if (syncState.isPlaying) {
-            interval = setInterval(() => {
-                setSyncState(prev => ({
-                    ...prev,
-                    timestamp: prev.timestamp + 1
-                }));
-            }, 1000);
-        }
-        return () => clearInterval(interval);
-    }, [syncState.isPlaying]);
+        const loadCookies = async () => {
+            if (!currentUser || currentUser === 'Guest') {
+                setIsLoadingCookies(false);
+                return;
+            }
+            try {
+                const searchParams = new URLSearchParams(window.location.search);
+                const mockUser = searchParams.get('user');
+                const userParam = mockUser ? `?user=${encodeURIComponent(mockUser)}` : '';
+
+                const res = await fetch(`/api/cookies${userParam}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.has_cookies && data.content) {
+                        setCookieContent(data.content);
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to load cookies:', err);
+            } finally {
+                setIsLoadingCookies(false);
+            }
+        };
+        loadCookies();
+    }, [currentUser]);
+
+    // Note: We no longer need a local ticker for syncState.timestamp
+    // The badge now uses actualPlayerTime which is updated via onTimeUpdate
 
     const handleWsMessage = (msg: any) => {
         const { type, payload } = msg;
@@ -290,7 +350,11 @@ export default function RoomPage() {
                 }
                 break;
             case 'seek':
+                // Intentional seek - always hard jump
                 if (playerRef.current) playerRef.current.currentTime(payload.timestamp);
+                // Reset playback rate after seek
+                const seekVideo = playerRef.current?.getVideoElement?.();
+                if (seekVideo) seekVideo.playbackRate = 1.0;
                 break;
             case 'queue_update':
                 setQueue(payload.queue);
@@ -298,6 +362,50 @@ export default function RoomPage() {
                 break;
             case 'roles_update':
                 if (payload.roles) setRoles(payload.roles);
+                break;
+            case 'pong':
+                // Calculate round-trip latency
+                if (payload.client_time) {
+                    const rtt = performance.now() - payload.client_time;
+                    // Use exponential moving average for smooth latency tracking
+                    latencyRef.current = latencyRef.current === 0
+                        ? rtt / 2
+                        : latencyRef.current * 0.8 + (rtt / 2) * 0.2;
+                }
+                break;
+            case 'heartbeat':
+                // Gradual sync - adjust playback rate instead of jumping for small drifts
+                if (playerRef.current && payload.is_playing && payload.timestamp !== undefined) {
+                    const currentTime = playerRef.current.currentTime();
+                    // Compensate for latency (one-way delay)
+                    const compensatedTimestamp = payload.timestamp + (latencyRef.current / 1000);
+                    const drift = compensatedTimestamp - currentTime;
+
+                    const video = playerRef.current.getVideoElement?.();
+                    if (video) {
+                        if (Math.abs(drift) > 3) {
+                            // Large drift - hard seek
+                            playerRef.current.currentTime(compensatedTimestamp);
+                            video.playbackRate = 1.0;
+                        } else if (drift > 0.5) {
+                            // We're behind - speed up slightly
+                            video.playbackRate = 1.05;
+                        } else if (drift < -0.5) {
+                            // We're ahead - slow down slightly
+                            video.playbackRate = 0.95;
+                        } else {
+                            // We're synced - normal speed
+                            video.playbackRate = 1.0;
+                        }
+                    }
+
+                    // Update sync state display
+                    setSyncState(prev => ({
+                        ...prev,
+                        timestamp: compensatedTimestamp,
+                        lastSync: new Date().toLocaleTimeString()
+                    }));
+                }
                 break;
         }
 
@@ -397,20 +505,20 @@ export default function RoomPage() {
                     letterSpacing: '0.05em'
                 }
             }} />
-            {/* Header - Slimbed to h-11 */}
-            <header className={`h-11 border-b ${activeTheme.border} flex items-center px-4 shrink-0 ${activeTheme.header} backdrop-blur-md z-50`}>
-                <div className="flex items-center gap-3">
+            {/* Header */}
+            <header className={`h-12 border-b ${activeTheme.border} flex items-center px-3 shrink-0 ${activeTheme.header} backdrop-blur-md z-50`}>
+                <div className="flex items-center gap-2">
                     <button
                         onClick={() => router.push('/')}
-                        className="w-7 h-7 rounded-lg bg-neutral-800 hover:bg-neutral-700 flex items-center justify-center transition-colors"
+                        className="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 flex items-center justify-center transition-colors border border-white/5"
                     >
                         <Home className="w-4 h-4 text-neutral-400" />
                     </button>
-                    <div className="flex flex-col">
-                        <h1 className="font-black text-white leading-none" style={{ fontSize: `${fontSize}px` }}>Watch Together</h1>
+                    <div className="flex flex-col pl-1">
+                        <h1 className="font-bold text-white leading-none text-sm normal-case tracking-normal">Watch Together</h1>
                         <div className="flex items-center gap-1.5 mt-0.5">
-                            <span className="font-bold text-neutral-600" style={{ fontSize: `${fontSize - 2}px` }}>{roomId}</span>
-                            <div className={`w-1.5 h-1.5 rounded-full ${connected ? "bg-green-500" : "bg-red-500 animate-pulse"}`} />
+                            <span className="font-medium text-neutral-500 text-xs normal-case">{roomId}</span>
+                            <div className={`w-1.5 h-1.5 rounded-full ${connected ? "bg-emerald-500" : "bg-red-500 animate-pulse"}`} />
                         </div>
                     </div>
                 </div>
@@ -424,7 +532,7 @@ export default function RoomPage() {
                                 {syncState.isPlaying ? 'Playing' : 'Paused'}
                             </span>
                             <span className="text-[10px] font-mono text-neutral-500">
-                                {Math.floor(syncState.timestamp / 60)}:{Math.floor(syncState.timestamp % 60).toString().padStart(2, '0')}
+                                {Math.floor(actualPlayerTime / 60)}:{Math.floor(actualPlayerTime % 60).toString().padStart(2, '0')}
                             </span>
                         </div>
                     )}
@@ -468,7 +576,7 @@ export default function RoomPage() {
                                     url={getFinalVideoUrl()}
                                     isLive={videoData.is_live}
                                     poster={videoData.thumbnail}
-                                    autoPlay={true}
+                                    autoPlay={syncState.isPlaying}
                                     initialTime={syncState.timestamp} // Pass initial sync timestamp
                                     // DASH-specific props
                                     streamType={videoData.stream_type}
@@ -497,6 +605,11 @@ export default function RoomPage() {
                                         }
                                     }}
                                     onEnd={() => { if (internalUpdateCount.current === 0) sendMsg('video_ended'); }}
+                                    onTimeUpdate={(time: number, isPlaying: boolean) => {
+                                        // Update actual player time for accurate badge display
+                                        setActualPlayerTime(time);
+                                        setSyncState(prev => ({ ...prev, isPlaying }));
+                                    }}
                                     playerRef={playerRef}
                                     syncThreshold={syncThreshold}
                                     onSyncThresholdChange={setSyncThreshold}
@@ -693,7 +806,7 @@ export default function RoomPage() {
                                 onDragEnd={handleDragEnd}
                             >
                                 <div className="h-full flex flex-col">
-                                    <div className="flex-1 overflow-y-auto p-2 space-y-1.5 custom-scrollbar">
+                                    <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
                                         <SortableContext
                                             items={queue.map(item => item.original_url)}
                                             strategy={verticalListSortingStrategy}
@@ -804,44 +917,113 @@ export default function RoomPage() {
                 </aside >
             </div >
 
-            {/* Settings Overlay - Compact */}
+            {/* Settings Overlay */}
             {
                 showSettings && (
                     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
                         <div className="absolute inset-0 bg-black/90 backdrop-blur-sm" onClick={() => setShowSettings(false)} />
-                        <div className="relative w-full max-w-sm bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden shadow-2xl animate-in zoom-in-95 duration-200">
-                            <div className="p-4 border-b border-neutral-800 flex items-center justify-between">
-                                <h2 className="text-[11px] font-black text-white/50 uppercase tracking-[0.2em]">Station Config</h2>
-                                <button onClick={() => setShowSettings(false)} className="text-neutral-600 hover:text-white transition-colors">
-                                    <X className="w-4 h-4" />
+                        <div className="relative w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden shadow-2xl max-h-[90vh] flex flex-col">
+                            <div className="p-5 border-b border-zinc-800 flex items-center justify-between shrink-0">
+                                <h2 className="text-base font-semibold text-white">Settings</h2>
+                                <button onClick={() => setShowSettings(false)} className="text-zinc-500 hover:text-white transition-colors p-1 rounded-lg hover:bg-white/5">
+                                    <X className="w-5 h-5" />
                                 </button>
                             </div>
 
-                            <div className="p-4 space-y-6">
+
+                            <div className="p-5 space-y-6 overflow-y-auto flex-1">
+                                {/* Theme Selection */}
                                 <div className="space-y-3">
-                                    <label className="text-[10px] font-black text-neutral-600 uppercase tracking-widest flex items-center gap-2">
-                                        <Palette className="w-3 h-3" /> Design Language
+                                    <label className="text-xs font-medium text-zinc-400 flex items-center gap-2">
+                                        <Palette className="w-4 h-4" /> Theme
                                     </label>
-                                    <div className="grid grid-cols-3 gap-1.5">
+                                    <div className="grid grid-cols-3 gap-2">
                                         {THEMES.map(t => (
                                             <button
                                                 key={t.id}
-                                                onClick={() => { setActiveTheme(t); localStorage.setItem('wt_theme', t.id); }}
-                                                className={`p-2 rounded-lg border text-[10px] font-black transition-all ${activeTheme.id === t.id
-                                                    ? "bg-neutral-800 border-neutral-600 text-white shadow-lg"
-                                                    : "bg-neutral-800/30 border-neutral-800/50 text-neutral-600 hover:border-neutral-700"
+                                                onClick={() => { setActiveTheme(t); localStorage.setItem('wt_theme', t.id); setShowCustomTheme(false); }}
+                                                className={`p-3 rounded-xl border text-xs font-medium transition-all ${activeTheme.id === t.id && !showCustomTheme
+                                                    ? "bg-white/10 border-white/20 text-white"
+                                                    : "bg-white/5 border-white/5 text-zinc-500 hover:border-white/10 hover:text-zinc-300"
                                                     }`}
                                             >
-                                                <div className={`h-1 w-full rounded-full mb-1.5 ${t.accent}`} />
+                                                <div className={`h-2 w-full rounded-full mb-2 ${t.accent}`} />
                                                 {t.name}
                                             </button>
                                         ))}
                                     </div>
+
+                                    {/* Custom Theme Toggle */}
+                                    <button
+                                        onClick={() => setShowCustomTheme(!showCustomTheme)}
+                                        className={`w-full p-2 rounded-lg border text-[10px] font-bold transition-all flex items-center justify-between ${showCustomTheme
+                                            ? "bg-violet-500/10 border-violet-500/20 text-violet-400"
+                                            : "bg-white/5 border-white/5 text-zinc-500 hover:border-white/10"
+                                            }`}
+                                    >
+                                        <span>Custom Theme</span>
+                                        <ChevronDown className={`w-3 h-3 transition-transform ${showCustomTheme ? 'rotate-180' : ''}`} />
+                                    </button>
+
+                                    {/* Custom Theme Editor */}
+                                    {showCustomTheme && (
+                                        <div className="space-y-3 p-3 rounded-lg bg-white/5 border border-white/5">
+                                            <div className="flex items-center gap-3">
+                                                <div className="flex-1">
+                                                    <label className="text-[9px] text-zinc-500 uppercase">Background</label>
+                                                    <div className="flex items-center gap-2 mt-1">
+                                                        <input
+                                                            type="color"
+                                                            value={customBgColor}
+                                                            onChange={(e) => setCustomBgColor(e.target.value)}
+                                                            className="w-8 h-8 rounded-lg border border-white/10 cursor-pointer bg-transparent"
+                                                        />
+                                                        <input
+                                                            type="text"
+                                                            value={customBgColor}
+                                                            onChange={(e) => setCustomBgColor(e.target.value)}
+                                                            className="flex-1 h-8 bg-white/5 border border-white/10 rounded-lg px-2 text-[10px] font-mono text-white focus:outline-none focus:border-violet-500/50"
+                                                        />
+                                                    </div>
+                                                </div>
+                                                <div className="flex-1">
+                                                    <label className="text-[9px] text-zinc-500 uppercase">Accent</label>
+                                                    <div className="flex items-center gap-2 mt-1">
+                                                        <input
+                                                            type="color"
+                                                            value={customAccentColor}
+                                                            onChange={(e) => setCustomAccentColor(e.target.value)}
+                                                            className="w-8 h-8 rounded-lg border border-white/10 cursor-pointer bg-transparent"
+                                                        />
+                                                        <input
+                                                            type="text"
+                                                            value={customAccentColor}
+                                                            onChange={(e) => setCustomAccentColor(e.target.value)}
+                                                            className="flex-1 h-8 bg-white/5 border border-white/10 rounded-lg px-2 text-[10px] font-mono text-white focus:outline-none focus:border-violet-500/50"
+                                                        />
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <button
+                                                onClick={() => {
+                                                    const custom = createCustomTheme('Custom', customBgColor, customAccentColor);
+                                                    setActiveTheme(custom);
+                                                    saveCustomTheme(custom);
+                                                    localStorage.setItem('wt_theme', 'custom');
+                                                    toast.success('Custom theme applied!');
+                                                }}
+                                                className="w-full h-8 bg-violet-600 hover:bg-violet-500 text-white text-[10px] font-bold rounded-lg transition-colors"
+                                            >
+                                                Apply Custom Theme
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
 
+                                {/* Typography Scale */}
                                 <div className="space-y-3">
-                                    <label className="text-[10px] font-black text-neutral-600 uppercase tracking-widest flex items-center gap-2">
-                                        <ListVideo className="w-3 h-3" /> Typography Scale ({fontSize}px)
+                                    <label className="text-xs font-medium text-zinc-400 flex items-center gap-2">
+                                        <ListVideo className="w-4 h-4" /> Text Size ({fontSize}px)
                                     </label>
                                     <input
                                         type="range"
@@ -853,43 +1035,45 @@ export default function RoomPage() {
                                             setFontSize(val);
                                             localStorage.setItem('wt_font_size', val.toString());
                                         }}
-                                        className="w-full h-1 bg-neutral-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                                        className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-violet-500"
                                     />
                                 </div>
 
+                                {/* Proxy Toggle */}
                                 <button
                                     onClick={() => { const v = !useProxy; setUseProxy(v); localStorage.setItem('wt_proxy', String(v)); }}
-                                    className={`w-full p-3 rounded-xl border flex items-center justify-between transition-all ${useProxy ? "bg-blue-500/10 border-blue-500/20" : "bg-neutral-800/20 border-neutral-800"
+                                    className={`w-full p-4 rounded-xl border flex items-center justify-between transition-all ${useProxy ? "bg-violet-500/10 border-violet-500/20" : "bg-zinc-800/30 border-zinc-800"
                                         }`}
                                 >
                                     <div className="text-left">
-                                        <span className="font-black text-white/60 uppercase tracking-widest" style={{ fontSize: `${fontSize - 3}px` }}>HLS Tunnel</span>
-                                        <p className="uppercase font-bold" style={{ fontSize: `${fontSize - 5}px`, color: 'rgb(80 80 80)' }}>Bypass regional constraints</p>
+                                        <span className="font-medium text-white text-sm">Proxy Mode</span>
+                                        <p className="text-xs text-zinc-500 mt-0.5">Bypass regional restrictions</p>
                                     </div>
-                                    <div className={`w-8 h-4 rounded-full transition-all flex items-center px-0.5 ${useProxy ? "bg-blue-500" : "bg-neutral-800"}`}>
-                                        <div className={`w-3 h-3 bg-white rounded-full transition-all ${useProxy ? "translate-x-4" : "translate-x-0"}`} />
+                                    <div className={`w-10 h-5 rounded-full transition-all flex items-center px-0.5 ${useProxy ? "bg-violet-500" : "bg-zinc-700"}`}>
+                                        <div className={`w-4 h-4 bg-white rounded-full transition-all shadow-sm ${useProxy ? "translate-x-5" : "translate-x-0"}`} />
                                     </div>
                                 </button>
 
-                                {/* Cookie Manager Section */}
-                                <div className="pt-4 border-t border-neutral-800">
-                                    <label className="text-[10px] font-black text-neutral-600 uppercase tracking-widest flex items-center gap-2 mb-3">
-                                        <ShieldCheck className="w-3 h-3" /> Age Verification
+                                {/* Cookie Manager */}
+                                <div className="pt-4 border-t border-zinc-800">
+                                    <label className="text-xs font-medium text-zinc-400 flex items-center gap-2 mb-3">
+                                        <ShieldCheck className="w-4 h-4" /> Cookie Authentication
                                     </label>
-                                    <div className="bg-neutral-800/30 rounded-xl border border-neutral-800 p-3 space-y-3">
-                                        <p className="text-[10px] text-neutral-500 leading-relaxed">
-                                            To play age-restricted videos, upload valid YouTube cookies (Netscape format).
+                                    <div className="bg-zinc-800/30 rounded-xl border border-zinc-800 p-4 space-y-3">
+                                        <p className="text-xs text-zinc-400 leading-relaxed">
+                                            Upload YouTube cookies (Netscape format) to access age-restricted content.
                                         </p>
                                         <textarea
-                                            placeholder="# Netscape HTTP Cookie File..."
-                                            className="w-full h-[200px] bg-neutral-900 border border-neutral-800 rounded-lg p-2 text-[10px] font-mono text-neutral-300 focus:outline-none focus:border-neutral-700 resize-none placeholder:text-neutral-700"
+                                            placeholder={isLoadingCookies ? "Loading saved cookies..." : "# Netscape HTTP Cookie File..."}
+                                            className="w-full h-48 bg-zinc-900 border border-zinc-700 rounded-lg p-3 text-xs font-mono text-zinc-300 focus:outline-none focus:border-violet-500/50 resize-y placeholder:text-zinc-600"
                                             value={cookieContent}
                                             onChange={(e) => setCookieContent(e.target.value)}
+                                            disabled={isLoadingCookies}
                                         />
-                                        <div className="flex justify-between items-center text-[9px] text-neutral-600">
-                                            <div className="flex items-center gap-2">
-                                                <Lock className="w-2.5 h-2.5" />
-                                                <span>Manual upload required</span>
+                                        <div className="flex justify-between items-center">
+                                            <div className="flex items-center gap-2 text-xs text-zinc-500">
+                                                <Lock className="w-3 h-3" />
+                                                <span>Stored securely</span>
                                             </div>
                                             <button
                                                 onClick={async () => {
@@ -903,7 +1087,6 @@ export default function RoomPage() {
                                                     }
                                                     setIsSavingCookies(true);
                                                     try {
-                                                        // Pass user identity via query param for dev mode
                                                         const searchParams = new URLSearchParams(window.location.search);
                                                         const mockUser = searchParams.get('user');
                                                         const userParam = mockUser ? `?user=${encodeURIComponent(mockUser)}` : '';
@@ -917,8 +1100,8 @@ export default function RoomPage() {
                                                             const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
                                                             throw new Error(err.detail || 'Failed to save');
                                                         }
-                                                        toast.success("Cookies saved successfully");
-                                                        setCookieContent(''); // Clear after save
+                                                        toast.success("Cookies saved!");
+                                                        setCookieContent('');
                                                     } catch (err: any) {
                                                         toast.error(err.message || "Failed to save cookies");
                                                     } finally {
@@ -926,7 +1109,7 @@ export default function RoomPage() {
                                                     }
                                                 }}
                                                 disabled={isSavingCookies || !cookieContent || !currentUser || currentUser === 'Guest'}
-                                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                             >
                                                 {isSavingCookies ? "Saving..." : "Save Cookies"}
                                             </button>

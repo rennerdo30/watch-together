@@ -26,8 +26,11 @@ CACHE_TTL_SECONDS = 1800  # 30 minutes (reduced from 1 hour)
 MIN_DISK_FREE_BYTES = 500 * 1024 * 1024  # Keep at least 500MB free disk space
 MAX_CACHEABLE_FILE_BYTES = 50 * 1024 * 1024  # Don't cache files larger than 50MB
 
+# Bucket cache configuration for position-aware caching
+BUCKET_SIZE_BYTES = 10 * 1024 * 1024  # 10MB buckets for range caching
+
 # Format cache configuration - caches resolved video formats in memory
-FORMAT_CACHE_TTL_SECONDS = 900  # 15 minutes - YouTube URLs typically valid for 6 hours
+FORMAT_CACHE_TTL_SECONDS = 7200  # 2 hours - YouTube URLs typically valid for 6 hours
 _format_cache: Dict[str, Tuple[dict, float]] = {}  # URL -> (resolved_data, expiry_time)
 
 if not os.path.exists(CACHE_DIR):
@@ -40,6 +43,33 @@ if not os.path.exists(COOKIES_DIR):
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def parse_range_header(range_header: str) -> Tuple[int, int | None]:
+    """Parse Range header like 'bytes=12345-' or 'bytes=12345-67890' returning (start, end)."""
+    if not range_header or not range_header.startswith("bytes="):
+        return (0, None)
+    try:
+        range_spec = range_header[6:]  # Remove 'bytes='
+        if '-' in range_spec:
+            parts = range_spec.split('-')
+            start = int(parts[0]) if parts[0] else 0
+            end = int(parts[1]) if parts[1] else None
+            return (start, end)
+    except (ValueError, IndexError):
+        pass
+    return (0, None)
+
+def get_bucket_for_position(byte_pos: int) -> int:
+    """Get the bucket number for a byte position."""
+    return byte_pos // BUCKET_SIZE_BYTES
+
+def get_bucket_cache_key(url: str, bucket_num: int) -> Tuple[str, str]:
+    """Get cache key and path for a bucket."""
+    # Use URL hash + bucket number for cache key
+    url_hash = hashlib.md5(url.encode()).hexdigest()[:16]
+    cache_key = f"bucket_{url_hash}_{bucket_num}"
+    cache_path = os.path.join(CACHE_DIR, cache_key)
+    return cache_key, cache_path
+
 # Ensure data directory exists for persistence
 if not os.path.exists("data"):
     os.makedirs("data")
@@ -48,7 +78,27 @@ if not os.path.exists("data"):
 async def cleanup_task():
     while True:
         await asyncio.sleep(60)  # Check every minute
-        manager.cleanup_stale_rooms(ttl_seconds=300)  # 5 minute TTL
+        await manager.cleanup_stale_rooms(ttl_seconds=300)  # 5 minute TTL
+
+# Background task for sync heartbeat - broadcasts authoritative time every 5 seconds
+async def sync_heartbeat_task():
+    while True:
+        await asyncio.sleep(5)  # Every 5 seconds
+        try:
+            for room_id, state in list(manager.room_states.items()):
+                # Only send heartbeat if room is playing and has active connections
+                if state.get("is_playing") and manager.active_connections.get(room_id):
+                    sync_payload = manager.get_sync_payload(room_id)
+                    await manager.broadcast({
+                        "type": "heartbeat",
+                        "payload": {
+                            "timestamp": sync_payload.get("timestamp", 0),
+                            "server_time": time.time() * 1000,
+                            "is_playing": True
+                        }
+                    }, room_id)
+        except Exception as e:
+            logger.warning(f"Heartbeat error: {e}")
 
 def check_disk_space() -> tuple[bool, int]:
     """
@@ -135,20 +185,30 @@ async def cache_cleanup_task():
                         pass
                 
                 logger.info(f"Cache cleanup freed {freed / 1024 / 1024:.2f} MB")
+            
+            # Clean expired format cache entries
+            current_time = time.time()
+            expired_keys = [k for k, (_, exp) in _format_cache.items() if current_time > exp]
+            for k in expired_keys:
+                del _format_cache[k]
+            if expired_keys:
+                logger.info(f"Cleaned {len(expired_keys)} expired format cache entries")
                 
         except Exception as e:
             logger.error(f"Error in cache cleanup task: {e}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: start background cleanup task
+    # Startup: start background tasks
     task = asyncio.create_task(cleanup_task())
     cache_task = asyncio.create_task(cache_cleanup_task())
-    logger.info("Started room cleanup background task")
+    heartbeat_task = asyncio.create_task(sync_heartbeat_task())
+    logger.info("Started background tasks: room cleanup, cache cleanup, sync heartbeat")
     yield
-    # Shutdown: cancel cleanup task
+    # Shutdown: cancel tasks
     task.cancel()
     cache_task.cancel()
+    heartbeat_task.cancel()
 
 app = FastAPI(title="Watch Together Backend", lifespan=lifespan)
 
@@ -290,6 +350,13 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                             "type": "roles_update",
                             "payload": {"roles": state.get("roles", {})}
                         }, room_id)
+            
+            elif msg_type == "ping":
+                # Immediately echo back for latency measurement
+                await websocket.send_json({
+                    "type": "pong",
+                    "payload": {"client_time": payload.get("client_time"), "server_time": time.time() * 1000}
+                })
                 
     except WebSocketDisconnect:
         await manager.disconnect_and_notify(websocket, room_id)
@@ -958,47 +1025,74 @@ async def proxy_stream(request: Request, url: str):
             )
         else:
 
-            # Handle Segment Caching - Include Range in cache key to avoid collisions
-            range_header = outgoing_headers.get("Range", "")
-            cache_input = f"{url}|{range_header}"
-            cache_key = hashlib.md5(cache_input.encode()).hexdigest()
-            cache_path = os.path.join(CACHE_DIR, cache_key)
-            meta_path = cache_path + ".meta"
+            # === POSITION-AWARE BUCKET CACHING ===
+            # Instead of caching by exact range, we cache by 10MB buckets
+            # This means users seeking to similar positions get cache hits
             
-            # Check cache hit
-            if os.path.exists(cache_path) and os.path.exists(meta_path):
+            range_header = outgoing_headers.get("Range", "")
+            range_start, range_end = parse_range_header(range_header)
+            
+            # Calculate which bucket this request starts in
+            start_bucket = get_bucket_for_position(range_start)
+            
+            # For YouTube DASH, check if we have this bucket cached
+            _, bucket_cache_path = get_bucket_cache_key(url, start_bucket)
+            bucket_meta_path = bucket_cache_path + ".meta"
+            
+            # Check for bucket cache hit
+            bucket_cache_hit = False
+            if os.path.exists(bucket_cache_path) and os.path.exists(bucket_meta_path):
                 try:
-                    # Serve from cache
-                    async with aiofiles.open(meta_path, 'r') as f:
-                        meta_json = await f.read()
-                        headers = json.loads(meta_json)
+                    async with aiofiles.open(bucket_meta_path, 'r') as f:
+                        bucket_meta = json.loads(await f.read())
                     
-                    # Update mtime for LRU
-                    os.utime(cache_path, None)
+                    bucket_start_byte = bucket_meta.get("bucket_start", 0)
+                    bucket_end_byte = bucket_meta.get("bucket_end", 0)
                     
-                    async def iter_file():
-                        async with aiofiles.open(cache_path, 'rb') as f:
-                            while True:
-                                chunk = await f.read(64 * 1024)
-                                if not chunk:
-                                    break
-                                yield chunk
-                                
-                    logger.info(f"Cache HIT for {url} [Range: {range_header or 'Full'}]")
-                    # Determine status code (206 for partial, 200 for full)
-                    status_code = 206 if range_header else 200
-                    return StreamingResponse(
-                        iter_file(),
-                        status_code=status_code,
-                        headers=headers,
-                        media_type=headers.get("content-type", "application/octet-stream")
-                    )
+                    # If requested range starts within this bucket's cached data
+                    if bucket_start_byte <= range_start < bucket_end_byte:
+                        # Calculate offset into bucket
+                        offset = range_start - bucket_start_byte
+                        
+                        # Serve from bucket cache with correct offset
+                        os.utime(bucket_cache_path, None)  # Update mtime for LRU
+                        
+                        async def iter_bucket_file():
+                            async with aiofiles.open(bucket_cache_path, 'rb') as f:
+                                await f.seek(offset)
+                                while True:
+                                    chunk = await f.read(64 * 1024)
+                                    if not chunk:
+                                        break
+                                    yield chunk
+                        
+                        # Calculate content length for response
+                        cached_size = bucket_end_byte - range_start
+                        response_headers = {
+                            "Access-Control-Allow-Origin": "*",
+                            "Access-Control-Allow-Methods": "GET, OPTIONS", 
+                            "Access-Control-Allow-Headers": "*",
+                            "Accept-Ranges": "bytes",
+                            "Content-Type": bucket_meta.get("content_type", "application/octet-stream"),
+                            "Content-Length": str(cached_size),
+                            "Content-Range": f"bytes {range_start}-{bucket_end_byte - 1}/*",
+                        }
+                        
+                        logger.info(f"BUCKET HIT: bucket {start_bucket} for {url[:60]}... [offset {offset}, size {cached_size}]")
+                        bucket_cache_hit = True
+                        
+                        return StreamingResponse(
+                            iter_bucket_file(),
+                            status_code=206,
+                            headers=response_headers,
+                            media_type=bucket_meta.get("content_type", "application/octet-stream")
+                        )
+                        
                 except Exception as e:
-                    logger.error(f"Cache read error for {url}: {e}")
-                    # Fallback to fetch if cache read fails
-                    pass
-
-            logger.info(f"Cache MISS for {url} [Range: {range_header or 'Full'}]")
+                    logger.warning(f"Bucket cache read error: {e}")
+            
+            if not bucket_cache_hit:
+                logger.info(f"BUCKET MISS: bucket {start_bucket} for {url[:60]}... [Range: {range_header or 'Full'}]")
 
             # Fetch and Cache (with disk space checks)
             req = segment_client.build_request("GET", url, headers=outgoing_headers)
@@ -1070,31 +1164,42 @@ async def proxy_stream(request: Request, url: str):
                 if key in r.headers:
                     response_headers[key] = r.headers[key]
             
-            # Only save metadata if we're caching
+            # Stream and optionally cache using bucket system
             if should_cache:
-                try:
-                    async with aiofiles.open(meta_path, 'w') as f:
-                        await f.write(json.dumps(dict(response_headers)))
-                except Exception as e:
-                    logger.error(f"Failed to write cache meta: {e}")
-
-            # Stream and optionally cache
-            if should_cache:
-                async def stream_and_cache():
-                    temp_path = cache_path + f".{time.time()}.tmp"
+                # Calculate bucket info for caching
+                _, cache_bucket_path = get_bucket_cache_key(url, start_bucket)
+                cache_bucket_meta_path = cache_bucket_path + ".meta"
+                
+                async def stream_and_cache_bucket():
+                    temp_path = cache_bucket_path + f".{time.time()}.tmp"
+                    total_bytes = 0
                     try:
                         async with aiofiles.open(temp_path, 'wb') as f:
                             async for chunk in r.aiter_bytes():
                                 await f.write(chunk)
+                                total_bytes += len(chunk)
                                 yield chunk
 
                         # Rename temp to final only if fully downloaded and status is good
                         if r.status_code in (200, 206):
-                            os.rename(temp_path, cache_path)
+                            os.rename(temp_path, cache_bucket_path)
+                            
+                            # Write bucket metadata with byte range info
+                            bucket_metadata = {
+                                "bucket_num": start_bucket,
+                                "bucket_start": range_start,
+                                "bucket_end": range_start + total_bytes,
+                                "content_type": r.headers.get("content-type", "application/octet-stream"),
+                                "cached_at": time.time(),
+                            }
+                            async with aiofiles.open(cache_bucket_meta_path, 'w') as f:
+                                await f.write(json.dumps(bucket_metadata))
+                            
+                            logger.info(f"BUCKET CACHED: bucket {start_bucket}, bytes {range_start}-{range_start + total_bytes} ({total_bytes/1024/1024:.1f}MB)")
                         else:
                             if os.path.exists(temp_path): os.remove(temp_path)
                     except Exception as e:
-                        logger.error(f"Streaming error/interruption: {e}")
+                        logger.warning(f"Bucket caching error: {e}")
                         if os.path.exists(temp_path):
                             os.remove(temp_path)
                         # We don't raise here to allow the client to receive what we got
@@ -1102,7 +1207,7 @@ async def proxy_stream(request: Request, url: str):
                         await r.aclose()
 
                 return StreamingResponse(
-                    stream_and_cache(),
+                    stream_and_cache_bucket(),
                     status_code=r.status_code,
                     headers=response_headers,
                     media_type=r.headers.get("content-type", "application/octet-stream")

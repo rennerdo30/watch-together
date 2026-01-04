@@ -15,6 +15,20 @@
 ## Resolved
 
 ### Session: 2026-01-04
+- [x] **[SYNC] Accurate Playback Badge**: Badge now shows actual player time via `onTimeUpdate` instead of independent ticker. Removed 1-second interval that caused drift.
+- [x] **[SYNC] Latency-Compensated Gradual Sync**: Server sends heartbeat every 5s with authoritative timestamp. Clients measure latency via ping/pong. Small drifts (< 3s) use playbackRate adjustment (1.05x/0.95x) instead of jarring seeks.
+- [x] **[PERFORMANCE] Position-Aware Caching**: Implemented 10MB bucket-based caching for DASH streams. Users seeking to similar positions now get cache hits instead of re-downloading.
+- [x] **[PERFORMANCE] Format Cache TTL**: Increased format cache from 15 minutes to 2 hours for better efficiency.
+- [x] **[BUG] Duplicate Dict Keys**: Fixed duplicate `members` and `queue` keys in `connection_manager.py`.
+- [x] **[PERFORMANCE] Format Cache TTL**: Increased format cache from 15 minutes to 2 hours for better efficiency.
+- [x] **[BUG] Duplicate Dict Keys**: Fixed duplicate `members` and `queue` keys in `connection_manager.py`.
+- [x] **[BUG] DnD Sends Wrong Message**: Fixed drag-and-drop to use `queue_reorder` instead of non-existent `replace_queue`.
+- [x] **[BUG] Async Save Not Awaited**: Fixed 3 places where `_save_states()` wasn't awaited, causing silent data loss.
+- [x] **[MEMORY] Format Cache Cleanup**: Added periodic cleanup of expired format cache entries in background task.
+- [x] **[UX] Sidebar Width Persistence**: Fixed sidebar width not loading from localStorage on mount.
+- [x] **[VALIDATION] Room ID Sanitization**: Added input sanitization to prevent special characters in room IDs.
+- [x] **[CLEANUP] Unused onGoToLive Prop**: Removed unused prop from PlayerControls.
+- [x] **[TYPESCRIPT] Room Interface**: Added proper Room interface typing instead of `any[]`.
 - [x] **[QUEUE] Cookie Sharing for Queue Items**: Videos added by users with cookies now store `added_by` field; other users can play using the adding user's cookies as fallback.
 - [x] **[PERFORMANCE] Format Caching**: Resolved video formats are cached in memory for 15 minutes to avoid redundant yt-dlp calls on queue playback.
 - [x] **[PLAYER] DASH Audio Loop During Buffering**: Implemented preemptive buffer monitoring in `useDashSync.ts` - pauses audio before video stalls.

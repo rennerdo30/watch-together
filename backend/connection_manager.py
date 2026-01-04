@@ -122,8 +122,6 @@ class ConnectionManager:
                 "last_sync_time": time.time(),
                 "members": [],
                 "queue": [],
-                "members": [],
-                "queue": [],
                 "roles": {},
                 "playing_index": -1
             }
@@ -147,7 +145,7 @@ class ConnectionManager:
             current_roles[user_email] = "user"
         
         self.room_states[room_id]["roles"] = current_roles
-        self._save_states()
+        await self._save_states()
 
         self.active_connections[room_id].append(websocket)
         setattr(websocket, "user_email", user_email)
@@ -169,7 +167,7 @@ class ConnectionManager:
             "payload": {"email": user_email, "members": self.room_states[room_id]["members"]}
         }, room_id)
 
-    def disconnect(self, websocket: WebSocket, room_id: str):
+    async def disconnect(self, websocket: WebSocket, room_id: str):
         if room_id in self.active_connections:
             if websocket in self.active_connections[room_id]:
                 self.active_connections[room_id].remove(websocket)
@@ -185,9 +183,9 @@ class ConnectionManager:
                 # Room state is kept for 5 minutes to allow quick reconnects
                 if room_id in self.room_states:
                     self.room_states[room_id]["empty_since"] = time.time()
-                    self._save_states()  # Save state before potential cleanup
+                    await self._save_states()  # Save state before potential cleanup
     
-    def cleanup_stale_rooms(self, ttl_seconds: int = 300):
+    async def cleanup_stale_rooms(self, ttl_seconds: int = 300):
         """Remove room states that have been empty for longer than TTL (default 5 min)."""
         now = time.time()
         stale_rooms = []
@@ -203,10 +201,10 @@ class ConnectionManager:
             print(f"Cleaned up stale room: {rid}")
         
         if stale_rooms:
-            self._save_states()
+            await self._save_states()
     
     async def disconnect_and_notify(self, websocket: WebSocket, room_id: str):
-        self.disconnect(websocket, room_id)
+        await self.disconnect(websocket, room_id)
         if room_id in self.room_states:
              await self.broadcast({
                 "type": "user_left",
