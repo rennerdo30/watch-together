@@ -247,6 +247,22 @@ export function useAudioNormalization(options: UseAudioNormalizationOptions): Us
         };
     }, []);
 
+    // === EFFECT: Resume AudioContext when tab becomes visible ===
+    useEffect(() => {
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'visible' && audioContextRef.current?.state === 'suspended') {
+                console.log('[AudioNormalization] Tab visible, resuming AudioContext');
+                audioContextRef.current.resume();
+            }
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+        };
+    }, []);
+
     // === EFFECT: Cleanup on unmount ===
     useEffect(() => {
         return () => {

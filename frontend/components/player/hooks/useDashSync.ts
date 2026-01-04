@@ -17,10 +17,10 @@ interface DashSyncConfig {
 }
 
 const DEFAULT_CONFIG: DashSyncConfig = {
-    bufferThreshold: 0.5,      // Pause audio if less than 0.5s buffered
-    driftThreshold: 0.05,      // Correct drift > 50ms
-    syncFrequency: 10,         // Check sync 10 times per second
-    heavySyncThreshold: 1.0,   // Heavy sync if drift > 1s
+    bufferThreshold: 0.3,      // Pause audio if less than 0.3s buffered
+    driftThreshold: 0.15,      // Correct drift > 150ms (increased to reduce glitches)
+    syncFrequency: 4,          // Check sync 4 times per second (reduced frequency)
+    heavySyncThreshold: 0.5,   // Heavy sync if drift > 500ms
 };
 
 export interface UseDashSyncOptions {
@@ -96,12 +96,15 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
         lastDrift: 0,
     });
 
-    // RAF and timing refs
-    const rafIdRef = useRef<number | null>(null);
-    const lastSyncTimeRef = useRef<number>(0);
+    // Interval and timing refs (using setInterval instead of RAF for background tab support)
+    const syncIntervalIdRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const syncIntervalMs = 1000 / config.syncFrequency;
     const consecutiveFailuresRef = useRef<number>(0);
     const isRecoveringRef = useRef<boolean>(false);
+
+    // Play promise tracking to prevent race conditions
+    const audioPlayPromiseRef = useRef<Promise<void> | null>(null);
+    const isPlayingAudioRef = useRef<boolean>(false);
 
     // React state for triggering re-renders (minimal)
     const [state, setState] = useState<DashSyncState>(stateRef.current);
@@ -211,6 +214,48 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
     }, [updateState, onBufferingChange, onError]);
 
     /**
+     * Safe audio play that tracks the promise to prevent race conditions
+     */
+    const safeAudioPlay = useCallback(async (audio: HTMLAudioElement): Promise<void> => {
+        if (isPlayingAudioRef.current) {
+            // Already trying to play, wait for it
+            if (audioPlayPromiseRef.current) {
+                return audioPlayPromiseRef.current;
+            }
+            return;
+        }
+
+        isPlayingAudioRef.current = true;
+        try {
+            audioPlayPromiseRef.current = audio.play();
+            await audioPlayPromiseRef.current;
+        } catch (e: unknown) {
+            const error = e as Error;
+            if (error.name !== 'NotAllowedError' && error.name !== 'AbortError') {
+                console.warn('[DashSync] Audio play failed:', error.message);
+            }
+        } finally {
+            audioPlayPromiseRef.current = null;
+            isPlayingAudioRef.current = false;
+        }
+    }, []);
+
+    /**
+     * Safe audio pause that waits for any pending play promise
+     */
+    const safeAudioPause = useCallback(async (audio: HTMLAudioElement): Promise<void> => {
+        // Wait for any pending play to complete before pausing
+        if (audioPlayPromiseRef.current) {
+            try {
+                await audioPlayPromiseRef.current;
+            } catch {
+                // Ignore - we're pausing anyway
+            }
+        }
+        audio.pause();
+    }, []);
+
+    /**
      * Attempt to recover stopped audio
      */
     const recoverAudio = useCallback(async (video: HTMLVideoElement, audio: HTMLAudioElement) => {
@@ -219,12 +264,12 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
 
         try {
             audio.currentTime = video.currentTime;
-            await audio.play();
+            await safeAudioPlay(audio);
             console.log('[DashSync] Audio recovered successfully');
             consecutiveFailuresRef.current = 0;
         } catch (e: unknown) {
             const error = e as Error;
-            if (error.name !== 'NotAllowedError') {
+            if (error.name !== 'NotAllowedError' && error.name !== 'AbortError') {
                 console.warn('[DashSync] Audio recovery failed:', error.message);
                 consecutiveFailuresRef.current++;
             }
@@ -232,28 +277,21 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
             // Delay before allowing another recovery attempt
             setTimeout(() => { isRecoveringRef.current = false; }, 1000);
         }
-    }, []);
+    }, [safeAudioPlay]);
 
     /**
-     * Core sync loop using requestAnimationFrame
+     * Core sync loop - runs via setInterval to support background tabs
+     * (requestAnimationFrame stops when tab is hidden)
      */
-    const syncLoop = useCallback((timestamp: number) => {
+    const syncLoop = useCallback(() => {
         if (!enabled) return;
 
         const video = videoRef.current;
         const audio = audioRef.current;
 
         if (!video || !audio) {
-            rafIdRef.current = requestAnimationFrame(syncLoop);
             return;
         }
-
-        // Throttle sync checks
-        if (timestamp - lastSyncTimeRef.current < syncIntervalMs) {
-            rafIdRef.current = requestAnimationFrame(syncLoop);
-            return;
-        }
-        lastSyncTimeRef.current = timestamp;
 
         const currentState = stateRef.current;
 
@@ -267,7 +305,6 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
 
         // Skip sync logic if video is paused or seeking
         if (video.paused || video.seeking || audio.seeking || currentState.isSyncing) {
-            rafIdRef.current = requestAnimationFrame(syncLoop);
             return;
         }
 
@@ -279,7 +316,7 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
         // Preemptively pause audio if buffer is getting low
         if (minBuffer < config.bufferThreshold && !audio.paused) {
             console.log(`[DashSync] Preemptive pause: buffer=${minBuffer.toFixed(2)}s`);
-            audio.pause();
+            safeAudioPause(audio);
             if (!currentState.isBuffering) {
                 updateState({ isBuffering: true });
                 onBufferingChange?.(true);
@@ -287,20 +324,16 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
         }
 
         // Resume audio if buffer recovered and video is playing
-        if (minBuffer >= config.bufferThreshold && audio.paused && !video.paused && currentState.isBuffering) {
+        if (minBuffer >= config.bufferThreshold && audio.paused && !video.paused && currentState.isBuffering && !isPlayingAudioRef.current) {
             console.log(`[DashSync] Buffer recovered: ${minBuffer.toFixed(2)}s, resuming audio`);
             audio.currentTime = video.currentTime; // Sync position first
-            audio.play().catch((e) => {
-                if (e.name !== 'NotAllowedError') {
-                    console.warn('[DashSync] Audio resume failed:', e.message);
-                }
-            });
+            safeAudioPlay(audio);
             updateState({ isBuffering: false });
             onBufferingChange?.(false);
         }
 
-        // === DRIFT CORRECTION ===
-        if (!audio.paused) {
+        // === DRIFT CORRECTION (Using playback rate for smooth correction) ===
+        if (!audio.paused && !isPlayingAudioRef.current) {
             const drift = audio.currentTime - video.currentTime;
             const absDrift = Math.abs(drift);
 
@@ -311,12 +344,24 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
                 console.warn(`[DashSync] Heavy sync triggered: drift=${drift.toFixed(3)}s`);
                 performHeavySync(video, audio, video.currentTime);
             } else if (absDrift > config.driftThreshold) {
-                // Light correction - just adjust audio time
-                audio.currentTime = video.currentTime;
+                // Use playback rate adjustment for smooth correction instead of time jumps
+                // This prevents audio pops/clicks
+                if (drift > 0) {
+                    // Audio is ahead - slow it down slightly
+                    audio.playbackRate = 0.97;
+                } else {
+                    // Audio is behind - speed it up slightly
+                    audio.playbackRate = 1.03;
+                }
                 consecutiveFailuresRef.current = 0;
 
                 if (currentState.syncHealth !== 'good') {
                     updateState({ syncHealth: 'good' });
+                }
+            } else {
+                // Within threshold - restore normal playback rate
+                if (audio.playbackRate !== 1.0) {
+                    audio.playbackRate = 1.0;
                 }
             }
         }
@@ -327,9 +372,7 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
             console.log('[DashSync] Audio stopped while video playing, recovering...');
             recoverAudio(video, audio);
         }
-
-        rafIdRef.current = requestAnimationFrame(syncLoop);
-    }, [enabled, videoRef, audioRef, config, syncIntervalMs, getBufferHealth, updateState, onTimeUpdate, onBufferingChange, performHeavySync, recoverAudio]);
+    }, [enabled, videoRef, audioRef, config, getBufferHealth, updateState, onTimeUpdate, onBufferingChange, performHeavySync, recoverAudio, safeAudioPlay, safeAudioPause]);
 
     // === PUBLIC API ===
 
@@ -426,26 +469,68 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
         updateState({ muted });
     }, [audioRef, videoRef, updateState]);
 
-    // === EFFECT: Start/stop sync loop ===
+    // === EFFECT: Start/stop sync loop (using setInterval for background tab support) ===
     useEffect(() => {
         if (!enabled) {
-            if (rafIdRef.current) {
-                cancelAnimationFrame(rafIdRef.current);
-                rafIdRef.current = null;
+            if (syncIntervalIdRef.current) {
+                clearInterval(syncIntervalIdRef.current);
+                syncIntervalIdRef.current = null;
             }
             return;
         }
 
-        // Start the sync loop
-        rafIdRef.current = requestAnimationFrame(syncLoop);
+        // Start the sync loop with setInterval
+        // setInterval continues running in background tabs (throttled to ~1Hz by browser)
+        syncIntervalIdRef.current = setInterval(syncLoop, syncIntervalMs);
+
+        // Also run immediately
+        syncLoop();
 
         return () => {
-            if (rafIdRef.current) {
-                cancelAnimationFrame(rafIdRef.current);
-                rafIdRef.current = null;
+            if (syncIntervalIdRef.current) {
+                clearInterval(syncIntervalIdRef.current);
+                syncIntervalIdRef.current = null;
             }
         };
-    }, [enabled, syncLoop]);
+    }, [enabled, syncLoop, syncIntervalMs]);
+
+    // === EFFECT: Handle visibility change (tab switching) ===
+    useEffect(() => {
+        if (!enabled) return;
+
+        const handleVisibilityChange = () => {
+            const video = videoRef.current;
+            const audio = audioRef.current;
+            if (!video || !audio) return;
+
+            if (document.visibilityState === 'visible') {
+                console.log('[DashSync] Tab became visible, checking sync...');
+
+                // Resume AudioContext if it exists and was suspended
+                // (handled by useAudioNormalization, but we ensure playback resumes)
+
+                // If video was playing, ensure audio resumes
+                if (!video.paused && audio.paused) {
+                    audio.currentTime = video.currentTime;
+                    safeAudioPlay(audio);
+                }
+
+                // Reset playback rate in case it was adjusted
+                audio.playbackRate = 1.0;
+            } else {
+                console.log('[DashSync] Tab became hidden');
+                // We don't pause on hide - let the browser handle throttling
+                // But reset playback rate to prevent issues
+                audio.playbackRate = 1.0;
+            }
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+        };
+    }, [enabled, videoRef, audioRef, safeAudioPlay]);
 
     // === EFFECT: Set up video event listeners ===
     useEffect(() => {

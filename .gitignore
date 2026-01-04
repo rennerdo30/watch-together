@@ -1,7 +1,45 @@
-__pycache__
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Environment
 .env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Data (user-specific / runtime)
 cookies.txt
-rooms.json
-backend/data/cache
-backend/data/cookies
+data/rooms.json
+data/cache/
+data/cookies/
+backend/data/*
+!backend/data/README.md
+
+# Build outputs
+.next/
+.turbo/
+dist/
+build/
+*.log
+
+# Testing
+.pytest_cache/
+coverage/
+.nyc_output/
+
+# Misc
+*.bak
+*.tmp

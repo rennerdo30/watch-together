@@ -99,4 +99,4 @@ A web application allowing users to watch videos together from various sources, 
 - [x] **Async Backend Refactor**
 
 ### Planned
-- [ ] Drag-and-Drop Queue Reordering
+- [x] Drag-and-Drop Queue Reordering
