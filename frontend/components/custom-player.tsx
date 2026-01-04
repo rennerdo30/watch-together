@@ -74,6 +74,8 @@ export function CustomPlayer({
     const containerRef = useRef<HTMLDivElement>(null);
     const isAutoPlayingRef = useRef(false);
     const dashInitializedRef = useRef<string | null>(null);
+    const qualitySwitchAbortRef = useRef<AbortController | null>(null);
+    const loadingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
     // Determine playback mode
     const isDashMode = streamType === 'dash' && !!videoUrl && !!audioUrl;
@@ -198,9 +200,11 @@ export function CustomPlayer({
         setError(null);
         setIsLoading(true);
 
-        // Set up video (always muted in DASH mode - audio comes from audio element)
+        // Set up video (use volume=0 instead of muted to prevent aggressive browser pausing)
+        // Some browsers pause muted videos in background tabs more aggressively than volume=0 videos
         video.src = videoUrl;
-        video.muted = true;
+        video.volume = 0; // No audio from video element - audio comes from separate audio element
+        video.muted = false; // Keep muted=false to avoid background throttling
         video.load();
 
         // Set up audio with user's saved preferences
@@ -220,12 +224,27 @@ export function CustomPlayer({
             setCurrentQuality(0);
         }
 
-        // Wait for both to load
+        // Wait for both to load with timeout
         let videoLoaded = false;
         let audioLoaded = false;
 
+        // Set loading timeout (10 seconds)
+        loadingTimeoutRef.current = setTimeout(() => {
+            if (!videoLoaded || !audioLoaded) {
+                console.warn('[CustomPlayer] Loading timeout - one or both streams failed to load');
+                setError('Stream loading timed out. The video may be unavailable or region-locked.');
+                setIsLoading(false);
+            }
+        }, 10000);
+
         const checkBothLoaded = () => {
             if (videoLoaded && audioLoaded) {
+                // Clear the loading timeout
+                if (loadingTimeoutRef.current) {
+                    clearTimeout(loadingTimeoutRef.current);
+                    loadingTimeoutRef.current = null;
+                }
+
                 setIsLoading(false);
                 setDuration(video.duration || audio.duration);
 
@@ -254,8 +273,20 @@ export function CustomPlayer({
 
         const onVideoLoaded = () => { videoLoaded = true; checkBothLoaded(); };
         const onAudioLoaded = () => { audioLoaded = true; checkBothLoaded(); };
-        const onVideoError = () => setError(`Video load failed: ${video.error?.message || 'Unknown'}`);
-        const onAudioError = () => setError(`Audio load failed: ${audio.error?.message || 'Unknown'}`);
+        const onVideoError = () => {
+            if (loadingTimeoutRef.current) {
+                clearTimeout(loadingTimeoutRef.current);
+                loadingTimeoutRef.current = null;
+            }
+            setError(`Video load failed: ${video.error?.message || 'Unknown'}`);
+        };
+        const onAudioError = () => {
+            if (loadingTimeoutRef.current) {
+                clearTimeout(loadingTimeoutRef.current);
+                loadingTimeoutRef.current = null;
+            }
+            setError(`Audio load failed: ${audio.error?.message || 'Unknown'}`);
+        };
 
         video.addEventListener('loadedmetadata', onVideoLoaded, { once: true });
         audio.addEventListener('loadedmetadata', onAudioLoaded, { once: true });
@@ -263,11 +294,20 @@ export function CustomPlayer({
         audio.addEventListener('error', onAudioError, { once: true });
 
         return () => {
+            if (loadingTimeoutRef.current) {
+                clearTimeout(loadingTimeoutRef.current);
+                loadingTimeoutRef.current = null;
+            }
             video.removeEventListener('loadedmetadata', onVideoLoaded);
             audio.removeEventListener('loadedmetadata', onAudioLoaded);
             video.removeEventListener('error', onVideoError);
             audio.removeEventListener('error', onAudioError);
             dashInitializedRef.current = null;
+
+            // Clean up audio element when switching modes
+            audio.pause();
+            audio.removeAttribute('src');
+            audio.load();
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [videoUrl, audioUrl, isDashMode]);
@@ -357,12 +397,23 @@ export function CustomPlayer({
     const toggleFullscreen = useCallback(() => {
         if (!containerRef.current) return;
         if (!document.fullscreenElement) {
-            containerRef.current.requestFullscreen();
-            setIsFullscreen(true);
+            containerRef.current.requestFullscreen().catch((e) => {
+                console.warn('[CustomPlayer] Fullscreen request failed:', e);
+            });
         } else {
-            document.exitFullscreen();
-            setIsFullscreen(false);
+            document.exitFullscreen().catch(() => { });
         }
+    }, []);
+
+    // === FULLSCREEN SYNC (handles Escape key etc) ===
+    useEffect(() => {
+        const handleFullscreenChange = () => {
+            setIsFullscreen(!!document.fullscreenElement);
+        };
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
+        return () => {
+            document.removeEventListener('fullscreenchange', handleFullscreenChange);
+        };
     }, []);
 
     const handlePlayToggle = useCallback(() => {
@@ -421,6 +472,12 @@ export function CustomPlayer({
             const audio = audioRef.current;
             if (!video) return;
 
+            // Abort any previous quality switch listener
+            if (qualitySwitchAbortRef.current) {
+                qualitySwitchAbortRef.current.abort();
+            }
+            qualitySwitchAbortRef.current = new AbortController();
+
             const savedTime = video.currentTime;
             const wasPlaying = !video.paused;
 
@@ -432,16 +489,14 @@ export function CustomPlayer({
             // Change video source
             video.src = availableQualities[index].video_url;
 
-            const onCanPlay = () => {
+            video.addEventListener('canplay', () => {
                 video.currentTime = savedTime;
                 if (audio) audio.currentTime = savedTime;
                 if (wasPlaying) {
                     video.play().catch(console.warn);
                     audio?.play().catch(console.warn);
                 }
-                video.removeEventListener('canplay', onCanPlay);
-            };
-            video.addEventListener('canplay', onCanPlay);
+            }, { once: true, signal: qualitySwitchAbortRef.current.signal });
 
             setCurrentQuality(index);
         } else {
@@ -628,7 +683,7 @@ export function CustomPlayer({
                 onMuteToggle={handleMuteToggle}
                 onVolumeChange={handleVolumeChange}
                 onFullscreenToggle={toggleFullscreen}
-                onPiPToggle={() => videoRef.current?.requestPictureInPicture()}
+                onPiPToggle={() => videoRef.current?.requestPictureInPicture().catch(() => { })}
                 onSettingsToggle={() => setShowSettings(!showSettings)}
                 onStatsToggle={() => setShowStats(!showStats)}
                 onQualityChange={handleQualityChange}

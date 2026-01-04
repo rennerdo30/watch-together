@@ -13,3 +13,5 @@ yt-dlp
 websockets
 httpx
 aiofiles
+bgutil-ytdlp-pot-provider
+aiosqlite

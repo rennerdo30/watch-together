@@ -68,6 +68,10 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
     // HLS instance ref
     const hlsRef = useRef<Hls | null>(null);
     const isAutoPlayingRef = useRef(false);
+    const retryCountRef = useRef<number>(0);
+    const lastRetryTimeRef = useRef<number>(0);
+    const MAX_RETRIES = 3;
+    const RETRY_COOLDOWN_MS = 2000;
 
     // State
     const [isLoading, setIsLoading] = useState(true);
@@ -201,13 +205,33 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
                 if (data.fatal) {
                     console.error('[HLS] Fatal error:', data);
 
+                    const now = Date.now();
+                    const timeSinceLastRetry = now - lastRetryTimeRef.current;
+
+                    // Check if we should attempt recovery
+                    if (retryCountRef.current >= MAX_RETRIES) {
+                        console.error('[HLS] Max retries exceeded, giving up');
+                        onError?.('Playback failed after multiple retries. Please try refreshing.');
+                        hls.destroy();
+                        return;
+                    }
+
+                    // Cooldown between retries
+                    if (timeSinceLastRetry < RETRY_COOLDOWN_MS) {
+                        console.warn('[HLS] Retry too soon, waiting...');
+                        return;
+                    }
+
+                    retryCountRef.current++;
+                    lastRetryTimeRef.current = now;
+
                     switch (data.type) {
                         case Hls.ErrorTypes.NETWORK_ERROR:
-                            onError?.('Network connectivity issue. Retrying...');
-                            hls.startLoad();
+                            onError?.(`Network issue. Retry ${retryCountRef.current}/${MAX_RETRIES}...`);
+                            setTimeout(() => hls.startLoad(), RETRY_COOLDOWN_MS);
                             break;
                         case Hls.ErrorTypes.MEDIA_ERROR:
-                            onError?.('Decoding error. Attempting recovery...');
+                            onError?.(`Decoding error. Retry ${retryCountRef.current}/${MAX_RETRIES}...`);
                             hls.recoverMediaError();
                             break;
                         default:

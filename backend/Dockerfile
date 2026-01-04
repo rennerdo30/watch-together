@@ -9,10 +9,15 @@ RUN apt-get update && apt-get install -y \
     unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Deno (required for yt-dlp to solve YouTube's BotGuard challenges)
-RUN curl -fsSL https://deno.land/install.sh | sh
-ENV DENO_INSTALL="/root/.deno"
+# Create non-root user FIRST (before installing Deno)
+RUN addgroup --system --gid 1001 appgroup && \
+    adduser --system --uid 1001 --ingroup appgroup appuser
+
+# Install Deno to a shared location accessible by all users
+ENV DENO_INSTALL="/opt/deno"
 ENV PATH="${DENO_INSTALL}/bin:${PATH}"
+RUN curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/opt/deno sh && \
+    chmod -R 755 /opt/deno
 
 # Install python dependencies
 COPY requirements.txt .
@@ -24,15 +29,24 @@ RUN pip install --no-cache-dir -U "yt-dlp[default] @ https://github.com/yt-dlp/y
 
 # Install yt-dlp PO token plugins:
 # - yt-dlp-get-pot: Framework for PO token generation
-# - bgutil-ytdlp-pot-provider: Provider that uses deno to solve BotGuard challenges (from GitHub)
-RUN pip install --no-cache-dir yt-dlp-get-pot
-RUN pip install --no-cache-dir bgutil-ytdlp-pot-provider
+# - bgutil-ytdlp-pot-provider: Provider that uses deno to solve BotGuard challenges
+RUN pip install --no-cache-dir yt-dlp-get-pot bgutil-ytdlp-pot-provider
 
 # Copy application code
 COPY . .
 
+# Copy startup script
+COPY start.sh .
+RUN chmod +x start.sh
+
+# Fix ownership
+RUN chown -R appuser:appgroup /app
+
+# Switch to non-root user
+USER appuser
+
 # Expose port
 EXPOSE 8000
 
-# Run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run the application using the startup script
+CMD ["/bin/bash", "./start.sh"]

@@ -6,7 +6,7 @@ import {
     Loader2, Users, Link as LinkIcon,
     Plus, Trash2, SkipForward,
     Play, ListVideo, Settings, X, Palette, ShieldCheck, Home, GripVertical, Pin, Bug,
-    Crown, Shield, User as UserIcon, ChevronUp, ChevronDown, Lock, Copy, Check
+    Crown, Shield, User as UserIcon, ChevronUp, ChevronDown, Lock, Copy, Check, Infinity
 } from 'lucide-react';
 import { ResolveResponse, resolveUrl } from '@/lib/api';
 import { CustomPlayer } from '@/components/custom-player';
@@ -49,6 +49,7 @@ export default function RoomPage() {
     const [syncState, setSyncState] = useState({ isPlaying: false, timestamp: 0, lastSync: '' });
     const [loadingQueueIndex, setLoadingQueueIndex] = useState<number | null>(null);
     const [actualPlayerTime, setActualPlayerTime] = useState(0); // Real player time for badge display
+    const [isPermanent, setIsPermanent] = useState(false); // Room permanent status
 
     // Layout resizing
     const [sidebarWidth, setSidebarWidth] = useState(320); // Default width
@@ -291,6 +292,7 @@ export default function RoomPage() {
                 if (payload.roles) setRoles(payload.roles);
                 if (payload.your_email) setCurrentUser(payload.your_email);
                 if (typeof payload.playing_index === 'number') setPlayingIndex(payload.playing_index);
+                if (typeof payload.permanent === 'boolean') setIsPermanent(payload.permanent);
 
                 if (playerRef.current && payload.video_data) {
                     if (payload.is_playing) playerRef.current.play?.().catch(() => { });
@@ -362,6 +364,9 @@ export default function RoomPage() {
                 break;
             case 'roles_update':
                 if (payload.roles) setRoles(payload.roles);
+                break;
+            case 'room_settings_update':
+                if (typeof payload.permanent === 'boolean') setIsPermanent(payload.permanent);
                 break;
             case 'pong':
                 // Calculate round-trip latency
@@ -932,6 +937,26 @@ export default function RoomPage() {
 
 
                             <div className="p-5 space-y-6 overflow-y-auto flex-1">
+                                {/* Permanent Room Toggle - Admin Only */}
+                                {roles[currentUser] === 'admin' && (
+                                    <button
+                                        onClick={() => sendMsg('toggle_permanent', {})}
+                                        className={`w-full p-4 rounded-xl border flex items-center justify-between transition-all ${isPermanent ? 'bg-amber-500/10 border-amber-500/20' : 'bg-zinc-800/30 border-zinc-800'
+                                            }`}
+                                    >
+                                        <div className="text-left flex items-center gap-3">
+                                            <Infinity className={`w-5 h-5 ${isPermanent ? 'text-amber-500' : 'text-zinc-500'}`} />
+                                            <div>
+                                                <span className="font-medium text-white text-sm">Permanent Room</span>
+                                                <p className="text-xs text-zinc-500 mt-0.5">Room won&apos;t be deleted when empty</p>
+                                            </div>
+                                        </div>
+                                        <div className={`w-10 h-5 rounded-full transition-all flex items-center px-0.5 ${isPermanent ? 'bg-amber-500' : 'bg-zinc-700'}`}>
+                                            <div className={`w-4 h-4 bg-white rounded-full transition-all shadow-sm ${isPermanent ? 'translate-x-5' : 'translate-x-0'}`} />
+                                        </div>
+                                    </button>
+                                )}
+
                                 {/* Theme Selection */}
                                 <div className="space-y-3">
                                     <label className="text-xs font-medium text-zinc-400 flex items-center gap-2">

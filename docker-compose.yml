@@ -10,6 +10,19 @@ services:
     restart: unless-stopped
     networks:
       - watch-network
+    environment:
+      - BGUTIL_YTDLP_POT_PROVIDER_URL=http://bgutil-provider:4416
+
+  bgutil-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider:latest
+    container_name: bgutil-provider
+    restart: unless-stopped
+    expose:
+      - "4416"
+    ports:
+      - "4416:4416"
+    networks:
+      - watch-network
 
   frontend:
     build: ./frontend

@@ -101,6 +101,9 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
     const syncIntervalMs = 1000 / config.syncFrequency;
     const consecutiveFailuresRef = useRef<number>(0);
     const isRecoveringRef = useRef<boolean>(false);
+    const lastHeavySyncTimeRef = useRef<number>(0);
+    const HEAVY_SYNC_COOLDOWN_BASE_MS = 2000; // Base cooldown, increases with failures
+    const MAX_CONSECUTIVE_FAILURES = 5;
 
     // Play promise tracking to prevent race conditions
     const audioPlayPromiseRef = useRef<Promise<void> | null>(null);
@@ -150,6 +153,15 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
     ) => {
         if (stateRef.current.isSyncing) return;
 
+        // Check cooldown (with exponential backoff based on failure count)
+        const now = Date.now();
+        const cooldownMs = HEAVY_SYNC_COOLDOWN_BASE_MS * Math.pow(2, Math.min(consecutiveFailuresRef.current, 4));
+        if (now - lastHeavySyncTimeRef.current < cooldownMs) {
+            console.log(`[DashSync] Heavy sync on cooldown, skipping (${cooldownMs}ms)`);
+            return;
+        }
+        lastHeavySyncTimeRef.current = now;
+
         updateState({ isSyncing: true, isBuffering: true, syncHealth: 'recovering' });
         onBufferingChange?.(true);
 
@@ -197,9 +209,12 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
 
             console.error(`[DashSync] Heavy sync failed (attempt ${failCount}):`, error);
 
-            if (failCount >= 3) {
+            if (failCount >= MAX_CONSECUTIVE_FAILURES) {
                 updateState({ syncHealth: 'failed' });
                 onError?.('Synchronization failed repeatedly. Try refreshing the page.');
+                // Cooldown before allowing more syncs (exponential backoff)
+                const cooldown = HEAVY_SYNC_COOLDOWN_BASE_MS * Math.pow(2, failCount - 1);
+                console.log(`[DashSync] Entering cooldown for ${cooldown}ms`);
             }
 
             // Force resume even on failure
@@ -408,6 +423,11 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
             }
         } catch (err: unknown) {
             const error = err as Error;
+            // Ignore "interrupted by a new load request" error (AbortError)
+            if (error.name === 'AbortError' || error.message.includes('interrupted by a new load request')) {
+                console.warn('[DashSync] Play interrupted by load/pause:', error.message);
+                return;
+            }
             console.error('[DashSync] Play failed:', error.message);
             onError?.(error.message);
         }
@@ -554,6 +574,24 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
         };
 
         const onVideoPause = () => {
+            // Check if this pause was browser-initiated (tab in background) or user-initiated
+            // If we're in the background and didn't intend to pause, try to recover
+            if (document.visibilityState === 'hidden' && stateRef.current.isPlaying) {
+                console.log('[DashSync] Video paused by browser (background), attempting recovery...');
+                // Small delay to avoid fighting with the browser
+                setTimeout(() => {
+                    if (video.paused && stateRef.current.isPlaying) {
+                        video.play().catch((e) => {
+                            if (e.name !== 'NotAllowedError' && e.name !== 'AbortError') {
+                                console.warn('[DashSync] Video recovery failed:', e.message);
+                            }
+                        });
+                    }
+                }, 100);
+                return; // Don't update state since we're trying to recover
+            }
+
+            // User-initiated pause
             updateState({ isPlaying: false });
             onPlayingChange?.(false);
             audio.pause();
@@ -598,6 +636,35 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
             audio.pause();
         };
 
+        // === Audio event listeners for background tab recovery ===
+        const onAudioPause = () => {
+            // If audio paused but video is still playing, this is likely browser throttling
+            // Try to resume immediately
+            if (!video.paused && !video.seeking && !stateRef.current.isSyncing) {
+                console.log('[DashSync] Audio paused unexpectedly, attempting recovery...');
+                // Small delay to avoid tight loop with browser
+                setTimeout(() => {
+                    if (!video.paused && audio.paused) {
+                        audio.currentTime = video.currentTime;
+                        audio.play().catch((e) => {
+                            if (e.name !== 'NotAllowedError' && e.name !== 'AbortError') {
+                                console.warn('[DashSync] Audio recovery failed:', e.message);
+                            }
+                        });
+                    }
+                }, 100);
+            }
+        };
+
+        const onAudioSuspend = () => {
+            // Browser is suspending the audio resource (common in background)
+            // Try to keep it alive by resuming
+            if (!video.paused && audio.paused) {
+                console.log('[DashSync] Audio suspended, attempting to keep alive...');
+                audio.play().catch(() => { });
+            }
+        };
+
         video.addEventListener('play', onVideoPlay);
         video.addEventListener('pause', onVideoPause);
         video.addEventListener('waiting', onVideoWaiting);
@@ -605,6 +672,10 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
         video.addEventListener('seeking', onVideoSeeking);
         video.addEventListener('seeked', onVideoSeeked);
         video.addEventListener('ended', onVideoEnded);
+
+        // Audio events for background recovery
+        audio.addEventListener('pause', onAudioPause);
+        audio.addEventListener('suspend', onAudioSuspend);
 
         // Initialize audio state
         audio.volume = stateRef.current.volume;
@@ -618,6 +689,8 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
             video.removeEventListener('seeking', onVideoSeeking);
             video.removeEventListener('seeked', onVideoSeeked);
             video.removeEventListener('ended', onVideoEnded);
+            audio.removeEventListener('pause', onAudioPause);
+            audio.removeEventListener('suspend', onAudioSuspend);
         };
     }, [enabled, videoRef, audioRef, updateState, onPlayingChange, onBufferingChange]);
 

@@ -4,16 +4,22 @@ import time
 import asyncio
 from typing import Dict, List, Optional
 from fastapi import WebSocket
-import aiofiles
-
-DATA_FILE = "data/rooms.json"
+from services.database import save_room, get_all_rooms, delete_room
 
 class ConnectionManager:
     def __init__(self):
         # Map room_id -> List of WebSockets (volatile)
         self.active_connections: Dict[str, List[WebSocket]] = {}
         # Map room_id -> current room state (persistent)
-        self.room_states: Dict[str, dict] = self._load_states()
+        self.room_states: Dict[str, dict] = {}
+
+    async def initialize(self):
+        """Load room states from database."""
+        self.room_states = await get_all_rooms()
+        # Initialize runtime fields
+        for rid in self.room_states:
+            self.room_states[rid]["last_sync_time"] = time.time()
+            self.room_states[rid]["members"] = []  # Explicitly reset members on restart
 
     async def promote_user(self, room_id: str, requester_email: str, target_email: str, new_role: str) -> bool:
         if room_id not in self.room_states:
@@ -33,7 +39,26 @@ class ConnectionManager:
         # Update role
         current_roles[target_email] = new_role
         state["roles"] = current_roles
-        await self._save_states()
+        await self._save_room_state(room_id)
+        return True
+
+    async def toggle_permanent(self, room_id: str, requester_email: str) -> bool:
+        """Toggle the permanent status of a room. Only admins can do this."""
+        if room_id not in self.room_states:
+            return False
+        
+        state = self.room_states[room_id]
+        current_roles = state.get("roles", {})
+        
+        # Check permissions - only admin can toggle
+        requester_role = current_roles.get(requester_email)
+        if requester_role != "admin":
+            return False
+        
+        # Toggle permanent status
+        state["permanent"] = not state.get("permanent", False)
+        await self._save_room_state(room_id)
+        print(f"Room {room_id} permanent status: {state['permanent']}")
         return True
 
     def get_active_rooms(self) -> List[dict]:
@@ -50,47 +75,28 @@ class ConnectionManager:
                 })
         return rooms
 
-    def _load_states(self) -> dict:
-        if os.path.exists(DATA_FILE):
-            try:
-                with open(DATA_FILE, "r") as f:
-                    states = json.load(f)
-                    # Initialize last_sync_time for loaded states
-                    for rid in states:
-                        states[rid]["last_sync_time"] = time.time()
-                    return states
-            except Exception as e:
-                print(f"Error loading states: {e}")
-        return {}
-
-    async def _save_states(self):
-        try:
-            # We don't save volatile bits like 'members' or 'last_sync_time' to disk as they are runtime-based
-            serializable_states = {}
-            now = time.time()
-            for rid, state in self.room_states.items():
-                # Calculate current timestamp based on elapsed time if playing
-                saved_timestamp = state.get("timestamp", 0)
-                if state.get("is_playing") and state.get("video_data"):
-                    is_live = state["video_data"].get("is_live", False)
-                    if not is_live:
-                        elapsed = now - state.get("last_sync_time", now)
-                        saved_timestamp = saved_timestamp + elapsed
-                
-                serializable_states[rid] = {
-                    "video_data": state.get("video_data"),
-                    "is_playing": state.get("is_playing", False),
-                    "timestamp": saved_timestamp,
-                    "queue": state.get("queue", []),
-                    "playing_index": state.get("playing_index", -1),
-                    "roles": state.get("roles", {}),
-                    "saved_at": now  # Track when this was saved for accurate resume
-                }
+    async def _save_room_state(self, room_id: str):
+        """Save a single room's state to the database."""
+        if room_id not in self.room_states:
+            return
             
-            async with aiofiles.open(DATA_FILE, "w") as f:
-                await f.write(json.dumps(serializable_states))
+        try:
+            state = self.room_states[room_id]
+            # Calculate current timestamp based on elapsed time if playing
+            saved_timestamp = state.get("timestamp", 0)
+            if state.get("is_playing") and state.get("video_data"):
+                is_live = state["video_data"].get("is_live", False)
+                if not is_live:
+                    elapsed = time.time() - state.get("last_sync_time", time.time())
+                    saved_timestamp = saved_timestamp + elapsed
+            
+            # Prepare state for saving (using current in-memory state as base)
+            state_to_save = state.copy()
+            state_to_save["timestamp"] = saved_timestamp
+            
+            await save_room(room_id, state_to_save)
         except Exception as e:
-            print(f"Error saving states: {e}")
+            print(f"Error saving room {room_id}: {e}")
 
     def get_sync_payload(self, room_id: str) -> dict:
         """Returns the current state, adjusting timestamp for elapsed time if playing."""
@@ -123,7 +129,8 @@ class ConnectionManager:
                 "members": [],
                 "queue": [],
                 "roles": {},
-                "playing_index": -1
+                "playing_index": -1,
+                "permanent": False
             }
         
         # Ensure 'members' and 'last_sync_time' exist in state
@@ -145,7 +152,7 @@ class ConnectionManager:
             current_roles[user_email] = "user"
         
         self.room_states[room_id]["roles"] = current_roles
-        await self._save_states()
+        await self._save_room_state(room_id)
 
         self.active_connections[room_id].append(websocket)
         setattr(websocket, "user_email", user_email)
@@ -183,13 +190,17 @@ class ConnectionManager:
                 # Room state is kept for 5 minutes to allow quick reconnects
                 if room_id in self.room_states:
                     self.room_states[room_id]["empty_since"] = time.time()
-                    await self._save_states()  # Save state before potential cleanup
+                    await self._save_room_state(room_id)  # Save state before potential cleanup
     
     async def cleanup_stale_rooms(self, ttl_seconds: int = 300):
-        """Remove room states that have been empty for longer than TTL (default 5 min)."""
+        """Remove room states that have been empty for longer than TTL (default 5 min).
+        Permanent rooms are never cleaned up."""
         now = time.time()
         stale_rooms = []
         for rid, state in self.room_states.items():
+            # Skip permanent rooms
+            if state.get("permanent", False):
+                continue
             empty_since = state.get("empty_since")
             if empty_since and (now - empty_since) > ttl_seconds:
                 # No one has reconnected within TTL
@@ -198,10 +209,8 @@ class ConnectionManager:
         
         for rid in stale_rooms:
             del self.room_states[rid]
+            await delete_room(rid)
             print(f"Cleaned up stale room: {rid}")
-        
-        if stale_rooms:
-            await self._save_states()
     
     async def disconnect_and_notify(self, websocket: WebSocket, room_id: str):
         await self.disconnect(websocket, room_id)
@@ -225,12 +234,12 @@ class ConnectionManager:
             self.room_states[room_id].update(updates)
             # Always update last_sync_time when state changes
             self.room_states[room_id]["last_sync_time"] = time.time()
-            await self._save_states()
+            await self._save_room_state(room_id)
 
     async def add_to_queue(self, room_id: str, video_data: dict):
         if room_id in self.room_states:
             self.room_states[room_id]["queue"].append(video_data)
-            await self._save_states()
+            await self._save_room_state(room_id)
             return self.room_states[room_id]["queue"]
         return []
 
@@ -243,8 +252,9 @@ class ConnectionManager:
             state["video_data"] = video_data
             state["timestamp"] = 0
             state["is_playing"] = True
+            state["is_playing"] = True
             state["last_sync_time"] = time.time()
-            await self._save_states()
+            await self._save_room_state(room_id)
             return video_data, state["queue"], 0
         return None, [], -1
 
@@ -265,7 +275,7 @@ class ConnectionManager:
                 if playing_index > index:
                     state["playing_index"] = playing_index - 1
 
-                await self._save_states()
+                await self._save_room_state(room_id)
             return queue
         return []
 
@@ -287,7 +297,7 @@ class ConnectionManager:
                 elif new_index <= playing_index < old_index:
                     state["playing_index"] = playing_index + 1
 
-                await self._save_states()
+                await self._save_room_state(room_id)
             return queue
         return []
 
@@ -321,15 +331,16 @@ class ConnectionManager:
                 state["last_sync_time"] = time.time()
                 state["is_playing"] = True
                 state["playing_index"] = next_index
-                await self._save_states()
+                await self._save_room_state(room_id)
                 return next_v, queue, next_index
             else:
                 # No more videos in queue
                 state["video_data"] = None
                 state["is_playing"] = False
                 state["playing_index"] = -1
+                state["playing_index"] = -1
                 state["last_sync_time"] = time.time()
-                await self._save_states()
+                await self._save_room_state(room_id)
                 return None, queue, -1
         return None, [], -1
 
@@ -339,7 +350,7 @@ class ConnectionManager:
             queue = self.room_states[room_id]["queue"]
             if 0 <= index < len(queue):
                 queue[index]["pinned"] = not queue[index].get("pinned", False)
-                await self._save_states()
+                await self._save_room_state(room_id)
             return queue
         return []
 
@@ -347,17 +358,10 @@ class ConnectionManager:
         """Play a specific item from queue - keeps it in queue until finished."""
         if room_id in self.room_states:
             state = self.room_states[room_id]
-            state["queue"]
             queue = state["queue"]
             old_playing_index = state.get("playing_index", -1)
 
-            # Remove previously playing video if it was in queue and not pinned
-            if old_playing_index >= 0 and old_playing_index < len(queue):
-                if not queue[old_playing_index].get("pinned", False):
-                    queue.pop(old_playing_index)
-                    # Adjust target index if it was after the removed item
-                    if index > old_playing_index:
-                        index -= 1
+
 
             if 0 <= index < len(queue):
                 target_v = queue[index]
@@ -366,7 +370,7 @@ class ConnectionManager:
                 state["last_sync_time"] = time.time()
                 state["is_playing"] = True
                 state["playing_index"] = index
-                await self._save_states()
+                await self._save_room_state(room_id)
                 return target_v, queue, index
         return None, [], -1
 
