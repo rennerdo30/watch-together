@@ -18,7 +18,7 @@ graph TD
         
         Backend -->|Resolve| YTDLP[yt-dlp Library]
         Backend -->|Execute JS| Node[Node.js Runtime]
-        Backend -->|Store| FS[File System (Data/Cookies)]
+        Backend -->|Store| FS["File System (Data/Cookies)"]
     end
     
     YTDLP -->|Fetch Manifests| External[YouTube / Twitch / etc]
