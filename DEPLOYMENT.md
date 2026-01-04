@@ -88,9 +88,10 @@ If you use Nginx, Traefik, or Caddy on your host:
 ### "Video not loading / 403 Forbidden"
 This usually happens with YouTube age-gated content.
 **Fix:** You need to provide cookies.
-1. Use a "Get cookies.txt" extension.
-2. Save to `backend/data/cookies.txt`.
-3. Restart backend: `docker compose restart backend`.
+1. Log in to the app.
+2. Go to **Settings** -> **Cookie Authentication**.
+3. Paste Netscape-formatted cookies and save.
+4. Retry the video.
 
 ### "WebSocket Connection Failed"
 Ensure your reverse proxy supports WebSockets.

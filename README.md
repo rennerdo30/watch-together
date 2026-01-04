@@ -35,12 +35,14 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for a detailed step-by-step guide.
 
 To watch age-restricted content or bypass regional blocks, you must provide valid cookies to `yt-dlp`.
 
-1. Export your YouTube cookies as `cookies.txt` (Netscape format).
-2. Save to `backend/data/cookies.txt`.
-3. Restart backend: `docker compose restart watch-together-backend`.
+1. **Log in** to the application (Guests cannot save cookies).
+2. Open the **Settings** menu (Gear icon) in any room.
+3. Paste your YouTube cookies (Netscape format) into the "Cookie Authentication" text area.
+4. Click **Save Cookies**.
 
-> [!IMPORTANT]
-> Export cookies from the same machine/browser you use to access the site if possible, to match User-Agent.
+> [!TIP]
+> You can export cookies using extensions like [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc).
+> These cookies are stored on the server and linked to your identity.
 
 ## Local Development
 - **Backend**: `cd backend && uvicorn main:app --reload` (Port 8000)

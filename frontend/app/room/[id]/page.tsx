@@ -1073,7 +1073,7 @@ export default function RoomPage() {
                                         <div className="flex justify-between items-center">
                                             <div className="flex items-center gap-2 text-xs text-zinc-500">
                                                 <Lock className="w-3 h-3" />
-                                                <span>Stored securely</span>
+                                                <span>Stored on server</span>
                                             </div>
                                             <button
                                                 onClick={async () => {

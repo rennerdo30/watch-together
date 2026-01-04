@@ -1,102 +1,143 @@
 # Watch Together - Specification
 
 ## Overview
-A web application allowing users to watch videos together from various sources, prioritizing maximum site compatibility by using `yt-dlp` in the backend.
+**Watch Together** is a real-time collaborative video player that allows users to watch content from YouTube, Twitch, and 1800+ other sites simultaneously. It focuses on maximum compatibility, robust synchronization, and a premium user experience.
 
 ## Architecture
-- **Frontend**: Next.js 16 (React 19)
-- **Backend**: Python (FastAPI), fully asynchronous
-- **Video Player**: Custom HLS.js player with premium UI
-- **Communication**: WebSockets for real-time sync, REST API for video resolution
-- **Deployment**: Docker Compose with Cloudflare Tunnel
 
-## Core Features
+The system uses a microservices architecture orchestrated by Docker Compose.
 
-### 1. Universal Video Resolver
-- User inputs a URL (YouTube, Twitch, and 1800+ supported sites via yt-dlp)
-- Backend uses `yt-dlp` to resolve the direct stream URL (HLS/m3u8 or MP4)
-- **HLS Preference**: Prioritizes Master Playlists (`.m3u8`) to enable adaptive quality selection
-- **HLS Proxy**: Backend proxies manifests and segments to bypass CORS restrictions
-  - Rewrites internal absolute URLs in manifests to route through proxy
-  - Supports Partial Content (Range requests) for robust seeking
-- **Cookie Support**: Uses `data/cookies.txt` for age-gated or restricted content
-- **Smart Runtime**: Uses Node.js in backend for complex JavaScript challenges (e.g. YouTube `n` parameter)
+```mermaid
+graph TD
+    User[User Browser] -->|HTTPS| CF[Cloudflare Tunnel]
+    CF -->|HTTP| Nginx[Nginx Reverse Proxy]
+    
+    subgraph "Docker Network"
+        Nginx -->|/api/* & /ws/*| Backend[FastAPI Backend]
+        Nginx -->|/*| Frontend[Next.js Frontend]
+        
+        Backend -->|Resolve| YTDLP[yt-dlp Library]
+        Backend -->|Execute JS| Node[Node.js Runtime]
+        Backend -->|Store| FS[File System (Data/Cookies)]
+    end
+    
+    YTDLP -->|Fetch Manifests| External[YouTube / Twitch / etc]
+    Backend -->|Proxy Segments| External
+```
 
-### 2. Room System
-- **Dynamic Rooms**: Users can create rooms with custom names (e.g., `/room/movie-night`)
-- **Real-time Sync**: WebSocket-based synchronization of:
-  - Video URL and metadata
-  - Play/Pause state and Timestamp (with drift correction)
-  - Queue state and User roles
-- **Persistent State**: Room state survives server restarts (5-minute TTL after last user leaves)
-- **Async I/O**: Non-blocking file operations (`aiofiles`) for high concurrency
-- **Guest Users**: No login required, integrates with Cloudflare Access for identity
+## Core Workflows
 
-### 3. Video Player
-- **Engine**: Custom player built on HLS.js for maximum control
-- **Premium UI**: Glassmorphism design with smooth animations
-- **Features**:
-  - **Quality Selection**: Manually select resolution (1080p, 720p, etc.) or Auto
-  - **Audio Normalization**: Integrated compressor/limiter for night mode viewing (dynamic gain)
-  - **Persistent Settings**: Remembers Volume, Mute, and Normalization preferences via LocalStorage
-  - **Robust Unmute**: Automatically handles browser autoplay policies to restore audio
-  - Picture-in-Picture, Fullscreen, and "Stats for Nerds"
-- **Sync Logic**: Prevents race conditions on load; forces 0:00 start for new videos
+### 1. Video Resolution & Cookie Logic
+The backend uses a sophisticated multi-pass strategy to resolve video URLs, aiming to bypass age-gating and regional restrictions.
 
-### 4. Queue System
-- Add videos to queue for continuous playback
-- Pin videos to prevent auto-removal after playback
-- Reorder queue (drag-and-drop planned)
-- Auto-advance to next video on completion
-- **Stream URL Refresh**: Re-resolves URLs on playback to prevent expiration
+```mermaid
+sequenceDiagram
+    participant User
+    participant API as Backend API
+    participant Cache as Memory Cache
+    participant YTDLP as yt-dlp
 
-### 5. Debug Panel
-- Real-time display of:
-  - WebSocket connection status
-  - Playback state (Playing/Paused)
-  - Current timestamp and last sync time
-  - Queue info and proxy status
+    User->>API: POST /api/resolve (URL)
+    API->>Cache: Check for cached format
+    alt Cache Hit
+        Cache-->>API: Return cached video data
+    else Cache Miss
+        API->>API: Identify "Requesting User"
+        API->>API: Identify "Adding User" (if shared)
+        
+        loop Try Cookie Sources
+            note right of API: 1. Requesting User's Cookies<br/>2. Adding User's Cookies<br/>3. No Cookies (Fallback)
+            API->>YTDLP: Extract Info (with selected cookie jar)
+            alt Success
+                YTDLP-->>API: Stream URL
+            else Failure
+                YTDLP-->>API: Error (Age Gated / Sign In)
+            end
+        end
+        
+        API->>Cache: Store result (TTL 2 hours)
+    end
+    API-->>User: Final Video Manifest (HLS/DASH)
+```
+
+### 2. Synchronization Engine
+To ensure all users see the same frame at the same time, we implemented a custom sync protocol over WebSockets.
+
+```mermaid
+sequenceDiagram
+    participant C1 as Client 1 (Leader)
+    participant Server
+    participant C2 as Client 2
+
+    C1->>C1: User Seeks to 1:30
+    C1->>Server: {type: "seek", timestamp: 90}
+    Server->>Server: Update Room State<br/>(timestamp=90)
+    Server->>C2: {type: "seek", timestamp: 90}
+    C2->>C2: Hard Seek to 1:30
+    
+    loop Every 5 Seconds (Heartbeat)
+        Server->>C1: {type: "heartbeat", timestamp: 95}
+        Server->>C2: {type: "heartbeat", timestamp: 95}
+        
+        C2->>C2: Calculate Drift
+        alt Drift > 3s
+            C2->>C2: Hard Seek
+        else Drift > 0.5s
+            C2->>C2: Adjust PlaybackRate (1.05x)
+        else Drift < -0.5s
+             C2->>C2: Adjust PlaybackRate (0.95x)
+        end
+    end
+```
+
+### 3. HLS/DASH Proxy
+To bypass CORS and handle segmented streaming from restricted sources:
+
+1. **Manifest Rewriting**: The backend downloads the master manifest (`.m3u8` or `.mpd`) and rewrites all segment URLs to point to `/api/proxy?url=...`.
+2. **Segment Proxying**: When the browser requests a segment:
+   - Backend fetches the segment from the value in `url` query param.
+   - Forwards headers (Range, User-Agent) to support seeking.
+   - Streams chunks back to the client (`StreamingResponse`).
 
 ## Technical Stack
 
 ### Frontend
-- Next.js 16, React 19
-- TailwindCSS 4 for styling
-- Lucide React for icons
-- HLS.js for video playback
-- Web Audio API for Normalization
+- **Framework**: Next.js 16 (React 19)
+- **Styling**: TailwindCSS 4
+- **Player**: `hls.js` customized with hooks (`useDashSync`, `useHlsPlayer`).
+- **State**: React Hooks + LocalStorage for persistence.
+- **Components**:
+  - `CustomPlayer`: Unified wrapper for HLS/DASH functionality.
+  - `SortableQueue`: Drag-and-drop queue using `@dnd-kit`.
 
 ### Backend
-- Python 3.11, FastAPI
-- **Async Framework**: `aiofiles` for I/O, `httpx` for requests
-- `yt-dlp` (latest) for video resolution
-- Node.js runtime for JS execution
-- WebSockets for real-time sync
+- **Framework**: FastAPI (Python 3.11)
+- **Concurrency**: Fully Async (`asyncio` + `aiofiles`).
+- **Validation**: Pydantic models.
+- **Tools**:
+  - `yt-dlp`: patched with `bgutil-ytdlp-pot-provider` for PO Token generation.
+  - `node`: Runtime for executing JS challenges from YouTube.
 
-### Deployment
-- Docker Compose orchestration
-- Nginx reverse proxy
-- Cloudflare Tunnel for secure access
-- Volume mapping for persistent data
+## Data & Persistence
+- **Room State**: JSON files in `data/rooms.json`.
+- **Cookies**: Individual Netscape cookie files in `data/cookies/{email}.txt`.
+- **Cache**:
+  - **Manifests**: In-memory LRU cache.
+  - **Segments**: `yt-dlp` disk cache in `data/yt_dlp_cache`.
 
-## Roadmap
+## Roadmap status
 
 ### Completed
-- [x] Project Scaffold (Frontend + Backend)
-- [x] Backend: `yt-dlp` integration service
-- [x] Frontend: Premium player UI
-- [x] Frontend: Integration with Backend
-- [x] Docker Deployment (Dockerfile + docker-compose)
-- [x] Room System (Backend WebSockets)
-- [x] Room System (Frontend Integration + Sync Logic)
-- [x] Queue & Playlist system
-- [x] Custom HLS.js Player with Stats Overlay
-- [x] HLS Proxy & Cookie Support
-- [x] Debug Panel for Sync State Visibility
-- [x] Persistent Playback State Across Restarts
-- [x] **Quality Selection (HLS Master Playlist Support)**
-- [x] **Audio Normalization (Compressor/Limiter)**
-- [x] **Async Backend Refactor**
+- [x] Universal Resolver (yt-dlp integration)
+- [x] Room System with WebSocket Sync
+- [x] Queue System (Add, Remove, Reorder)
+- [x] Smart HLS Proxy (CORS bypass)
+- [x] User Identity via Cloudflare Access
+- [x] Cookie Upload UI & Management
+- [x] Drag & Drop Sortable Queue
+- [x] Audio Normalization & Quality Selection
 
 ### Planned
-- [x] Drag-and-Drop Queue Reordering
+- [ ] User playlist saving
+- [ ] Chat system (beyond system messages)
+- [ ] Mobile-optimized layout
