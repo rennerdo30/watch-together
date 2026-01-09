@@ -359,9 +359,6 @@ class ConnectionManager:
         if room_id in self.room_states:
             state = self.room_states[room_id]
             queue = state["queue"]
-            old_playing_index = state.get("playing_index", -1)
-
-
 
             if 0 <= index < len(queue):
                 target_v = queue[index]
