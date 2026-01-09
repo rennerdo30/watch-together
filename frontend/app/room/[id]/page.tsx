@@ -588,7 +588,6 @@ export default function RoomPage() {
                                     videoUrl={getDashUrls()?.videoUrl}
                                     audioUrl={getDashUrls()?.audioUrl}
                                     availableQualities={getDashUrls()?.availableQualities}
-                                    audioOptions={getDashUrls()?.audioOptions}
                                     onPlay={() => {
                                         if (internalUpdateCount.current === 0) {
                                             const t = playerRef.current?.currentTime() || 0;

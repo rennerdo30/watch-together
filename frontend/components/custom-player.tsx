@@ -4,7 +4,7 @@ import { useRef, useEffect, useState, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import { Loader2, Info, Activity } from 'lucide-react';
 import { PlayerControls } from './player-controls';
-import { QualityOption, AudioOption } from '@/lib/api';
+import { QualityOption } from '@/lib/api';
 import { useDashSync, useAudioNormalization, useHlsPlayer, HlsQualityLevel } from './player/hooks';
 
 interface CustomPlayerProps {
@@ -28,7 +28,6 @@ interface CustomPlayerProps {
     videoUrl?: string;
     audioUrl?: string;
     availableQualities?: QualityOption[];
-    audioOptions?: AudioOption[];
 }
 
 interface PlayerAPI {

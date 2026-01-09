@@ -101,6 +101,12 @@ async def lifespan(app: FastAPI):
     yield
     for task in tasks:
         task.cancel()
+    # Clean up HTTP client
+    global _proxy_client
+    if _proxy_client is not None:
+        await _proxy_client.aclose()
+        _proxy_client = None
+        logger.info("Closed proxy HTTP client")
 
 
 # ============================================================================
@@ -523,8 +529,12 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
     try:
         while True:
             data = await websocket.receive_text()
-            message = json.loads(data)
-            
+            try:
+                message = json.loads(data)
+            except json.JSONDecodeError:
+                logger.warning(f"Invalid JSON received from {user_email} in room {room_id}")
+                continue
+
             msg_type = message.get("type")
             payload = message.get("payload", {})
             

@@ -1,8 +1,10 @@
 import json
 import os
 import time
-import asyncio
+import logging
 from typing import Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 from fastapi import WebSocket
 from services.database import save_room, get_all_rooms, delete_room
 
@@ -58,7 +60,7 @@ class ConnectionManager:
         # Toggle permanent status
         state["permanent"] = not state.get("permanent", False)
         await self._save_room_state(room_id)
-        print(f"Room {room_id} permanent status: {state['permanent']}")
+        logger.info(f"Room {room_id} permanent status: {state['permanent']}")
         return True
 
     def get_active_rooms(self) -> List[dict]:
@@ -96,7 +98,7 @@ class ConnectionManager:
             
             await save_room(room_id, state_to_save)
         except Exception as e:
-            print(f"Error saving room {room_id}: {e}")
+            logger.error(f"Error saving room {room_id}: {e}")
 
     def get_sync_payload(self, room_id: str) -> dict:
         """Returns the current state, adjusting timestamp for elapsed time if playing."""
@@ -210,7 +212,7 @@ class ConnectionManager:
         for rid in stale_rooms:
             del self.room_states[rid]
             await delete_room(rid)
-            print(f"Cleaned up stale room: {rid}")
+            logger.info(f"Cleaned up stale room: {rid}")
     
     async def disconnect_and_notify(self, websocket: WebSocket, room_id: str):
         await self.disconnect(websocket, room_id)
@@ -251,7 +253,6 @@ class ConnectionManager:
             state["playing_index"] = 0
             state["video_data"] = video_data
             state["timestamp"] = 0
-            state["is_playing"] = True
             state["is_playing"] = True
             state["last_sync_time"] = time.time()
             await self._save_room_state(room_id)
@@ -337,7 +338,6 @@ class ConnectionManager:
                 # No more videos in queue
                 state["video_data"] = None
                 state["is_playing"] = False
-                state["playing_index"] = -1
                 state["playing_index"] = -1
                 state["last_sync_time"] = time.time()
                 await self._save_room_state(room_id)
