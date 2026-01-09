@@ -194,7 +194,10 @@ async def refresh_video_url(video_data: dict, user_agent: str = None, user_email
     # 1. Check memory cache first
     cached = await get_cached_format(original_url)
     if cached:
-        for key in ["stream_url", "video_url", "audio_url", "available_qualities", "audio_options", "stream_type", "quality"]:
+        # Map 'url' to 'stream_url' for frontend compatibility
+        if 'url' in cached:
+            video_data['stream_url'] = cached['url']
+        for key in ["video_url", "audio_url", "available_qualities", "audio_options", "stream_type", "quality", "type", "height", "has_audio"]:
             if key in cached:
                 video_data[key] = cached[key]
         return video_data
@@ -329,9 +332,12 @@ async def refresh_video_url(video_data: dict, user_agent: str = None, user_email
 
     # Extract best URL using your existing logic
     stream_data = _extract_stream_url(info)
-    
+
     if stream_data:
         video_data.update(stream_data)
+        # Map 'url' to 'stream_url' for frontend compatibility
+        if 'url' in stream_data:
+            video_data['stream_url'] = stream_data['url']
         # Cache the result
         await cache_format(original_url, stream_data)
 
