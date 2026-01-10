@@ -345,7 +345,12 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
 
     // === EFFECT: Initialize on mount/src change ===
     useEffect(() => {
-        if (enabled) {
+        // Reset lastSrcRef when src changes to allow reinitialization
+        if (src !== lastSrcRef.current) {
+            lastSrcRef.current = ''; // Clear to allow initHls to run
+        }
+
+        if (enabled && src) {
             initHls();
         }
 
@@ -354,10 +359,9 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
                 hlsRef.current.destroy();
                 hlsRef.current = null;
             }
-            // Reset lastSrcRef so re-mounting with the same src works
-            lastSrcRef.current = '';
         };
-    }, [enabled, src, initHls]);
+    }, [enabled, src]); // eslint-disable-line react-hooks/exhaustive-deps
+    // Note: initHls excluded from deps - it has internal src guard and including it causes infinite loops
 
     // === EFFECT: Buffering detection ===
     useEffect(() => {
