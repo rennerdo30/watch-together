@@ -38,8 +38,6 @@
                     }
                     if (response && response.success) {
                         console.log('[WT Sync] Token registered successfully');
-                        // Store backend URL
-                        chrome.storage.sync.set({ backendUrl: backendUrl });
                     }
                 });
 
@@ -63,7 +61,9 @@
                 for (const node of mutation.addedNodes) {
                     if (node.nodeName === 'META') {
                         if (node.getAttribute('name') === 'wt-ext-token') {
-                            checkForToken();
+                            if (checkForToken()) {
+                                observer.disconnect(); // Stop observing after successful detection
+                            }
                             return;
                         }
                     }

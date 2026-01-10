@@ -254,7 +254,9 @@ async function syncCookies() {
         });
 
         if (!response.ok) {
-            const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+            const error = await response.json().catch(() => ({
+                detail: `HTTP ${response.status}: ${response.statusText || 'Request failed'}`
+            }));
             throw new Error(error.detail || `HTTP ${response.status}`);
         }
 
@@ -285,10 +287,10 @@ async function syncCookies() {
  */
 function isVideoManifest(url) {
     const lowUrl = url.toLowerCase();
-    if (lowUrl.includes('.m3u8') || lowUrl.includes('manifest') && lowUrl.includes('mpegurl')) {
+    if (lowUrl.includes('.m3u8') || (lowUrl.includes('manifest') && lowUrl.includes('mpegurl'))) {
         return 'hls';
     }
-    if (lowUrl.includes('.mpd') || lowUrl.includes('dash')) {
+    if (lowUrl.includes('.mpd') || (lowUrl.includes('dash') && lowUrl.includes('manifest'))) {
         return 'dash';
     }
     return null;
@@ -330,10 +332,21 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 /**
+ * Clean up detected streams when tab navigates to a new page
+ */
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    // Clear stream when navigation starts (before new page loads)
+    if (changeInfo.status === 'loading' && changeInfo.url) {
+        detectedStreams.delete(tabId);
+    }
+});
+
+/**
  * Get detected stream for current tab
  */
 async function getDetectedStream(tabId) {
-    if (tabId) {
+    // Check for explicit tabId (0 is a valid tab ID)
+    if (tabId !== undefined && tabId !== null) {
         return detectedStreams.get(tabId) || null;
     }
     // If no tabId provided, get current active tab

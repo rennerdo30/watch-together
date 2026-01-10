@@ -51,7 +51,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Listen for stream detection updates
     chrome.runtime.onMessage.addListener((message) => {
         if (message.type === 'STREAM_DETECTED') {
-            checkForStreams();
+            checkForStreams().catch(err => console.error('Stream check failed:', err));
         }
     });
 
@@ -182,6 +182,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         const roomId = roomIdInput.value.trim();
         if (!roomId) {
             sendStatus.textContent = 'Enter a room ID';
+            sendStatus.className = 'send-status error';
+            return;
+        }
+        // Validate room ID format (alphanumeric, hyphens, underscores only)
+        if (!/^[a-zA-Z0-9_-]+$/.test(roomId)) {
+            sendStatus.textContent = 'Invalid room ID (use letters, numbers, - or _)';
             sendStatus.className = 'send-status error';
             return;
         }
