@@ -206,6 +206,18 @@ export function CustomPlayer({
     const isBuffering = isDashMode ? dashSync.isBuffering : hlsPlayer.isBuffering;
     const isPlaying = isDashMode ? dashSync.isPlaying : !videoRef.current?.paused;
 
+    // === APPLY INITIAL VOLUME (non-DASH mode) ===
+    // This runs once on mount and when switching modes to sync persisted settings
+    useEffect(() => {
+        const video = videoRef.current;
+        if (!video || isDashMode) return;
+
+        // Apply saved volume and muted state to video element
+        video.volume = volume;
+        video.muted = isMuted;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isDashMode]); // Only on mount/mode change, not on every volume change
+
     // === VIDEO EVENT HANDLERS (non-DASH mode) ===
     useEffect(() => {
         const video = videoRef.current;
