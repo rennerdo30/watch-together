@@ -2,57 +2,88 @@
 
 All notable changes to this project will be documented in this file.
 
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+
 ## [Unreleased]
 
-### Resolved
-- **[SYNC] Accurate Playback Badge**: Badge now shows actual player time via `onTimeUpdate` instead of independent ticker. Removed 1-second interval that caused drift.
-- **[SYNC] Latency-Compensated Gradual Sync**: Server sends heartbeat every 5s with authoritative timestamp. Clients measure latency via ping/pong. Small drifts (< 3s) use playbackRate adjustment (1.05x/0.95x) instead of jarring seeks.
-- **[PERFORMANCE] Position-Aware Caching**: Implemented 10MB bucket-based caching for DASH streams. Users seeking to similar positions now get cache hits instead of re-downloading.
-- **[PERFORMANCE] Format Cache TTL**: Increased format cache from 15 minutes to 2 hours for better efficiency.
-- **[BUG] Duplicate Dict Keys**: Fixed duplicate `members` and `queue` keys in `connection_manager.py`.
-- **[BUG] DnD Sends Wrong Message**: Fixed drag-and-drop to use `queue_reorder` instead of non-existent `replace_queue`.
-- **[BUG] Async Save Not Awaited**: Fixed 3 places where `_save_states()` wasn't awaited, causing silent data loss.
-- **[MEMORY] Format Cache Cleanup**: Added periodic cleanup of expired format cache entries in background task.
-- **[UX] Sidebar Width Persistence**: Fixed sidebar width not loading from localStorage on mount.
-- **[VALIDATION] Room ID Sanitization**: Added input sanitization to prevent special characters in room IDs.
-- **[CLEANUP] Unused onGoToLive Prop**: Removed unused prop from PlayerControls.
-- **[TYPESCRIPT] Room Interface**: Added proper Room interface typing instead of `any[]`.
-- **[QUEUE] Cookie Sharing for Queue Items**: Videos added by users with cookies now store `added_by` field; other users can play using the adding user's cookies as fallback.
-- **[PERFORMANCE] Format Caching**: Resolved video formats are cached in memory for 15 minutes to avoid redundant yt-dlp calls on queue playback.
-- **[PLAYER] DASH Audio Loop During Buffering**: Implemented preemptive buffer monitoring in `useDashSync.ts` - pauses audio before video stalls.
-- **[PLAYER] DASH Missing Audio Race Condition**: Replaced 1s setInterval with RAF-based sync loop, all state in refs eliminates stale closures.
-- **[PLAYER] DASH Seeking Performance**: Proper seek handling with `seeking`/`seeked` events, graceful heavy sync with timeout recovery.
-- **[PLAYER] Refactor CustomPlayer**: Reduced from 1,251 to ~500 lines. Extracted into `useDashSync`, `useHlsPlayer`, `useAudioNormalization` hooks.
-- **[PLAYBACK] Failed to find demuxer**: Fixed proxy manifest detection - was incorrectly treating `.ts` segments as manifests because URL contained `.m3u8`.
-- **[AUDIO] Normalization UX**: Renamed to "Makeup Gain", changed unit to dB, fixed slider range.
-- **[STABILITY] Player Flickering**: Fixed re-initialization loop caused by timestamp ticker dependency.
-- **[SYNC] Status Badge**: Fixed desync/wrong timestamp using client-side ticker and optimistic updates.
-- **[SYNC] Sync Threshold Setting**: Added user-configurable threshold slider (1-10s) to player settings.
-- **[UX] Queue Drag & Drop**: Added drag handles, improved visual feedback, and clarified drop zones.
-- **[PLAYBACK] Audio Autoplay**: Fixed `AudioContext` suspension logic to resume on play.
-- **[PLAYBACK] Video Looping**: Fixed sync feedback loop caused by `currentTime(0)` on set_video.
-- **[PLAYBACK] Autoplay**: Added muted fallback for browser autoplay policies.
-- **[SYNC] Race Condition**: Changed `isInternalUpdate` from boolean to counter-based semaphore.
-- **[ERROR] Missing Error Boundary**: Added `ErrorBoundary` component around CustomPlayer.
-- **[STABILITY] Room State TTL**: Room state now persists for 5 minutes after last user leaves.
-- **[STABILITY] Playback Persistence**: Saves current playback position on server restart.
-- **[STABILITY] Proxy Client Isolation**: Each segment stream now uses its own HTTP client.
-- **[MAINTENANCE] Background Cleanup**: Added automatic cleanup of stale rooms every minute.
-- **[DX] Debug Panel**: Added debug panel showing WebSocket status, playback state, timestamp, etc.
-- **[CLEANUP] Unused Dependencies**: Removed `icons-react` from package.json.
-- **[CLEANUP] Dead Code**: Removed unused `formatWatchTime` function.
-- **[CLEANUP] Stale Comments**: Updated Vidstack reference to hls.js.
-- **[REFACTOR] Themes Extracted**: Moved themes to `lib/themes.ts`.
-- **[FEATURE] Stream URL Refresh**: Added re-resolve on queue_play/video_ended to fix expired manifests.
-- **[FEATURE] Generic Extractor**: Enabled yt-dlp generic extractor for unsupported sites.
-- **[FORMAT] Flexible Format Selection**: Updated to `bestvideo*+bestaudio/best` for better compatibility.
+### Added
+- **Browser Extension**: Automatic cookie sync from Chrome/Firefox to server
+- **DASH Player Hooks**: Extracted `useDashPlayer` for initialization/quality management
+- **PNG Icons**: Added multi-size PNG icons for browser extension
+- **User Detection**: `/api/me` endpoint for automatic user identification
 
-### Previous Sessions
-- **[PERSISTENCE] In-Memory State Loss**: Implemented JSON-based persistent storage with Docker volume mapping.
-- **[SYNC] HLS Segment CORS Issues**: Added `/api/proxy` endpoint to handle CORS-restricted media segments.
-- **[STABILITY] WebSocket Reconnection Handling**: Implemented auto-reconnect logic with status indicator.
-- **[UX] Local Developer Identity Mock**: Added support for `?user=email@example.com` query param.
-- **[DESIGN] Sleek UI Redesign**: Premium "Midnight Violet" theme with space-efficient layout.
-- **[NETWORKING] WebSocket Dependency**: Fixed missing `websockets` library in Docker.
-- **[FEATURES] Custom Rooms & Discovery**: Implemented live room list and custom room naming.
-- **[PLAYBACK] Resolution Reliability**: Refined `yt-dlp` format selection and segment proxy.
+### Fixed
+- **HTTP/2 Protocol Errors**: Added `Connection: close` header and disabled chunked encoding to prevent streaming issues
+- **DASH Loading State**: Fixed loading spinner stuck on true when video/audio already loaded
+- **Cookie Format**: Corrected Netscape format - `includeSubdomains` must be TRUE when domain has leading dot
+- **Volume State**: Apply saved volume/muted state on page load for non-DASH mode
+- **Proxy Redirects**: Limited max redirects to 3 to prevent YouTube CDN 503 errors
+- **HLS Player Loop**: Prevented infinite re-initialization by fixing effect dependencies
+- **Nginx Timeouts**: Increased proxy timeouts for large video streams (600s)
+- **Direct MP4 Streams**: Handle non-HLS sources correctly in player
+- **Extension Security**: Fixed multiple security and stability issues in cookie sync
+
+### Changed
+- **DASH Sync Hook**: Applied callback refs pattern to prevent stale closures
+- **Player Refactor**: Extracted DASH initialization logic to dedicated hook
+
+---
+
+## [1.0.0] - 2025-01-04
+
+### Features
+- **Universal Video Resolution**: yt-dlp integration supporting 1800+ sites
+- **Real-time Synchronization**: WebSocket-based sync with sub-second accuracy
+- **DASH/HLS Streaming**: Separate video/audio streams with quality selection up to 4K
+- **Room System**: Persistent rooms with queue management
+- **Cookie Authentication**: Bypass age-restrictions with user cookies
+- **Audio Normalization**: "Night mode" with configurable gain boost
+- **Drag-and-Drop Queue**: Reorderable queue with @dnd-kit
+- **Cloudflare Integration**: Zero Trust authentication and tunnel support
+
+### Synchronization
+- Server heartbeat every 5 seconds with authoritative timestamp
+- Client latency measurement via ping/pong
+- Small drifts (<3s) use playbackRate adjustment (0.95x/1.05x)
+- Large drifts trigger hard seek to correct position
+- A/V sync for DASH streams with preemptive buffer monitoring
+
+### Performance
+- Position-aware 10MB bucket caching for DASH streams
+- 2-hour format cache TTL for yt-dlp results
+- Multi-tier cache: Memory LRU → Disk buckets → Upstream
+- Segment prefetching based on playback position
+
+### Stability
+- Room state persists for 5 minutes after last user leaves
+- Automatic cleanup of stale rooms every minute
+- Error boundary around video player
+- WebSocket auto-reconnect with status indicator
+
+### UI/UX
+- Premium "Midnight Violet" dark theme
+- Responsive sidebar with width persistence
+- Quality selection with codec labels (VP9, AV1, H264)
+- Sync threshold slider (1-10s) in player settings
+- Debug panel showing WebSocket status and playback state
+
+### Fixed (Initial Release)
+- Duplicate dict keys in connection_manager.py
+- DnD sends wrong message type for queue reorder
+- Async save not awaited causing silent data loss
+- Format cache cleanup for expired entries
+- Room ID sanitization for special characters
+- Cookie sharing for queue items (added_by field)
+- DASH audio loop during buffering
+- Seeking performance with proper event handling
+- Player flickering from re-initialization loop
+- Sync status badge using optimistic updates
+- AudioContext suspension logic for autoplay
+- Video looping sync feedback loop
+
+### Technical
+- Next.js 16 with App Router and React 19
+- FastAPI with fully async I/O
+- TailwindCSS 4 for styling
+- Non-root Docker containers
+- Modular backend structure (core/, services/, api/routes/)

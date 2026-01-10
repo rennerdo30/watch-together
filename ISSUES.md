@@ -1,21 +1,126 @@
-# Issues & Roadmap Tracker
+# Known Issues & Roadmap
 
-## Active Issues (Bugs & Tech Debt)
+## Known Issues
 
-### Tech Debt
-- [x] **[BACKEND] Module Extraction**: Split `main.py` into modular structure with `core/`, `services/`, and `api/routes/`.
-- [ ] **[BACKEND] Database Migration**: Replace JSON file persistence with SQLite for room state management.
-- [x] **[BACKEND] Cache Request Deduplication**: Implement a tracker to prevent concurrent downloads of the same segment URL.
-- [ ] **[BACKEND] Proxy Cookie Isolation**: Ensure HLS segment proxy uses user-specific cookies when available.
-- [x] **[FRONTEND] Component Decomposition**: Break down `RoomPage` and `CustomPlayer` into smaller, focused components.
-- [x] **[FRONTEND] Sync Hook Extraction**: Move WebSocket logic into a custom `useRoomSync` hook.
-- [x] **[FRONTEND] Settings Hook Extraction**: Move settings/theme logic into a custom `useRoomSettings` hook.
-- [x] **[SECURITY] Non-Root Containers**: Update Dockerfiles to run backend/frontend services as non-root users.
+### High Priority
 
-## Resolved
+#### HTTP/2 Protocol Errors on Video Streaming
+- **Status**: Partially Fixed
+- **Description**: Video proxy occasionally returns `ERR_HTTP2_PROTOCOL_ERROR` with 206 Partial Content responses
+- **Cause**: HTTP/2 connection reuse issues when streaming large video files through Cloudflare
+- **Workaround**:
+  - Added `Connection: close` header to proxy responses
+  - Disabled chunked encoding for video proxy
+  - If still occurring, disable "HTTP/2 to Origin" in Cloudflare settings
 
-Resolved issues are now tracked in [CHANGELOG.md](CHANGELOG.md).
+#### DASH Loading State Stuck
+- **Status**: Fixed
+- **Description**: Loading spinner stays visible while audio plays
+- **Cause**: Effect re-running due to dependency changes after `{ once: true }` event listeners already fired
+- **Fix**: Added readyState check and reduced effect dependencies
 
-## Planned Features
+### Medium Priority
 
-- [x] **Drag-and-Drop Queue**: Improved native DnD with handles and visual cues.
+#### Proxy Cookie Isolation
+- **Status**: Open
+- **Description**: HLS segment proxy doesn't use user-specific cookies when available
+- **Impact**: Some region-locked segments may fail even with valid user cookies
+
+#### Database Migration
+- **Status**: Open
+- **Description**: Room state uses JSON file persistence instead of SQLite
+- **Impact**: Potential performance issues with many concurrent rooms
+
+### Low Priority
+
+#### Mobile Layout
+- **Status**: Planned
+- **Description**: UI not optimized for mobile devices
+- **Impact**: Usability issues on phones/tablets
+
+## Tech Debt
+
+### Completed
+- [x] **Module Extraction**: Split `main.py` into modular structure
+- [x] **Component Decomposition**: Break down `RoomPage` and `CustomPlayer`
+- [x] **Sync Hook Extraction**: Move WebSocket logic to `useRoomSync` hook
+- [x] **Settings Hook Extraction**: Move settings to `useRoomSettings` hook
+- [x] **Non-Root Containers**: All services run as non-root users
+- [x] **Cache Request Deduplication**: Prevent concurrent downloads of same segment
+- [x] **DASH Player Hook**: Extract DASH initialization to `useDashPlayer`
+- [x] **Callback Refs Pattern**: Applied to `useDashSync` to prevent stale closures
+
+### Pending
+- [ ] **SQLite Migration**: Replace JSON file persistence
+- [ ] **Proxy Cookie Isolation**: Use user-specific cookies in segment proxy
+- [ ] **Unit Tests**: Add test coverage for critical paths
+- [ ] **E2E Tests**: Add Playwright tests for user flows
+
+## Feature Roadmap
+
+### In Progress
+- **DASH Quality Labels**: Show codec info (VP9, AV1, H264) in quality selector
+
+### Planned
+
+#### Chat System
+- Real-time chat in rooms
+- System messages for join/leave/video changes
+- Emoji reactions
+
+#### User Playlists
+- Save personal playlists
+- Import/export playlist URLs
+- Share playlists with room
+
+#### Mobile Optimization
+- Responsive layout for phones/tablets
+- Touch-friendly controls
+- Fullscreen improvements
+
+#### Subtitle Support
+- Load subtitles from yt-dlp
+- Subtitle track selection
+- Styled captions overlay
+
+#### Watch History
+- Track watched videos per user
+- Resume from last position
+- Clear history option
+
+### Future Considerations
+
+#### Multi-Room Dashboard
+- View all active rooms
+- Quick join links
+- Room thumbnails
+
+#### Scheduled Watch Parties
+- Set watch time in advance
+- Calendar integration
+- Email reminders
+
+#### Voice Chat
+- WebRTC voice channels
+- Push-to-talk option
+- Volume controls per user
+
+## Reporting Issues
+
+Please use GitHub Issues to report bugs or request features:
+
+1. **Bug Reports**:
+   - Clear description of the issue
+   - Steps to reproduce
+   - Expected vs actual behavior
+   - Browser and OS version
+   - Console errors (F12 → Console)
+
+2. **Feature Requests**:
+   - Description of the feature
+   - Use case / why it's needed
+   - Any implementation ideas
+
+3. **Questions**:
+   - Check existing issues first
+   - Include relevant context

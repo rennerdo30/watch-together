@@ -1,143 +1,372 @@
-# Watch Together - Specification
+# Watch Together - Technical Specification
 
 ## Overview
-**Watch Together** is a real-time collaborative video player that allows users to watch content from YouTube, Twitch, and 1800+ other sites simultaneously. It focuses on maximum compatibility, robust synchronization, and a premium user experience.
 
-## Architecture
+Watch Together is a real-time collaborative video synchronization platform enabling multiple users to watch content from YouTube, Twitch, and 1800+ other sites simultaneously. The system prioritizes sub-second synchronization accuracy, robust error recovery, and a premium user experience.
 
-The system uses a microservices architecture orchestrated by Docker Compose.
+## System Architecture
 
-```mermaid
-graph TD
-    User[User Browser] -->|HTTPS| CF[Cloudflare Tunnel]
-    CF -->|HTTP| Nginx[Nginx Reverse Proxy]
-    
-    subgraph "Docker Network"
-        Nginx -->|/api/* & /ws/*| Backend[FastAPI Backend]
-        Nginx -->|/*| Frontend[Next.js Frontend]
-        
-        Backend -->|Resolve| YTDLP[yt-dlp Library]
-        Backend -->|Execute JS| Node[Node.js Runtime]
-        Backend -->|Store| FS["File System (Data/Cookies)"]
-    end
-    
-    YTDLP -->|Fetch Manifests| External[YouTube / Twitch / etc]
-    Backend -->|Proxy Segments| External
+### High-Level Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              User Browsers                                   │
+│   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐       │
+│   │   User A    │  │   User B    │  │   User C    │  │  Extension  │       │
+│   └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘       │
+└──────────┼────────────────┼────────────────┼────────────────┼───────────────┘
+           │ HTTPS          │ HTTPS          │ HTTPS          │ HTTPS
+           └────────────────┴────────────────┴────────────────┘
+                                    │
+┌───────────────────────────────────▼─────────────────────────────────────────┐
+│                    Cloudflare (Optional)                                     │
+│   ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐            │
+│   │  Zero Trust     │  │     Tunnel      │  │    Caching      │            │
+│   │  Authentication │  │    Connector    │  │   (Optional)    │            │
+│   └─────────────────┘  └─────────────────┘  └─────────────────┘            │
+└───────────────────────────────────┬─────────────────────────────────────────┘
+                                    │ HTTP
+┌───────────────────────────────────▼─────────────────────────────────────────┐
+│                         Nginx Reverse Proxy                                  │
+│   ┌────────────────┐  ┌────────────────┐  ┌────────────────────────┐       │
+│   │  /api/*        │  │     /ws/*      │  │       /*               │       │
+│   │  REST + Proxy  │  │   WebSocket    │  │   Static/SSR Pages     │       │
+│   └───────┬────────┘  └───────┬────────┘  └───────────┬────────────┘       │
+└───────────┼───────────────────┼───────────────────────┼─────────────────────┘
+            │                   │                       │
+┌───────────▼───────────────────▼───────────┐  ┌───────▼─────────────────────┐
+│              FastAPI Backend               │  │     Next.js Frontend        │
+│  ┌─────────────────────────────────────┐  │  │  ┌───────────────────────┐  │
+│  │          connection_manager.py       │  │  │  │     App Router        │  │
+│  │  • WebSocket room management         │  │  │  │  • SSR pages          │  │
+│  │  • Real-time sync state              │  │  │  │  • Client components  │  │
+│  │  • Heartbeat broadcasting            │  │  │  └───────────────────────┘  │
+│  └─────────────────────────────────────┘  │  │  ┌───────────────────────┐  │
+│  ┌─────────────────────────────────────┐  │  │  │    Custom Player      │  │
+│  │            main.py                   │  │  │  │  • useDashSync        │  │
+│  │  • REST API endpoints                │  │  │  │  • useHlsPlayer       │  │
+│  │  • Video proxy (HLS/DASH)            │  │  │  │  • useAudioNorm       │  │
+│  │  • Cookie management                 │  │  │  └───────────────────────┘  │
+│  └─────────────────────────────────────┘  │  │  ┌───────────────────────┐  │
+│  ┌─────────────────────────────────────┐  │  │  │     useRoomSync       │  │
+│  │          services/resolver.py        │  │  │  │  • WebSocket client   │  │
+│  │  • yt-dlp integration                │  │  │  │  • State management   │  │
+│  │  • Format selection                  │  │  │  └───────────────────────┘  │
+│  │  • Cookie fallback chain             │  │  └─────────────────────────────┘
+│  └─────────────────────────────────────┘  │
+└───────────────────────────────────────────┘
 ```
 
-## Core Workflows
+### Container Architecture
 
-### 1. Video Resolution & Cookie Logic
-The backend uses a sophisticated multi-pass strategy to resolve video URLs, aiming to bypass age-gating and regional restrictions.
+```yaml
+services:
+  frontend:     # Next.js 16 + React 19
+    port: 3000
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant API as Backend API
-    participant Cache as Memory Cache
-    participant YTDLP as yt-dlp
+  backend:      # FastAPI + yt-dlp
+    port: 8000
+    volumes:
+      - ./data:/app/data
 
-    User->>API: POST /api/resolve (URL)
-    API->>Cache: Check for cached format
-    alt Cache Hit
-        Cache-->>API: Return cached video data
-    else Cache Miss
-        API->>API: Identify "Requesting User"
-        API->>API: Identify "Adding User" (if shared)
-        
-        loop Try Cookie Sources
-            note right of API: 1. Requesting User's Cookies<br/>2. Adding User's Cookies<br/>3. No Cookies (Fallback)
-            API->>YTDLP: Extract Info (with selected cookie jar)
-            alt Success
-                YTDLP-->>API: Stream URL
-            else Failure
-                YTDLP-->>API: Error (Age Gated / Sign In)
-            end
-        end
-        
-        API->>Cache: Store result (TTL 2 hours)
-    end
-    API-->>User: Final Video Manifest (HLS/DASH)
+  proxy:        # Nginx reverse proxy
+    port: 80
+
+  tunnel:       # Cloudflare Tunnel (optional)
+```
+
+## Core Components
+
+### 1. Video Resolution Engine
+
+The backend uses yt-dlp with a multi-pass cookie strategy to maximize video access.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Resolution Flow                               │
+├─────────────────────────────────────────────────────────────────┤
+│  1. Check format cache (2-hour TTL)                             │
+│     ├── HIT: Return cached manifest URLs                        │
+│     └── MISS: Continue to resolution                            │
+│                                                                  │
+│  2. Cookie priority chain:                                       │
+│     ├── a) Requesting user's cookies                            │
+│     ├── b) Adding user's cookies (for shared queue items)       │
+│     └── c) No cookies (fallback)                                │
+│                                                                  │
+│  3. yt-dlp extraction:                                          │
+│     ├── Format: bestvideo*+bestaudio/best                       │
+│     ├── PO Token: bgutil-ytdlp-pot-provider                     │
+│     └── JS Runtime: Node.js for challenges                      │
+│                                                                  │
+│  4. Stream type detection:                                       │
+│     ├── DASH: Separate video + audio URLs                       │
+│     ├── HLS: Single manifest URL                                │
+│     └── Direct: Progressive download URL                        │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ### 2. Synchronization Engine
-To ensure all users see the same frame at the same time, we implemented a custom sync protocol over WebSockets.
 
-```mermaid
-sequenceDiagram
-    participant C1 as Client 1 (Leader)
-    participant Server
-    participant C2 as Client 2
+Real-time sync uses WebSockets with intelligent drift correction.
 
-    C1->>C1: User Seeks to 1:30
-    C1->>Server: {type: "seek", timestamp: 90}
-    Server->>Server: Update Room State<br/>(timestamp=90)
-    Server->>C2: {type: "seek", timestamp: 90}
-    C2->>C2: Hard Seek to 1:30
-    
-    loop Every 5 Seconds (Heartbeat)
-        Server->>C1: {type: "heartbeat", timestamp: 95}
-        Server->>C2: {type: "heartbeat", timestamp: 95}
-        
-        C2->>C2: Calculate Drift
-        alt Drift > 3s
-            C2->>C2: Hard Seek
-        else Drift > 0.5s
-            C2->>C2: Adjust PlaybackRate (1.05x)
-        else Drift < -0.5s
-             C2->>C2: Adjust PlaybackRate (0.95x)
-        end
-    end
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Sync Protocol                                 │
+├─────────────────────────────────────────────────────────────────┤
+│  Server → Client (every 5 seconds):                             │
+│  {                                                               │
+│    "type": "heartbeat",                                         │
+│    "timestamp": 125.43,        // Authoritative position        │
+│    "is_playing": true,                                          │
+│    "server_time": 1704567890   // For latency calculation       │
+│  }                                                               │
+│                                                                  │
+│  Client drift correction:                                        │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │ drift = client_time - server_time                           ││
+│  │                                                              ││
+│  │ if |drift| > 3.0s:                                          ││
+│  │   → Hard seek to server_time                                ││
+│  │ elif |drift| > 0.5s:                                        ││
+│  │   → Adjust playbackRate (0.95x or 1.05x)                    ││
+│  │ else:                                                        ││
+│  │   → Normal playback (1.0x)                                  ││
+│  └─────────────────────────────────────────────────────────────┘│
+│                                                                  │
+│  Client → Server (on user action):                              │
+│  {                                                               │
+│    "type": "seek" | "play" | "pause",                           │
+│    "timestamp": 90.0                                            │
+│  }                                                               │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### 3. HLS/DASH Proxy
-To bypass CORS and handle segmented streaming from restricted sources:
+### 3. DASH A/V Synchronization
 
-1. **Manifest Rewriting**: The backend downloads the master manifest (`.m3u8` or `.mpd`) and rewrites all segment URLs to point to `/api/proxy?url=...`.
-2. **Segment Proxying**: When the browser requests a segment:
-   - Backend fetches the segment from the value in `url` query param.
-   - Forwards headers (Range, User-Agent) to support seeking.
-   - Streams chunks back to the client (`StreamingResponse`).
+For separate video/audio streams, the `useDashSync` hook maintains sync.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    DASH Sync Loop (4Hz)                         │
+├─────────────────────────────────────────────────────────────────┤
+│  1. Buffer monitoring:                                          │
+│     ├── videoBuffer = video.buffered.end - video.currentTime   │
+│     ├── audioBuffer = audio.buffered.end - audio.currentTime   │
+│     └── if min(buffer) < 0.8s → Pause audio preemptively       │
+│                                                                  │
+│  2. A/V drift calculation:                                      │
+│     drift = audio.currentTime - video.currentTime               │
+│                                                                  │
+│  3. Correction:                                                  │
+│     ├── |drift| > 2.0s → Emergency sync (bypass cooldown)      │
+│     ├── |drift| > 0.8s → Heavy sync (pause, seek, resume)      │
+│     ├── |drift| > 0.2s → Rate adjustment (0.97x or 1.03x)      │
+│     └── |drift| < 0.2s → Normal (1.0x)                         │
+│                                                                  │
+│  4. Recovery:                                                    │
+│     ├── Buffer recovered (>1.5s) → Resume audio                 │
+│     ├── Audio stopped unexpectedly → Restart audio              │
+│     └── Tab visibility change → Re-sync on return               │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 4. Proxy & Caching
+
+The video proxy handles CORS bypass and implements multi-tier caching.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Proxy Architecture                            │
+├─────────────────────────────────────────────────────────────────┤
+│  Request: /api/proxy?url=<encoded_url>                          │
+│                                                                  │
+│  1. Manifest handling:                                          │
+│     ├── Detect .m3u8/.mpd by extension or content-type         │
+│     ├── Rewrite all URLs to /api/proxy?url=...                 │
+│     └── Return with appropriate MIME type                       │
+│                                                                  │
+│  2. Segment caching (3-tier):                                   │
+│     ┌───────────────────────────────────────────────────────┐  │
+│     │ L1: Memory Cache (LRU)                                │  │
+│     │     • Segments < 25MB                                 │  │
+│     │     • Audio: 500 entries, Video: 200 entries          │  │
+│     │     • Adaptive TTL based on access frequency          │  │
+│     ├───────────────────────────────────────────────────────┤  │
+│     │ L2: Disk Bucket Cache                                 │  │
+│     │     • 10MB buckets for position-aware caching         │  │
+│     │     • Enables efficient seeking                       │  │
+│     │     • Max 50GB total size                             │  │
+│     ├───────────────────────────────────────────────────────┤  │
+│     │ L3: Upstream (YouTube/Twitch CDN)                     │  │
+│     │     • Passthrough with Range header support           │  │
+│     │     • Streaming response (no buffering)               │  │
+│     └───────────────────────────────────────────────────────┘  │
+│                                                                  │
+│  3. Response headers:                                           │
+│     ├── Access-Control-Allow-Origin: *                          │
+│     ├── Accept-Ranges: bytes                                    │
+│     ├── Content-Range: bytes x-y/total                          │
+│     └── Connection: close (HTTP/2 compatibility)                │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ## Technical Stack
 
 ### Frontend
-- **Framework**: Next.js 16 (React 19)
-- **Styling**: TailwindCSS 4
-- **Player**: `hls.js` customized with hooks (`useDashSync`, `useHlsPlayer`).
-- **State**: React Hooks + LocalStorage for persistence.
-- **Components**:
-  - `CustomPlayer`: Unified wrapper for HLS/DASH functionality.
-  - `SortableQueue`: Drag-and-drop queue using `@dnd-kit`.
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Framework | Next.js 16 | App Router, SSR |
+| UI Library | React 19 | Components, hooks |
+| Styling | TailwindCSS 4 | Utility-first CSS |
+| Player | hls.js | HLS streaming |
+| DnD | @dnd-kit | Drag-and-drop queue |
+| Icons | Lucide React | Icon set |
 
 ### Backend
-- **Framework**: FastAPI (Python 3.11)
-- **Concurrency**: Fully Async (`asyncio` + `aiofiles`).
-- **Validation**: Pydantic models.
-- **Tools**:
-  - `yt-dlp`: patched with `bgutil-ytdlp-pot-provider` for PO Token generation.
-  - `node`: Runtime for executing JS challenges from YouTube.
 
-## Data & Persistence
-- **Room State**: JSON files in `data/rooms.json`.
-- **Cookies**: Individual Netscape cookie files in `data/cookies/{email}.txt`.
-- **Cache**:
-  - **Manifests**: In-memory LRU cache.
-  - **Segments**: `yt-dlp` disk cache in `data/yt_dlp_cache`.
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Framework | FastAPI | Async REST API |
+| Python | 3.11+ | Runtime |
+| Video | yt-dlp | Video resolution |
+| PO Token | bgutil-ytdlp-pot-provider | YouTube auth |
+| Database | aiosqlite | Async SQLite |
+| HTTP | httpx | Async HTTP client |
+| WebSocket | websockets | Real-time communication |
 
-## Roadmap status
+### Infrastructure
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Container | Docker Compose | Orchestration |
+| Proxy | Nginx | Reverse proxy, routing |
+| Tunnel | Cloudflare | Secure external access |
+| Auth | Cloudflare Zero Trust | User authentication |
+
+## Data Models
+
+### Room State
+
+```typescript
+interface Room {
+  id: string;
+  members: {
+    [email: string]: {
+      name: string;
+      is_guest: boolean;
+      joined_at: string;
+    }
+  };
+  queue: QueueItem[];
+  current_video: VideoState | null;
+  is_playing: boolean;
+  timestamp: number;
+  last_active: string;
+}
+
+interface QueueItem {
+  id: string;
+  url: string;
+  title: string;
+  thumbnail: string;
+  duration: number;
+  added_by: string;
+  added_at: string;
+}
+
+interface VideoState {
+  url: string;
+  title: string;
+  thumbnail: string;
+  stream_type: 'hls' | 'dash' | 'direct';
+  video_url?: string;   // DASH only
+  audio_url?: string;   // DASH only
+  qualities: QualityOption[];
+}
+```
+
+### WebSocket Messages
+
+```typescript
+// Client → Server
+type ClientMessage =
+  | { type: 'play'; timestamp: number }
+  | { type: 'pause'; timestamp: number }
+  | { type: 'seek'; timestamp: number }
+  | { type: 'queue_add'; url: string }
+  | { type: 'queue_remove'; item_id: string }
+  | { type: 'queue_reorder'; queue: string[] }
+  | { type: 'queue_play'; item_id: string }
+  | { type: 'pong' };
+
+// Server → Client
+type ServerMessage =
+  | { type: 'room_state'; room: Room }
+  | { type: 'heartbeat'; timestamp: number; is_playing: boolean }
+  | { type: 'play'; timestamp: number; by: string }
+  | { type: 'pause'; timestamp: number; by: string }
+  | { type: 'seek'; timestamp: number; by: string }
+  | { type: 'set_video'; video: VideoState }
+  | { type: 'queue_update'; queue: QueueItem[] }
+  | { type: 'member_joined' | 'member_left'; email: string }
+  | { type: 'ping' }
+  | { type: 'error'; message: string };
+```
+
+## API Endpoints
+
+### REST API
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/resolve` | POST | Resolve video URL to streams |
+| `/api/proxy` | GET | Proxy video segments |
+| `/api/rooms` | GET | List active rooms |
+| `/api/rooms/{id}` | GET | Get room details |
+| `/api/cookies` | POST | Upload user cookies |
+| `/api/cookies` | DELETE | Delete user cookies |
+
+### WebSocket
+
+| Endpoint | Description |
+|----------|-------------|
+| `/ws/{room_id}` | Room synchronization |
+
+## Security Considerations
+
+1. **Cookie Storage**: Stored server-side in Netscape format, linked to user identity
+2. **Room Access**: All users can join any room (authentication handled by Cloudflare)
+3. **Proxy**: Only whitelisted domains (YouTube, Twitch CDNs) are proxied
+4. **Non-root Containers**: All services run as non-root users
+5. **Input Validation**: Room IDs sanitized to alphanumeric + hyphen/underscore
+
+## Performance Optimizations
+
+1. **Format Caching**: 2-hour TTL prevents redundant yt-dlp calls
+2. **Segment Caching**: Multi-tier cache with adaptive TTL
+3. **Prefetching**: Next segments prefetched based on playback position
+4. **Connection Pooling**: Reused HTTP connections for upstream requests
+5. **Streaming Response**: No buffering for video proxy
+
+## Roadmap
 
 ### Completed
-- [x] Universal Resolver (yt-dlp integration)
-- [x] Room System with WebSocket Sync
-- [x] Queue System (Add, Remove, Reorder)
-- [x] Smart HLS Proxy (CORS bypass)
-- [x] User Identity via Cloudflare Access
-- [x] Cookie Upload UI & Management
-- [x] Drag & Drop Sortable Queue
-- [x] Audio Normalization & Quality Selection
+- [x] Universal video resolution (yt-dlp)
+- [x] Real-time WebSocket sync
+- [x] DASH A/V synchronization
+- [x] HLS playback with hls.js
+- [x] Quality selection (up to 4K)
+- [x] Cookie authentication
+- [x] Browser extension for cookie sync
+- [x] Audio normalization
+- [x] Drag-and-drop queue
+- [x] Room persistence
 
 ### Planned
-- [ ] User playlist saving
-- [ ] Chat system (beyond system messages)
+- [ ] Chat system
+- [ ] User playlists
 - [ ] Mobile-optimized layout
+- [ ] Subtitle support
+- [ ] Watch history
