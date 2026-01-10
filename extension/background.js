@@ -71,35 +71,48 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
 /**
  * Listen for messages from popup/content scripts
+ * Consolidated into a single handler for all message types
  */
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.type === 'SYNC_NOW') {
-        syncCookies().then(result => sendResponse(result));
-        return true; // Keep channel open for async response
-    }
+    switch (message.type) {
+        case 'SYNC_NOW':
+            syncCookies().then(result => sendResponse(result));
+            return true;
 
-    if (message.type === 'GET_STATUS') {
-        getStatus().then(status => sendResponse(status));
-        return true;
-    }
+        case 'GET_STATUS':
+            getStatus().then(status => sendResponse(status));
+            return true;
 
-    if (message.type === 'TOKEN_DETECTED') {
-        handleTokenDetected(message.token, message.userEmail).then(result => sendResponse(result));
-        return true;
-    }
+        case 'TOKEN_DETECTED':
+            // Include backendUrl from content script
+            handleTokenDetected(message.token, message.userEmail, message.backendUrl)
+                .then(result => sendResponse(result));
+            return true;
 
-    if (message.type === 'UPDATE_SETTINGS') {
-        updateSettings(message.settings).then(() => sendResponse({ success: true }));
-        return true;
+        case 'UPDATE_SETTINGS':
+            updateSettings(message.settings).then(() => sendResponse({ success: true }));
+            return true;
+
+        case 'GET_DETECTED_STREAM':
+            getDetectedStream(message.tabId).then(stream => sendResponse({ stream }));
+            return true;
+
+        case 'SEND_TO_ROOM':
+            sendToRoom(message.roomId, message.url, message.pageUrl)
+                .then(result => sendResponse(result));
+            return true;
+
+        default:
+            return false;
     }
 });
 
 /**
  * Handle token detected from content script
  */
-async function handleTokenDetected(token, userEmail) {
-    console.log('[WT Sync] Token detected for user:', userEmail);
-    await chrome.storage.sync.set({ token, userEmail });
+async function handleTokenDetected(token, userEmail, backendUrl) {
+    console.log('[WT Sync] Token detected for user:', userEmail, 'backend:', backendUrl);
+    await chrome.storage.sync.set({ token, userEmail, backendUrl });
 
     // Try an initial sync
     const result = await syncCookies();
@@ -167,9 +180,14 @@ async function getCookiesForDomains(domains) {
         }
     }
 
-    // Remove duplicates (same name + domain)
+    // Remove duplicates (same name + domain) and filter expired cookies
+    const now = Date.now() / 1000; // Convert to seconds (cookie expiry is in seconds)
     const seen = new Set();
     const unique = allCookies.filter(cookie => {
+        // Skip expired cookies (session cookies have no expirationDate)
+        if (cookie.expirationDate && cookie.expirationDate < now) {
+            return false;
+        }
         const key = `${cookie.domain}:${cookie.name}`;
         if (seen.has(key)) return false;
         seen.add(key);
@@ -326,22 +344,6 @@ async function getDetectedStream(tabId) {
     return null;
 }
 
-// Add message handlers for stream detection
-const originalOnMessage = chrome.runtime.onMessage.hasListener;
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.type === 'GET_DETECTED_STREAM') {
-        getDetectedStream(message.tabId).then(stream => sendResponse({ stream }));
-        return true;
-    }
-
-    if (message.type === 'SEND_TO_ROOM') {
-        sendToRoom(message.roomId, message.url, message.pageUrl).then(result => sendResponse(result));
-        return true;
-    }
-
-    // Let existing handlers process other messages
-    return false;
-});
 
 /**
  * Send a video URL to a Watch Together room

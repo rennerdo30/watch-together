@@ -62,6 +62,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         try {
             const status = await chrome.runtime.sendMessage({ type: 'GET_STATUS' });
 
+            if (!status) {
+                throw new Error('No response from background script');
+            }
+
             if (status.connected) {
                 statusDot.classList.add('connected');
                 statusText.textContent = 'Connected';
@@ -109,7 +113,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     async function checkForStreams() {
         try {
             const response = await chrome.runtime.sendMessage({ type: 'GET_DETECTED_STREAM' });
-            currentStream = response.stream;
+            currentStream = response?.stream || null;
 
             if (currentStream) {
                 sendSection.style.display = 'block';
@@ -143,10 +147,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         try {
             const result = await chrome.runtime.sendMessage({ type: 'SYNC_NOW' });
 
-            if (result.success) {
+            if (result?.success) {
                 lastSync.textContent = 'Just now';
             } else {
-                console.error('Sync failed:', result.error);
+                console.error('Sync failed:', result?.error || 'Unknown error');
             }
         } catch (err) {
             console.error('Sync error:', err);
