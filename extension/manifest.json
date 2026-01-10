@@ -8,8 +8,7 @@
     "storage",
     "alarms",
     "tabs",
-    "webRequest",
-    "declarativeNetRequest"
+    "webRequest"
   ],
   "host_permissions": [
     "https://*.youtube.com/*",

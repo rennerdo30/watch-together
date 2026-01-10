@@ -22,15 +22,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     let currentTabUrl = null;
 
     // Load saved room ID
-    const saved = await chrome.storage.sync.get(['lastRoomId']);
-    if (saved.lastRoomId) {
-        roomIdInput.value = saved.lastRoomId;
+    try {
+        const saved = await chrome.storage.sync.get(['lastRoomId']);
+        if (saved.lastRoomId) {
+            roomIdInput.value = saved.lastRoomId;
+        }
+    } catch (err) {
+        console.error('Failed to load saved room ID:', err);
     }
 
     // Get current tab URL
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tabs.length > 0) {
-        currentTabUrl = tabs[0].url;
+    try {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (tabs.length > 0) {
+            currentTabUrl = tabs[0].url;
+        }
+    } catch (err) {
+        console.error('Failed to get current tab:', err);
     }
 
     // Load status
@@ -45,7 +53,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     optionsBtn.addEventListener('click', () => chrome.runtime.openOptionsPage());
     sendBtn.addEventListener('click', handleSendToRoom);
     roomIdInput.addEventListener('input', () => {
-        chrome.storage.sync.set({ lastRoomId: roomIdInput.value });
+        chrome.storage.sync.set({ lastRoomId: roomIdInput.value }).catch(err => {
+            console.error('Failed to save room ID:', err);
+        });
     });
 
     // Listen for stream detection updates

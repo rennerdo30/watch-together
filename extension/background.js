@@ -24,6 +24,12 @@ const SYNC_INTERVAL_MINUTES = 30;
 // Store detected video streams per tab
 const detectedStreams = new Map(); // tabId -> { url, type, timestamp, pageUrl }
 
+// Sync mutex to prevent concurrent sync operations
+let syncInProgress = false;
+
+// Stream cleanup interval (1 hour max age)
+const STREAM_MAX_AGE_MS = 60 * 60 * 1000;
+
 /**
  * Initialize extension on install
  */
@@ -66,8 +72,32 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name === 'cookieSync') {
         console.log('[WT Sync] Auto-sync triggered');
         await syncCookies();
+    } else if (alarm.name === 'streamCleanup') {
+        cleanupOldStreams();
     }
 });
+
+/**
+ * Set up periodic stream cleanup alarm
+ */
+chrome.alarms.create('streamCleanup', { periodInMinutes: 15 });
+
+/**
+ * Clean up old stream entries from the Map
+ */
+function cleanupOldStreams() {
+    const now = Date.now();
+    let cleaned = 0;
+    for (const [tabId, stream] of detectedStreams.entries()) {
+        if (now - stream.timestamp > STREAM_MAX_AGE_MS) {
+            detectedStreams.delete(tabId);
+            cleaned++;
+        }
+    }
+    if (cleaned > 0) {
+        console.log(`[WT Sync] Cleaned up ${cleaned} old stream entries`);
+    }
+}
 
 /**
  * Listen for messages from popup/content scripts
@@ -210,6 +240,13 @@ async function getBackendUrl() {
  * Sync cookies to Watch Together backend
  */
 async function syncCookies() {
+    // Prevent concurrent sync operations
+    if (syncInProgress) {
+        console.log('[WT Sync] Sync already in progress, skipping');
+        return { success: false, error: 'Sync already in progress' };
+    }
+
+    syncInProgress = true;
     console.log('[WT Sync] Starting cookie sync...');
 
     try {
@@ -275,6 +312,8 @@ async function syncCookies() {
         console.error('[WT Sync] Sync failed:', err);
         await chrome.storage.sync.set({ lastSyncStatus: err.message });
         return { success: false, error: err.message };
+    } finally {
+        syncInProgress = false;
     }
 }
 
@@ -312,12 +351,17 @@ chrome.webRequest.onCompleted.addListener(
             });
             console.log(`[WT Sync] Detected ${type.toUpperCase()} stream in tab ${details.tabId}:`, details.url.slice(0, 80));
 
-            // Notify the popup if it's open
+            // Notify the popup if it's open (ignore errors if popup not open)
             chrome.runtime.sendMessage({
                 type: 'STREAM_DETECTED',
                 tabId: details.tabId,
                 stream: detectedStreams.get(details.tabId)
-            }).catch(() => {});
+            }).catch((err) => {
+                // Only log unexpected errors, not "no receiver" errors
+                if (!err.message?.includes('Receiving end does not exist')) {
+                    console.warn('[WT Sync] Failed to notify popup:', err.message);
+                }
+            });
         }
     },
     { urls: ['<all_urls>'] },
@@ -345,8 +389,8 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
  * Get detected stream for current tab
  */
 async function getDetectedStream(tabId) {
-    // Check for explicit tabId (0 is a valid tab ID)
-    if (tabId !== undefined && tabId !== null) {
+    // Check for explicit tabId (0 is a valid tab ID, must be a non-negative number)
+    if (typeof tabId === 'number' && tabId >= 0) {
         return detectedStreams.get(tabId) || null;
     }
     // If no tabId provided, get current active tab
@@ -375,6 +419,16 @@ async function sendToRoom(roomId, videoUrl, pageUrl) {
         const urlToSend = pageUrl || videoUrl;
         if (!urlToSend) {
             return { success: false, error: 'No video URL to send' };
+        }
+
+        // Validate URL to prevent SSRF attacks
+        try {
+            const parsedUrl = new URL(urlToSend);
+            if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+                return { success: false, error: 'Invalid URL protocol' };
+            }
+        } catch {
+            return { success: false, error: 'Invalid URL format' };
         }
 
         // Resolve the video through the backend

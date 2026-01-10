@@ -47,19 +47,13 @@
         return false;
     }
 
-    // Check immediately
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', checkForToken);
-    } else {
-        checkForToken();
-    }
-
     // Also observe for dynamically added meta tags (SPA navigation)
     const observer = new MutationObserver((mutations) => {
         for (const mutation of mutations) {
             if (mutation.type === 'childList') {
                 for (const node of mutation.addedNodes) {
-                    if (node.nodeName === 'META') {
+                    // Type guard: ensure node is an Element before accessing getAttribute
+                    if (node instanceof Element && node.nodeName === 'META') {
                         if (node.getAttribute('name') === 'wt-ext-token') {
                             if (checkForToken()) {
                                 observer.disconnect(); // Stop observing after successful detection
@@ -76,4 +70,17 @@
         childList: true,
         subtree: true
     });
+
+    // Check immediately and disconnect observer if token already present
+    function initialCheck() {
+        if (checkForToken()) {
+            observer.disconnect();
+        }
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initialCheck);
+    } else {
+        initialCheck();
+    }
 })();
