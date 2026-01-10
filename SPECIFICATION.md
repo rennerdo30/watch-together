@@ -364,9 +364,3 @@ type ServerMessage =
 - [x] Drag-and-drop queue
 - [x] Room persistence
 
-### Planned
-- [ ] Chat system
-- [ ] User playlists
-- [ ] Mobile-optimized layout
-- [ ] Subtitle support
-- [ ] Watch history

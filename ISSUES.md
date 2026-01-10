@@ -31,13 +31,6 @@
 - **Description**: Room state uses JSON file persistence instead of SQLite
 - **Impact**: Potential performance issues with many concurrent rooms
 
-### Low Priority
-
-#### Mobile Layout
-- **Status**: Planned
-- **Description**: UI not optimized for mobile devices
-- **Impact**: Usability issues on phones/tablets
-
 ## Tech Debt
 
 ### Completed
@@ -55,55 +48,6 @@
 - [ ] **Proxy Cookie Isolation**: Use user-specific cookies in segment proxy
 - [ ] **Unit Tests**: Add test coverage for critical paths
 - [ ] **E2E Tests**: Add Playwright tests for user flows
-
-## Feature Roadmap
-
-### In Progress
-- **DASH Quality Labels**: Show codec info (VP9, AV1, H264) in quality selector
-
-### Planned
-
-#### Chat System
-- Real-time chat in rooms
-- System messages for join/leave/video changes
-- Emoji reactions
-
-#### User Playlists
-- Save personal playlists
-- Import/export playlist URLs
-- Share playlists with room
-
-#### Mobile Optimization
-- Responsive layout for phones/tablets
-- Touch-friendly controls
-- Fullscreen improvements
-
-#### Subtitle Support
-- Load subtitles from yt-dlp
-- Subtitle track selection
-- Styled captions overlay
-
-#### Watch History
-- Track watched videos per user
-- Resume from last position
-- Clear history option
-
-### Future Considerations
-
-#### Multi-Room Dashboard
-- View all active rooms
-- Quick join links
-- Room thumbnails
-
-#### Scheduled Watch Parties
-- Set watch time in advance
-- Calendar integration
-- Email reminders
-
-#### Voice Chat
-- WebRTC voice channels
-- Push-to-talk option
-- Volume controls per user
 
 ## Reporting Issues
 
