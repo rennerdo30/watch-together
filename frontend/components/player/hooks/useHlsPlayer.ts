@@ -70,8 +70,25 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
     const isAutoPlayingRef = useRef(false);
     const retryCountRef = useRef<number>(0);
     const lastRetryTimeRef = useRef<number>(0);
+    const lastSrcRef = useRef<string>('');
     const MAX_RETRIES = 3;
     const RETRY_COOLDOWN_MS = 2000;
+
+    // Use refs for callbacks to avoid recreating initHls on every render
+    const callbackRefs = useRef({
+        onManifestParsed,
+        onLevelSwitch,
+        onError,
+        onLoadingChange,
+        onBufferingChange,
+    });
+    callbackRefs.current = {
+        onManifestParsed,
+        onLevelSwitch,
+        onError,
+        onLoadingChange,
+        onBufferingChange,
+    };
 
     // State
     const [isLoading, setIsLoading] = useState(true);
@@ -114,6 +131,12 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
         const video = videoRef.current;
         if (!video || !src || !enabled) return;
 
+        // Prevent re-initialization with the same source
+        if (lastSrcRef.current === src) {
+            return;
+        }
+        lastSrcRef.current = src;
+
         // Destroy existing HLS instance
         if (hlsRef.current) {
             hlsRef.current.destroy();
@@ -121,7 +144,7 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
         }
 
         setIsLoading(true);
-        onLoadingChange?.(true);
+        callbackRefs.current.onLoadingChange?.(true);
 
         // For non-HLS sources (direct MP4, etc.), use native video element
         if (!isHlsSource(src)) {
@@ -131,7 +154,7 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
 
             const onLoadedMetadata = () => {
                 setIsLoading(false);
-                onLoadingChange?.(false);
+                callbackRefs.current.onLoadingChange?.(false);
 
                 if (initialTime > 0 && Number.isFinite(initialTime)) {
                     video.currentTime = initialTime;
@@ -152,9 +175,9 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
 
             const handleError = () => {
                 console.error('[Player] Native playback error');
-                onError?.('Failed to load video');
+                callbackRefs.current.onError?.('Failed to load video');
                 setIsLoading(false);
-                onLoadingChange?.(false);
+                callbackRefs.current.onLoadingChange?.(false);
             };
 
             video.addEventListener('loadedmetadata', onLoadedMetadata, { once: true });
@@ -188,7 +211,7 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
 
             hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
                 setIsLoading(false);
-                onLoadingChange?.(false);
+                callbackRefs.current.onLoadingChange?.(false);
 
                 console.log('[HLS] Manifest parsed:', data.levels.length, 'levels');
 
@@ -205,7 +228,7 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
                 ).sort((a, b) => b.bitrate - a.bitrate);
 
                 setQualities(uniqueLevels);
-                onManifestParsed?.(uniqueLevels);
+                callbackRefs.current.onManifestParsed?.(uniqueLevels);
 
                 // Set initial time if provided
                 if (initialTime > 0 && Number.isFinite(initialTime) && !isLive) {
@@ -236,7 +259,7 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
 
             hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
                 setCurrentLevel(data.level);
-                onLevelSwitch?.(data.level);
+                callbackRefs.current.onLevelSwitch?.(data.level);
 
                 const level = hls.levels[data.level];
                 if (level) {
@@ -258,7 +281,7 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
                     // Check if we should attempt recovery
                     if (retryCountRef.current >= MAX_RETRIES) {
                         console.error('[HLS] Max retries exceeded, giving up');
-                        onError?.('Playback failed after multiple retries. Please try refreshing.');
+                        callbackRefs.current.onError?.('Playback failed after multiple retries. Please try refreshing.');
                         hls.destroy();
                         return;
                     }
@@ -274,15 +297,15 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
 
                     switch (data.type) {
                         case Hls.ErrorTypes.NETWORK_ERROR:
-                            onError?.(`Network issue. Retry ${retryCountRef.current}/${MAX_RETRIES}...`);
+                            callbackRefs.current.onError?.(`Network issue. Retry ${retryCountRef.current}/${MAX_RETRIES}...`);
                             setTimeout(() => hls.startLoad(), RETRY_COOLDOWN_MS);
                             break;
                         case Hls.ErrorTypes.MEDIA_ERROR:
-                            onError?.(`Decoding error. Retry ${retryCountRef.current}/${MAX_RETRIES}...`);
+                            callbackRefs.current.onError?.(`Decoding error. Retry ${retryCountRef.current}/${MAX_RETRIES}...`);
                             hls.recoverMediaError();
                             break;
                         default:
-                            onError?.('Fatal playback error.');
+                            callbackRefs.current.onError?.('Fatal playback error.');
                             hls.destroy();
                             break;
                     }
@@ -297,7 +320,7 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
 
             const onLoadedMetadata = () => {
                 setIsLoading(false);
-                onLoadingChange?.(false);
+                callbackRefs.current.onLoadingChange?.(false);
 
                 if (initialTime > 0 && Number.isFinite(initialTime) && !isLive) {
                     video.currentTime = initialTime;
@@ -318,7 +341,7 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
 
             video.addEventListener('loadedmetadata', onLoadedMetadata, { once: true });
         }
-    }, [videoRef, src, enabled, autoPlay, initialTime, isLive, isHlsSource, isHlsSupported, isNativeHls, onManifestParsed, onLevelSwitch, onError, onLoadingChange]);
+    }, [videoRef, src, enabled, autoPlay, initialTime, isLive, isHlsSource, isHlsSupported, isNativeHls]);
 
     // === EFFECT: Initialize on mount/src change ===
     useEffect(() => {
@@ -331,6 +354,8 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
                 hlsRef.current.destroy();
                 hlsRef.current = null;
             }
+            // Reset lastSrcRef so re-mounting with the same src works
+            lastSrcRef.current = '';
         };
     }, [enabled, src, initHls]);
 
@@ -341,17 +366,17 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
 
         const onWaiting = () => {
             setIsBuffering(true);
-            onBufferingChange?.(true);
+            callbackRefs.current.onBufferingChange?.(true);
         };
 
         const onCanPlay = () => {
             setIsBuffering(false);
-            onBufferingChange?.(false);
+            callbackRefs.current.onBufferingChange?.(false);
         };
 
         const onPlaying = () => {
             setIsBuffering(false);
-            onBufferingChange?.(false);
+            callbackRefs.current.onBufferingChange?.(false);
         };
 
         video.addEventListener('waiting', onWaiting);
@@ -363,7 +388,7 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
             video.removeEventListener('canplay', onCanPlay);
             video.removeEventListener('playing', onPlaying);
         };
-    }, [enabled, videoRef, onBufferingChange]);
+    }, [enabled, videoRef]);
 
     return {
         isLoading,
