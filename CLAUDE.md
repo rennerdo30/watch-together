@@ -155,6 +155,7 @@ docker compose up -d --build
    - Build fails
    - Syntax errors exist
    - Changes are incomplete/partial
+   - The files are review/analysis files (code reviews, reports, etc.)
 
 ## Testing
 

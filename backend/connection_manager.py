@@ -1,6 +1,7 @@
 import json
 import os
 import time
+import asyncio
 import logging
 from typing import Dict, List, Optional
 
@@ -14,6 +15,16 @@ class ConnectionManager:
         self.active_connections: Dict[str, List[WebSocket]] = {}
         # Map room_id -> current room state (persistent)
         self.room_states: Dict[str, dict] = {}
+        # Lock for thread-safe access to room_states
+        self._state_lock = asyncio.Lock()
+        # Per-room locks for more granular locking
+        self._room_locks: Dict[str, asyncio.Lock] = {}
+
+    def _get_room_lock(self, room_id: str) -> asyncio.Lock:
+        """Get or create a lock for a specific room."""
+        if room_id not in self._room_locks:
+            self._room_locks[room_id] = asyncio.Lock()
+        return self._room_locks[room_id]
 
     async def initialize(self):
         """Load room states from database."""
@@ -22,6 +33,7 @@ class ConnectionManager:
         for rid in self.room_states:
             self.room_states[rid]["last_sync_time"] = time.time()
             self.room_states[rid]["members"] = []  # Explicitly reset members on restart
+            self._room_locks[rid] = asyncio.Lock()
 
     async def promote_user(self, room_id: str, requester_email: str, target_email: str, new_role: str) -> bool:
         if room_id not in self.room_states:
@@ -101,18 +113,26 @@ class ConnectionManager:
             logger.error(f"Error saving room {room_id}: {e}")
 
     def get_sync_payload(self, room_id: str) -> dict:
-        """Returns the current state, adjusting timestamp for elapsed time if playing."""
+        """Returns the current state, adjusting timestamp for elapsed time if playing.
+
+        Note: This is a synchronous method for compatibility with the heartbeat task.
+        It makes a copy of the state to avoid race conditions with state updates.
+        """
         if room_id not in self.room_states:
             return {}
-        
+
+        # Make a deep copy to avoid races
         state = self.room_states[room_id].copy()
+        if state.get("video_data"):
+            state["video_data"] = state["video_data"].copy()
+
         # If playing and NOT a livestream, adjust timestamp based on elapsed wall clock time
         if state.get("is_playing") and state.get("video_data"):
             is_live = state["video_data"].get("is_live", False)
             if not is_live:
                 elapsed = time.time() - state.get("last_sync_time", time.time())
                 state["timestamp"] = state.get("timestamp", 0) + elapsed
-        
+
         # Don't send internal tracking info to clients
         state.pop("last_sync_time", None)
         return state
@@ -199,7 +219,7 @@ class ConnectionManager:
         Permanent rooms are never cleaned up."""
         now = time.time()
         stale_rooms = []
-        for rid, state in self.room_states.items():
+        for rid, state in list(self.room_states.items()):
             # Skip permanent rooms
             if state.get("permanent", False):
                 continue
@@ -208,11 +228,16 @@ class ConnectionManager:
                 # No one has reconnected within TTL
                 if rid not in self.active_connections or not self.active_connections[rid]:
                     stale_rooms.append(rid)
-        
+
         for rid in stale_rooms:
-            del self.room_states[rid]
-            await delete_room(rid)
-            logger.info(f"Cleaned up stale room: {rid}")
+            # Re-check before deletion to avoid TOCTOU race
+            if rid not in self.active_connections or not self.active_connections[rid]:
+                if rid in self.room_states:
+                    del self.room_states[rid]
+                if rid in self._room_locks:
+                    del self._room_locks[rid]
+                await delete_room(rid)
+                logger.info(f"Cleaned up stale room: {rid}")
     
     async def disconnect_and_notify(self, websocket: WebSocket, room_id: str):
         await self.disconnect(websocket, room_id)
@@ -223,19 +248,57 @@ class ConnectionManager:
              }, room_id) 
 
     async def broadcast(self, message: dict, room_id: str, exclude: WebSocket = None):
-        if room_id in self.active_connections:
-            for connection in self.active_connections[room_id]:
-                if connection != exclude:
-                    try:
-                        await connection.send_json(message)
-                    except Exception:
-                        pass
+        """Broadcast message to all connections in a room, removing dead connections."""
+        if room_id not in self.active_connections:
+            return
+
+        dead_connections = []
+        for connection in self.active_connections[room_id]:
+            if connection != exclude:
+                try:
+                    await connection.send_json(message)
+                except Exception as e:
+                    logger.warning(f"Failed to send to connection in room {room_id}: {e}")
+                    dead_connections.append(connection)
+
+        # Clean up dead connections and update members list
+        if dead_connections:
+            for conn in dead_connections:
+                try:
+                    await self.disconnect(conn, room_id)
+                except Exception as e:
+                    logger.warning(f"Error cleaning up dead connection: {e}")
+
+            # Notify remaining clients of updated members list after cleanup
+            if room_id in self.room_states and room_id in self.active_connections:
+                try:
+                    # Send updated members list to remaining connections
+                    members_update = {
+                        "type": "user_left",
+                        "payload": {"members": self.room_states[room_id]["members"]}
+                    }
+                    for connection in self.active_connections[room_id]:
+                        try:
+                            await connection.send_json(members_update)
+                        except Exception:
+                            pass  # Don't recursively clean, we already identified dead ones
+                except Exception as e:
+                    logger.warning(f"Error sending members update: {e}")
 
     async def update_state(self, room_id: str, updates: dict):
-        if room_id in self.room_states:
-            self.room_states[room_id].update(updates)
-            # Always update last_sync_time when state changes
-            self.room_states[room_id]["last_sync_time"] = time.time()
+        """Update room state with proper locking and sync time management."""
+        if room_id not in self.room_states:
+            return
+
+        async with self._get_room_lock(room_id):
+            old_state = self.room_states[room_id]
+            old_state.update(updates)
+
+            # Only update last_sync_time when playback state changes (play/pause) or timestamp is explicitly set
+            # This prevents drift when seeking - the elapsed time calculation should use the original sync time
+            if "is_playing" in updates or "timestamp" in updates:
+                old_state["last_sync_time"] = time.time()
+
             await self._save_room_state(room_id)
 
     async def add_to_queue(self, room_id: str, video_data: dict):

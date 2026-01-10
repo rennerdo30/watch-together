@@ -10,6 +10,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["tokens"])
 
 
+@router.get("/me")
+async def get_current_user(request: Request):
+    """
+    Get the current user's identity.
+    Used by the frontend to detect if user is authenticated.
+    """
+    user_email = get_user_from_request(request)
+    if not user_email:
+        return {"authenticated": False, "email": None}
+
+    return {"authenticated": True, "email": user_email}
+
+
 @router.get("/token")
 async def get_token(request: Request):
     """

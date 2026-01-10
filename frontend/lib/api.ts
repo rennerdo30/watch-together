@@ -87,6 +87,19 @@ function getUserParam(): string {
     return mockUser ? `?user=${encodeURIComponent(mockUser)}` : '';
 }
 
+export interface CurrentUser {
+    authenticated: boolean;
+    email: string | null;
+}
+
+export async function getCurrentUser(): Promise<CurrentUser> {
+    const res = await fetch(`${API_BASE_URL}/api/me${getUserParam()}`);
+    if (!res.ok) {
+        return { authenticated: false, email: null };
+    }
+    return res.json();
+}
+
 export async function getExtensionToken(): Promise<TokenResponse> {
     const res = await fetch(`${API_BASE_URL}/api/token${getUserParam()}`);
     if (!res.ok) {
