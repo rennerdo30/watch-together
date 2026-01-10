@@ -168,7 +168,16 @@ export function useDashPlayer(options: UseDashPlayerOptions): UseDashPlayerRetur
 
         // Prevent re-initialization with same URLs
         const initKey = `${videoUrl}|${audioUrl}`;
-        if (dashInitializedRef.current === initKey) return;
+        if (dashInitializedRef.current === initKey) {
+            // If already initialized with same URLs, check if elements are already loaded
+            // This handles the case where effect re-runs due to other dependency changes
+            if (video.readyState >= 1 && audio.readyState >= 1) {
+                // Both have metadata loaded, ensure loading is false
+                setIsLoading(false);
+                callbackRefs.current.onLoadingChange?.(false);
+            }
+            return;
+        }
         dashInitializedRef.current = initKey;
 
         console.log('[DashPlayer] Initializing DASH mode');
@@ -286,14 +295,25 @@ export function useDashPlayer(options: UseDashPlayerOptions): UseDashPlayerRetur
             audio.removeEventListener('loadedmetadata', onAudioLoaded);
             video.removeEventListener('error', onVideoError);
             audio.removeEventListener('error', onAudioError);
-            dashInitializedRef.current = null;
+            // NOTE: Don't clear dashInitializedRef here - only clear when enabled becomes false
+            // This prevents re-initialization issues when other deps change but URLs stay same
+        };
+    // Only re-run when URLs or enabled state changes - not for volume/muted/time changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [enabled, videoUrl, audioUrl, videoRef, audioRef]);
 
-            // Clean up audio element when switching modes
+    // === EFFECT: Cleanup audio element when DASH mode is disabled ===
+    useEffect(() => {
+        const audio = audioRef.current;
+        if (!audio || !enabled) return;
+
+        // When DASH mode was enabled but now being disabled, clean up the audio element
+        return () => {
             audio.pause();
             audio.removeAttribute('src');
             audio.load();
         };
-    }, [enabled, videoUrl, audioUrl, initialTime, isLive, initialVolume, initialMuted, availableQualities, videoRef, audioRef]);
+    }, [enabled, audioRef]);
 
     return {
         isLoading,
