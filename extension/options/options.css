@@ -1,0 +1,351 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0a0a0a;
+    color: #e5e5e5;
+    min-height: 100vh;
+}
+
+.container {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 24px;
+}
+
+header {
+    margin-bottom: 32px;
+}
+
+.logo {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.logo svg {
+    color: #8b5cf6;
+}
+
+.logo h1 {
+    font-size: 24px;
+    font-weight: 700;
+    color: #fff;
+}
+
+.logo span {
+    font-size: 14px;
+    color: #737373;
+}
+
+main {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.card {
+    background: #171717;
+    border: 1px solid #262626;
+    border-radius: 16px;
+    padding: 24px;
+}
+
+.card h2 {
+    font-size: 16px;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 16px;
+}
+
+.card.danger {
+    border-color: #7f1d1d;
+}
+
+.card.danger h2 {
+    color: #ef4444;
+}
+
+.help-text {
+    font-size: 13px;
+    color: #737373;
+    margin-bottom: 16px;
+    line-height: 1.5;
+}
+
+.status-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+
+.status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #ef4444;
+}
+
+.status-dot.connected {
+    background: #22c55e;
+    box-shadow: 0 0 10px rgba(34, 197, 94, 0.5);
+}
+
+#statusText {
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.user-email {
+    font-size: 13px;
+    color: #737373;
+}
+
+.setting-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 0;
+    border-bottom: 1px solid #262626;
+}
+
+.setting-row:last-child {
+    border-bottom: none;
+}
+
+.setting-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.setting-label {
+    font-size: 14px;
+    font-weight: 500;
+    color: #fff;
+}
+
+.setting-desc {
+    font-size: 12px;
+    color: #737373;
+}
+
+.sync-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+}
+
+.sync-info .label {
+    color: #737373;
+}
+
+.sync-info .value {
+    color: #a3a3a3;
+}
+
+/* Toggle Switch */
+.toggle {
+    position: relative;
+    width: 44px;
+    height: 24px;
+}
+
+.toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: #262626;
+    border-radius: 24px;
+    transition: 0.2s;
+}
+
+.toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background: #fff;
+    border-radius: 50%;
+    transition: 0.2s;
+}
+
+.toggle input:checked + .toggle-slider {
+    background: #8b5cf6;
+}
+
+.toggle input:checked + .toggle-slider:before {
+    transform: translateX(20px);
+}
+
+/* Buttons */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.btn-primary {
+    background: #8b5cf6;
+    color: #fff;
+}
+
+.btn-primary:hover {
+    background: #7c3aed;
+}
+
+.btn-secondary {
+    background: #262626;
+    color: #fff;
+}
+
+.btn-secondary:hover {
+    background: #333;
+}
+
+.btn-danger {
+    background: #7f1d1d;
+    color: #fff;
+}
+
+.btn-danger:hover {
+    background: #991b1b;
+}
+
+.btn-icon {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    background: #262626;
+    color: #a3a3a3;
+}
+
+.btn-icon:hover {
+    background: #333;
+    color: #fff;
+}
+
+/* Inputs */
+input[type="text"],
+input[type="password"] {
+    width: 100%;
+    height: 44px;
+    background: #0a0a0a;
+    border: 1px solid #262626;
+    border-radius: 8px;
+    padding: 0 16px;
+    font-size: 14px;
+    color: #fff;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+input[type="text"]:focus,
+input[type="password"]:focus {
+    border-color: #8b5cf6;
+}
+
+input[type="text"]::placeholder {
+    color: #525252;
+}
+
+input[readonly] {
+    color: #737373;
+    cursor: default;
+}
+
+/* Domain Input */
+.domain-input-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.domain-input-row input {
+    flex: 1;
+}
+
+/* Domain List */
+.domain-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.domain-tag {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: #262626;
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    color: #a3a3a3;
+}
+
+.domain-tag button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    background: transparent;
+    border: none;
+    color: #737373;
+    cursor: pointer;
+    border-radius: 4px;
+}
+
+.domain-tag button:hover {
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.1);
+}
+
+/* Token Row */
+.token-row {
+    display: flex;
+    gap: 8px;
+}
+
+.token-row input {
+    flex: 1;
+}
+
+/* Footer */
+footer {
+    margin-top: 32px;
+    text-align: center;
+    font-size: 12px;
+    color: #525252;
+}

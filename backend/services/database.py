@@ -100,6 +100,23 @@ def init_database():
             created_at REAL
         )
         """,
+        # Version 4: API tokens for browser extension
+        """
+        CREATE TABLE IF NOT EXISTS api_tokens (
+            id TEXT PRIMARY KEY,
+            user_email TEXT NOT NULL,
+            name TEXT DEFAULT 'default',
+            created_at REAL,
+            last_used_at REAL,
+            last_sync_at REAL,
+            revoked INTEGER DEFAULT 0,
+            sync_count INTEGER DEFAULT 0
+        )
+        """,
+        # Version 5: Index for api_tokens user lookup
+        """
+        CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_email)
+        """,
     ]
     
     import time
@@ -406,8 +423,11 @@ async def get_cached_format(original_url: str) -> Optional[Dict[str, Any]]:
         return json.loads(row["video_data"])
 
 
-async def cache_format(original_url: str, video_data: Dict[str, Any], ttl_seconds: int = 3600) -> None:
-    """Cache video format with TTL (default 1 hour)."""
+async def cache_format(original_url: str, video_data: Dict[str, Any], ttl_seconds: int = None) -> None:
+    """Cache video format with TTL. Default uses FORMAT_CACHE_TTL_SECONDS from config (2 hours)."""
+    from core.config import FORMAT_CACHE_TTL_SECONDS
+    if ttl_seconds is None:
+        ttl_seconds = FORMAT_CACHE_TTL_SECONDS
     import time
     now = time.time()
     expires_at = now + ttl_seconds
@@ -429,17 +449,172 @@ async def cleanup_expired_format_cache() -> int:
     """Clean expired format cache entries. Returns count of cleaned entries."""
     import time
     now = time.time()
-    
+
     async with get_async_db() as db:
         cursor = await db.execute(
             "SELECT COUNT(*) FROM format_cache WHERE expires_at < ?", (now,)
         )
         row = await cursor.fetchone()
         count = row[0] if row else 0
-        
+
         if count > 0:
             await db.execute("DELETE FROM format_cache WHERE expires_at < ?", (now,))
             await db.commit()
-        
+
         return count
+
+
+# ============================================================================
+# API Token Operations (Browser Extension)
+# ============================================================================
+
+def generate_token_id() -> str:
+    """Generate a unique API token ID."""
+    import secrets
+    return f"wt_ext_{secrets.token_urlsafe(32)}"
+
+
+async def create_token(user_email: str, name: str = "default") -> Dict[str, Any]:
+    """Create a new API token for user."""
+    import time
+    now = time.time()
+    token_id = generate_token_id()
+
+    async with get_async_db() as db:
+        await db.execute("""
+            INSERT INTO api_tokens (id, user_email, name, created_at, last_used_at, revoked, sync_count)
+            VALUES (?, ?, ?, ?, ?, 0, 0)
+        """, (token_id, user_email, name, now, now))
+        await db.commit()
+
+    logger.info(f"Created API token for user: {user_email}")
+    return {
+        "id": token_id,
+        "user_email": user_email,
+        "name": name,
+        "created_at": now,
+        "last_used_at": now,
+        "last_sync_at": None,
+        "revoked": False,
+        "sync_count": 0,
+    }
+
+
+async def get_token(token_id: str) -> Optional[Dict[str, Any]]:
+    """Get token by ID."""
+    async with get_async_db() as db:
+        cursor = await db.execute(
+            "SELECT * FROM api_tokens WHERE id = ? AND revoked = 0", (token_id,)
+        )
+        row = await cursor.fetchone()
+
+        if not row:
+            return None
+
+        return {
+            "id": row["id"],
+            "user_email": row["user_email"],
+            "name": row["name"],
+            "created_at": row["created_at"],
+            "last_used_at": row["last_used_at"],
+            "last_sync_at": row["last_sync_at"],
+            "revoked": bool(row["revoked"]),
+            "sync_count": row["sync_count"],
+        }
+
+
+async def get_user_token(user_email: str) -> Optional[Dict[str, Any]]:
+    """Get active token for user (most recent non-revoked)."""
+    async with get_async_db() as db:
+        cursor = await db.execute(
+            """SELECT * FROM api_tokens
+               WHERE user_email = ? AND revoked = 0
+               ORDER BY created_at DESC LIMIT 1""",
+            (user_email,)
+        )
+        row = await cursor.fetchone()
+
+        if not row:
+            return None
+
+        return {
+            "id": row["id"],
+            "user_email": row["user_email"],
+            "name": row["name"],
+            "created_at": row["created_at"],
+            "last_used_at": row["last_used_at"],
+            "last_sync_at": row["last_sync_at"],
+            "revoked": bool(row["revoked"]),
+            "sync_count": row["sync_count"],
+        }
+
+
+async def validate_token(token_id: str) -> Optional[str]:
+    """Validate token and return user_email if valid. Updates last_used_at."""
+    import time
+    now = time.time()
+
+    async with get_async_db() as db:
+        cursor = await db.execute(
+            "SELECT user_email FROM api_tokens WHERE id = ? AND revoked = 0",
+            (token_id,)
+        )
+        row = await cursor.fetchone()
+
+        if not row:
+            return None
+
+        # Update last_used_at
+        await db.execute(
+            "UPDATE api_tokens SET last_used_at = ? WHERE id = ?",
+            (now, token_id)
+        )
+        await db.commit()
+
+        return row["user_email"]
+
+
+async def update_token_sync(token_id: str) -> None:
+    """Update token's last_sync_at and increment sync_count."""
+    import time
+    now = time.time()
+
+    async with get_async_db() as db:
+        await db.execute(
+            """UPDATE api_tokens
+               SET last_sync_at = ?, sync_count = sync_count + 1
+               WHERE id = ?""",
+            (now, token_id)
+        )
+        await db.commit()
+
+
+async def revoke_token(token_id: str) -> bool:
+    """Revoke a token. Returns True if token was found and revoked."""
+    async with get_async_db() as db:
+        cursor = await db.execute(
+            "UPDATE api_tokens SET revoked = 1 WHERE id = ? AND revoked = 0",
+            (token_id,)
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def revoke_user_tokens(user_email: str) -> int:
+    """Revoke all tokens for a user. Returns count of revoked tokens."""
+    async with get_async_db() as db:
+        cursor = await db.execute(
+            "UPDATE api_tokens SET revoked = 1 WHERE user_email = ? AND revoked = 0",
+            (user_email,)
+        )
+        await db.commit()
+        return cursor.rowcount
+
+
+async def get_or_create_token(user_email: str) -> Dict[str, Any]:
+    """Get existing token or create new one for user."""
+    token = await get_user_token(user_email)
+    if token:
+        return token
+    return await create_token(user_email)
 

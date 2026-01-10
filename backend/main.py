@@ -35,11 +35,18 @@ from services.cache import (
     parse_range_header, get_bucket_for_position, get_bucket_cache_key,
     check_disk_space, get_current_cache_size,
     cache_cleanup_task,
+    memory_cache, get_segment_cache_key, is_audio_url, mark_content_active,
+)
+from services.prefetcher import (
+    get_or_create_session, notify_segment_for_url,
+    prefetch_initial_segments, prefetch_cleanup_task,
 )
 from services.database import init_database, cache_format
 from services.resolver import refresh_video_url, _extract_stream_url
 from api.routes.cookies import router as cookies_router
 from api.routes.rooms import router as rooms_router
+from api.routes.tokens import router as tokens_router
+from api.routes.extension import router as extension_router
 from connection_manager import manager
 
 # Configure logging
@@ -87,20 +94,32 @@ async def lifespan(app: FastAPI):
     """Application lifespan - start/stop background tasks."""
     # Initialize database and run migrations
     init_database()
-    
+
     # Load persisted room states
     await manager.initialize()
     logger.info(f"Loaded {len(manager.room_states)} rooms from database")
-    
+
     tasks = [
         asyncio.create_task(cleanup_task()),
         asyncio.create_task(cache_cleanup_task()),
         asyncio.create_task(sync_heartbeat_task()),
+        asyncio.create_task(prefetch_cleanup_task()),
     ]
-    logger.info("Started background tasks: room cleanup, cache cleanup, sync heartbeat")
+    logger.info("Started background tasks: room cleanup, cache cleanup, sync heartbeat, prefetch cleanup")
     yield
+
+    # Cancel and await all background tasks
     for task in tasks:
         task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass  # Expected when task is cancelled
+        except Exception as e:
+            logger.warning(f"Error during task shutdown: {e}")
+
+    logger.info("All background tasks shut down cleanly")
+
     # Clean up HTTP client
     global _proxy_client
     if _proxy_client is not None:
@@ -126,6 +145,8 @@ app.add_middleware(
 # Include API routers
 app.include_router(cookies_router)
 app.include_router(rooms_router)
+app.include_router(tokens_router)
+app.include_router(extension_router)
 
 
 # ============================================================================
@@ -302,8 +323,43 @@ def resolve_stream(
 
 
 # ============================================================================
-# HLS Proxy
+# HLS/DASH Proxy
 # ============================================================================
+
+def rewrite_dash_manifest(content: str, base_url: str, proxy_base: str) -> str:
+    """Rewrite URLs in DASH MPD manifest to go through our proxy.
+
+    Handles:
+    - <BaseURL> tags
+    - media/initialization attributes in SegmentTemplate
+    - Absolute URLs in various attributes
+    """
+    # Replace BaseURL content
+    def replace_baseurl(match):
+        url = match.group(1).strip()
+        if url and not url.startswith('data:'):
+            full_url = url if url.startswith('http') else urljoin(base_url, url)
+            return f'<BaseURL>{proxy_base}{quote(full_url, safe="")}</BaseURL>'
+        return match.group(0)
+
+    content = re.sub(r'<BaseURL>([^<]+)</BaseURL>', replace_baseurl, content)
+
+    # Replace media/initialization URLs in SegmentTemplate
+    def replace_attr_url(match):
+        attr_name = match.group(1)
+        url = match.group(2)
+        if url.startswith('http'):
+            return f'{attr_name}="{proxy_base}{quote(url, safe="")}"'
+        return match.group(0)
+
+    # Handle media="url" and initialization="url" attributes
+    content = re.sub(r'(media|initialization)="(https?://[^"]+)"', replace_attr_url, content)
+
+    # Handle sourceURL attributes
+    content = re.sub(r'(sourceURL)="(https?://[^"]+)"', replace_attr_url, content)
+
+    return content
+
 
 def rewrite_hls_manifest(content: str, base_url: str, proxy_base: str) -> str:
     """Rewrite URLs in HLS manifest to go through our proxy."""
@@ -361,7 +417,8 @@ async def proxy_stream(request: Request, url: str):
     proxy_base = f"{proto}://{host}/api/proxy?url="
 
     url_path = url.split('?')[0]
-    is_manifest = url_path.endswith('.m3u8') or url_path.endswith('.m3u')
+    is_hls_manifest = url_path.endswith('.m3u8') or url_path.endswith('.m3u')
+    is_dash_manifest = url_path.endswith('.mpd')
 
     outgoing_headers = {
         "User-Agent": request.headers.get("user-agent", "Mozilla/5.0"),
@@ -375,13 +432,19 @@ async def proxy_stream(request: Request, url: str):
     segment_client = await get_proxy_client()
 
     try:
-        if is_manifest:
-            logger.info(f"Proxying manifest for {url[:100]}...")
+        if is_hls_manifest:
+            logger.info(f"Proxying HLS manifest for {url[:100]}...")
             response = await segment_client.get(url, headers=outgoing_headers)
             if response.status_code >= 400:
                 return Response(content=response.text, status_code=response.status_code)
 
             rewritten = rewrite_hls_manifest(response.text, url, proxy_base)
+
+            # Initialize prefetch session and parse manifest for segment URLs
+            is_audio = is_audio_url(url)
+            session = await get_or_create_session(url, is_audio=is_audio)
+            await session.parse_hls_manifest(response.text, url)
+
             return Response(
                 content=rewritten,
                 media_type="application/vnd.apple.mpegurl",
@@ -390,46 +453,102 @@ async def proxy_stream(request: Request, url: str):
                     "Cache-Control": "no-cache",
                 }
             )
+        elif is_dash_manifest:
+            logger.info(f"Proxying DASH manifest for {url[:100]}...")
+            response = await segment_client.get(url, headers=outgoing_headers)
+            if response.status_code >= 400:
+                return Response(content=response.text, status_code=response.status_code)
+
+            rewritten = rewrite_dash_manifest(response.text, url, proxy_base)
+            return Response(
+                content=rewritten,
+                media_type="application/dash+xml",
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Cache-Control": "no-cache",
+                }
+            )
         else:
-            # Segment proxying with bucket caching
+            # Segment proxying with memory cache + disk bucket cache
             range_header = outgoing_headers.get("Range", "")
             range_start, range_end = parse_range_header(range_header)
+
+            # Notify prefetcher about this segment request (triggers prefetch of next segments)
+            await notify_segment_for_url(url)
+
+            # Check memory cache first (fastest)
+            segment_cache_key = get_segment_cache_key(url, range_start)
+            is_audio = is_audio_url(url)
+            mem_result = await memory_cache.get(segment_cache_key)
+            if mem_result:
+                data, content_type = mem_result
+                logger.info(f"MEMORY HIT: {url[:60]}... ({len(data)} bytes)")
+
+                # Mark content as active for adaptive TTL
+                url_hash = segment_cache_key.split('_')[1] if '_' in segment_cache_key else None
+                if url_hash:
+                    await mark_content_active(url_hash)
+
+                return Response(
+                    content=data,
+                    media_type=content_type,
+                    status_code=206 if range_header else 200,
+                    headers={
+                        "Access-Control-Allow-Origin": "*",
+                        "Accept-Ranges": "bytes",
+                    }
+                )
+
+            # Check disk bucket cache
             start_bucket = get_bucket_for_position(range_start)
             _, bucket_cache_path = get_bucket_cache_key(url, start_bucket)
             bucket_meta_path = bucket_cache_path + ".meta"
 
-            # Check bucket cache
+            # Check bucket cache (with race condition protection)
             if os.path.exists(bucket_cache_path) and os.path.exists(bucket_meta_path):
                 try:
                     async with aiofiles.open(bucket_meta_path, 'r') as f:
                         bucket_meta = json.loads(await f.read())
-                    
+
                     bucket_start = bucket_meta.get("bucket_start", 0)
                     bucket_end = bucket_meta.get("bucket_end", 0)
-                    
+
                     if bucket_start <= range_start < bucket_end:
                         offset = range_start - bucket_start
-                        os.utime(bucket_cache_path, None)
-                        
-                        async def iter_bucket():
-                            async with aiofiles.open(bucket_cache_path, 'rb') as f:
-                                await f.seek(offset)
-                                while True:
-                                    chunk = await f.read(64 * 1024)
-                                    if not chunk:
-                                        break
-                                    yield chunk
-                        
-                        logger.info(f"BUCKET HIT: {start_bucket} for {url[:60]}...")
-                        return StreamingResponse(
-                            iter_bucket(),
-                            status_code=206,
-                            headers={
-                                "Access-Control-Allow-Origin": "*",
-                                "Accept-Ranges": "bytes",
-                                "Content-Type": bucket_meta.get("content_type", "application/octet-stream"),
-                            }
-                        )
+
+                        # Open the cache file BEFORE returning the response
+                        # This handles the race condition where the file could be deleted
+                        # between os.path.exists() check and the actual read
+                        try:
+                            cache_file = await aiofiles.open(bucket_cache_path, 'rb')
+                            await cache_file.seek(offset)
+                            os.utime(bucket_cache_path, None)
+                        except FileNotFoundError:
+                            logger.warning(f"Bucket cache file deleted during read: {bucket_cache_path}")
+                            # Fall through to upstream fetch
+                        else:
+                            async def iter_bucket():
+                                try:
+                                    while True:
+                                        chunk = await cache_file.read(64 * 1024)
+                                        if not chunk:
+                                            break
+                                        yield chunk
+                                finally:
+                                    await cache_file.close()
+
+                            logger.info(f"BUCKET HIT: {start_bucket} for {url[:60]}...")
+                            return StreamingResponse(
+                                iter_bucket(),
+                                status_code=206,
+                                headers={
+                                    "Access-Control-Allow-Origin": "*",
+                                    "Accept-Ranges": "bytes",
+                                    "Content-Type": bucket_meta.get("content_type", "application/octet-stream"),
+                                }
+                            )
+                except FileNotFoundError:
+                    logger.warning(f"Bucket cache metadata deleted: {bucket_meta_path}")
                 except Exception as e:
                     logger.warning(f"Bucket cache read error: {e}")
 
@@ -456,13 +575,18 @@ async def proxy_stream(request: Request, url: str):
             if content_length > MAX_CACHEABLE_FILE_BYTES:
                 should_cache = False
 
-            # Check for late-detected manifest
+            # Check for late-detected manifest (content-type based detection)
             ctype = r.headers.get("content-type", "").lower()
             if "mpegurl" in ctype:
                 content = await r.read()
                 text = content.decode('utf-8', errors='replace')
                 rewritten = rewrite_hls_manifest(text, url, proxy_base)
                 return Response(content=rewritten, media_type="application/vnd.apple.mpegurl")
+            elif "dash+xml" in ctype or "mpd" in ctype:
+                content = await r.read()
+                text = content.decode('utf-8', errors='replace')
+                rewritten = rewrite_dash_manifest(text, url, proxy_base)
+                return Response(content=rewritten, media_type="application/dash+xml")
 
             if should_cache:
                 _, cache_path = get_bucket_cache_key(url, start_bucket)
@@ -471,24 +595,43 @@ async def proxy_stream(request: Request, url: str):
                 async def stream_and_cache():
                     temp_path = cache_path + f".{time.time()}.tmp"
                     total = 0
+                    chunks = []  # Collect chunks for memory cache
+                    content_type = r.headers.get("content-type", "video/mp4")
                     try:
                         async with aiofiles.open(temp_path, 'wb') as f:
                             async for chunk in r.aiter_bytes():
                                 await f.write(chunk)
                                 total += len(chunk)
+                                chunks.append(chunk)
                                 yield chunk
-                        
+
                         if r.status_code in (200, 206):
                             os.rename(temp_path, cache_path)
                             meta = {
                                 "bucket_num": start_bucket,
                                 "bucket_start": range_start,
                                 "bucket_end": range_start + total,
-                                "content_type": r.headers.get("content-type"),
+                                "content_type": content_type,
                                 "cached_at": time.time(),
                             }
                             async with aiofiles.open(cache_meta_path, 'w') as f:
                                 await f.write(json.dumps(meta))
+
+                            # Also add to memory cache for faster subsequent access
+                            if total < 25 * 1024 * 1024:  # Only cache segments < 25MB in memory
+                                full_data = b''.join(chunks)
+                                await memory_cache.put(
+                                    segment_cache_key,
+                                    full_data,
+                                    content_type,
+                                    is_audio=is_audio
+                                )
+                                logger.info(f"Added to memory cache: {url[:60]}... ({total} bytes)")
+
+                                # Mark content as active
+                                url_hash = segment_cache_key.split('_')[1] if '_' in segment_cache_key else None
+                                if url_hash:
+                                    await mark_content_active(url_hash)
                     except Exception as e:
                         logger.warning(f"Cache error: {e}")
                         if os.path.exists(temp_path):
@@ -524,7 +667,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
         user_email = websocket.query_params.get("user")
     if not user_email:
         user_email = "Guest"
-    
+
     await manager.connect(websocket, room_id, user_email)
     try:
         while True:
@@ -556,6 +699,17 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     video_data["added_by"] = user_email
                     if video_data.get("original_url"):
                         await cache_format(video_data["original_url"], video_data)
+
+                    # Trigger initial prefetch for faster startup
+                    video_url = video_data.get("video_url") or video_data.get("stream_url")
+                    audio_url = video_data.get("audio_url")
+                    if video_url:
+                        asyncio.create_task(prefetch_initial_segments(
+                            video_url,
+                            audio_url,
+                            await get_proxy_client()
+                        ))
+
                 next_v, queue, playing_index = await manager.prepend_to_queue(room_id, video_data)
                 if next_v:
                     await manager.broadcast({"type": "set_video", "payload": {"video_data": next_v}}, room_id)
@@ -615,13 +769,30 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         "payload": {"permanent": state.get("permanent", False)}
                     }, room_id)
             
+            elif msg_type == "quality_change":
+                # User switched video quality - prefetch segments for new quality
+                new_video_url = payload.get("new_video_url")
+                audio_url = payload.get("audio_url")
+                if new_video_url:
+                    asyncio.create_task(prefetch_initial_segments(
+                        new_video_url,
+                        audio_url,
+                        await get_proxy_client()
+                    ))
+                    logger.info(f"Quality change prefetch triggered for {user_email}")
+
             elif msg_type == "ping":
                 await websocket.send_json({
                     "type": "pong",
                     "payload": {"client_time": payload.get("client_time"), "server_time": time.time() * 1000}
                 })
-                
+
     except WebSocketDisconnect:
+        pass  # Normal disconnect, handled in finally
+    except Exception as e:
+        logger.error(f"WebSocket error for {user_email} in room {room_id}: {e}")
+    finally:
+        # Always clean up the connection, regardless of how the handler exits
         await manager.disconnect_and_notify(websocket, room_id)
 
 

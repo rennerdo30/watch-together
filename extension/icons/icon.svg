@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#8b5cf6"/>
+      <stop offset="100%" style="stop-color:#6366f1"/>
+    </linearGradient>
+  </defs>
+  <!-- Background circle -->
+  <circle cx="64" cy="64" r="60" fill="url(#grad)"/>
+  <!-- Play button -->
+  <polygon points="52,40 52,88 92,64" fill="white"/>
+  <!-- Sync arrows (simplified) -->
+  <path d="M28 64 C28 44, 44 28, 64 28" stroke="white" stroke-width="4" fill="none" stroke-linecap="round"/>
+  <path d="M100 64 C100 84, 84 100, 64 100" stroke="white" stroke-width="4" fill="none" stroke-linecap="round"/>
+  <polygon points="64,22 58,32 70,32" fill="white"/>
+  <polygon points="64,106 58,96 70,96" fill="white"/>
+</svg>

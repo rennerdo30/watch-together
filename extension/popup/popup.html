@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Watch Together Cookie Sync</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <polygon points="10,8 16,12 10,16" fill="currentColor"/>
+                </svg>
+                <span>Watch Together</span>
+            </div>
+        </header>
+
+        <div class="status-card" id="statusCard">
+            <div class="status-indicator" id="statusIndicator">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Checking...</span>
+            </div>
+            <div class="user-email" id="userEmail"></div>
+        </div>
+
+        <div class="sync-section">
+            <div class="sync-info">
+                <span class="label">Last Sync</span>
+                <span class="value" id="lastSync">Never</span>
+            </div>
+            <button class="btn btn-primary" id="syncBtn">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M23 4v6h-6"/>
+                    <path d="M1 20v-6h6"/>
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                </svg>
+                Sync Now
+            </button>
+        </div>
+
+        <div class="send-section" id="sendSection">
+            <div class="send-header">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="22" y1="2" x2="11" y2="13"/>
+                    <polygon points="22,2 15,22 11,13 2,9"/>
+                </svg>
+                <span>Send to Watch Together</span>
+            </div>
+            <div class="room-input">
+                <input type="text" id="roomId" placeholder="Room ID (e.g., movie-night)" />
+                <button class="btn btn-send" id="sendBtn" title="Queue current page">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="12" y1="5" x2="12" y2="19"/>
+                        <line x1="5" y1="12" x2="19" y2="12"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="send-status" id="sendStatus"></div>
+        </div>
+
+        <div class="domains-section">
+            <div class="section-header">
+                <span>Synced Domains</span>
+                <span class="domain-count" id="domainCount">0</span>
+            </div>
+            <div class="domain-list" id="domainList"></div>
+        </div>
+
+        <footer>
+            <label class="toggle">
+                <input type="checkbox" id="autoSyncToggle" checked>
+                <span class="toggle-label">Auto-sync every 30 min</span>
+            </label>
+            <button class="btn btn-link" id="optionsBtn">Settings</button>
+        </footer>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>

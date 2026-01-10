@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Watch Together - Settings</title>
+    <link rel="stylesheet" href="options.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <polygon points="10,8 16,12 10,16" fill="currentColor"/>
+                </svg>
+                <div>
+                    <h1>Watch Together</h1>
+                    <span>Cookie Sync Settings</span>
+                </div>
+            </div>
+        </header>
+
+        <main>
+            <!-- Connection Status -->
+            <section class="card">
+                <h2>Connection Status</h2>
+                <div class="status-row">
+                    <div class="status-indicator">
+                        <div class="status-dot" id="statusDot"></div>
+                        <span id="statusText">Checking...</span>
+                    </div>
+                    <span class="user-email" id="userEmail"></span>
+                </div>
+                <p class="help-text" id="connectionHelp">
+                    Visit Watch Together while logged in to automatically connect.
+                </p>
+            </section>
+
+            <!-- Sync Settings -->
+            <section class="card">
+                <h2>Sync Settings</h2>
+                <div class="setting-row">
+                    <label class="toggle">
+                        <input type="checkbox" id="autoSyncToggle" checked>
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <div class="setting-info">
+                        <span class="setting-label">Auto-sync cookies</span>
+                        <span class="setting-desc">Automatically sync every 30 minutes</span>
+                    </div>
+                </div>
+                <div class="setting-row">
+                    <div class="sync-info">
+                        <span class="label">Last sync:</span>
+                        <span class="value" id="lastSync">Never</span>
+                    </div>
+                    <button class="btn btn-secondary" id="syncNowBtn">Sync Now</button>
+                </div>
+            </section>
+
+            <!-- Cookie Domains -->
+            <section class="card">
+                <h2>Cookie Domains</h2>
+                <p class="help-text">
+                    Add domains to sync cookies from. Common streaming sites are included by default.
+                </p>
+                <div class="domain-input-row">
+                    <input type="text" id="newDomain" placeholder="e.g., .example.com" />
+                    <button class="btn btn-primary" id="addDomainBtn">Add</button>
+                </div>
+                <div class="domain-list" id="domainList"></div>
+            </section>
+
+            <!-- Backend URL -->
+            <section class="card">
+                <h2>Backend URL</h2>
+                <p class="help-text">
+                    This is automatically detected when you visit Watch Together.
+                </p>
+                <input type="text" id="backendUrl" placeholder="https://your-instance.example.com" readonly />
+            </section>
+
+            <!-- API Token -->
+            <section class="card">
+                <h2>API Token</h2>
+                <p class="help-text">
+                    Your authentication token. Keep this secret.
+                </p>
+                <div class="token-row">
+                    <input type="password" id="tokenInput" readonly />
+                    <button class="btn btn-icon" id="toggleTokenBtn" title="Show/hide token">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                            <circle cx="12" cy="12" r="3"/>
+                        </svg>
+                    </button>
+                    <button class="btn btn-icon" id="copyTokenBtn" title="Copy token">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                        </svg>
+                    </button>
+                </div>
+            </section>
+
+            <!-- Danger Zone -->
+            <section class="card danger">
+                <h2>Danger Zone</h2>
+                <div class="setting-row">
+                    <div class="setting-info">
+                        <span class="setting-label">Reset Extension</span>
+                        <span class="setting-desc">Clear all settings and disconnect</span>
+                    </div>
+                    <button class="btn btn-danger" id="resetBtn">Reset</button>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>Watch Together Cookie Sync v1.0.0</p>
+        </footer>
+    </div>
+
+    <script src="options.js"></script>
+</body>
+</html>

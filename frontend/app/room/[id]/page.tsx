@@ -8,7 +8,7 @@ import {
     Play, ListVideo, Settings, X, Palette, ShieldCheck, Home, GripVertical, Pin, Bug,
     Crown, Shield, User as UserIcon, ChevronUp, ChevronDown, Lock, Copy, Check, Infinity
 } from 'lucide-react';
-import { ResolveResponse, resolveUrl } from '@/lib/api';
+import { ResolveResponse, resolveUrl, getExtensionToken, regenerateExtensionToken, ExtensionToken } from '@/lib/api';
 import { CustomPlayer } from '@/components/custom-player';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { THEMES, DEFAULT_THEME, type Theme, getThemeById, loadCustomTheme, saveCustomTheme, createCustomTheme } from '@/lib/themes';
@@ -59,6 +59,12 @@ export default function RoomPage() {
     const [isSavingCookies, setIsSavingCookies] = useState(false);
     const [isLoadingCookies, setIsLoadingCookies] = useState(true);
     const [isCopyingDebug, setIsCopyingDebug] = useState(false);
+
+    // Extension token state
+    const [extensionToken, setExtensionToken] = useState<ExtensionToken | null>(null);
+    const [isLoadingToken, setIsLoadingToken] = useState(false);
+    const [isRegeneratingToken, setIsRegeneratingToken] = useState(false);
+    const [isCopyingToken, setIsCopyingToken] = useState(false);
 
     // Custom theme state
     const [customBgColor, setCustomBgColor] = useState('#09090b');
@@ -252,6 +258,23 @@ export default function RoomPage() {
         };
         loadCookies();
     }, [currentUser]);
+
+    // Load extension token when settings are opened
+    useEffect(() => {
+        const loadToken = async () => {
+            if (!showSettings || !currentUser || currentUser === 'Guest') return;
+            setIsLoadingToken(true);
+            try {
+                const response = await getExtensionToken();
+                setExtensionToken(response.token);
+            } catch (err) {
+                console.error('Failed to load extension token:', err);
+            } finally {
+                setIsLoadingToken(false);
+            }
+        };
+        loadToken();
+    }, [showSettings, currentUser]);
 
     // Note: We no longer need a local ticker for syncState.timestamp
     // The badge now uses actualPlayerTime which is updated via onTimeUpdate
@@ -613,6 +636,14 @@ export default function RoomPage() {
                                         // Update actual player time for accurate badge display
                                         setActualPlayerTime(time);
                                         setSyncState(prev => ({ ...prev, isPlaying }));
+                                    }}
+                                    onQualityChangeNotify={(oldVideoUrl, newVideoUrl, audioUrl) => {
+                                        // Notify backend for prefetch optimization
+                                        sendMsg('quality_change', {
+                                            old_video_url: oldVideoUrl,
+                                            new_video_url: newVideoUrl,
+                                            audio_url: audioUrl,
+                                        });
                                     }}
                                     playerRef={playerRef}
                                     syncThreshold={syncThreshold}
@@ -1137,6 +1168,134 @@ export default function RoomPage() {
                                             >
                                                 {isSavingCookies ? "Saving..." : "Save Cookies"}
                                             </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Browser Extension */}
+                                <div className="pt-4 border-t border-zinc-800">
+                                    <label className="text-xs font-medium text-zinc-400 flex items-center gap-2 mb-3">
+                                        <LinkIcon className="w-4 h-4" /> Browser Extension
+                                    </label>
+                                    <div className="bg-zinc-800/30 rounded-xl border border-zinc-800 p-4 space-y-4">
+                                        <p className="text-xs text-zinc-400 leading-relaxed">
+                                            Install the browser extension to automatically sync cookies from YouTube, Twitch, and other sites.
+                                        </p>
+
+                                        {/* API Token */}
+                                        {currentUser && currentUser !== 'Guest' && (
+                                            <div className="space-y-2">
+                                                <div className="flex items-center justify-between">
+                                                    <span className="text-[10px] text-zinc-500 uppercase font-medium">API Token</span>
+                                                    {extensionToken?.last_sync_at && (
+                                                        <span className="text-[10px] text-zinc-500">
+                                                            Last sync: {new Date(extensionToken.last_sync_at * 1000).toLocaleString()}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <div className="flex-1 h-9 bg-zinc-900 border border-zinc-700 rounded-lg px-3 flex items-center">
+                                                        {isLoadingToken ? (
+                                                            <span className="text-xs text-zinc-500">Loading...</span>
+                                                        ) : extensionToken ? (
+                                                            <code className="text-[11px] font-mono text-zinc-300 truncate">
+                                                                {extensionToken.id.slice(0, 20)}...
+                                                            </code>
+                                                        ) : (
+                                                            <span className="text-xs text-zinc-500">No token</span>
+                                                        )}
+                                                    </div>
+                                                    <button
+                                                        onClick={() => {
+                                                            if (extensionToken) {
+                                                                navigator.clipboard.writeText(extensionToken.id);
+                                                                setIsCopyingToken(true);
+                                                                setTimeout(() => setIsCopyingToken(false), 2000);
+                                                                toast.success('Token copied!');
+                                                            }
+                                                        }}
+                                                        disabled={!extensionToken}
+                                                        className="h-9 px-3 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-zinc-400 hover:text-white transition-colors disabled:opacity-50"
+                                                        title="Copy token"
+                                                    >
+                                                        {isCopyingToken ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                                                    </button>
+                                                    <button
+                                                        onClick={async () => {
+                                                            setIsRegeneratingToken(true);
+                                                            try {
+                                                                const response = await regenerateExtensionToken();
+                                                                setExtensionToken(response.token);
+                                                                toast.success('Token regenerated!');
+                                                            } catch (err: any) {
+                                                                toast.error(err.message || 'Failed to regenerate');
+                                                            } finally {
+                                                                setIsRegeneratingToken(false);
+                                                            }
+                                                        }}
+                                                        disabled={isRegeneratingToken}
+                                                        className="h-9 px-3 bg-amber-600/20 hover:bg-amber-600/30 border border-amber-600/30 rounded-lg text-amber-400 hover:text-amber-300 text-xs font-medium transition-colors disabled:opacity-50"
+                                                    >
+                                                        {isRegeneratingToken ? 'Regenerating...' : 'Regenerate'}
+                                                    </button>
+                                                </div>
+                                                {extensionToken && extensionToken.sync_count > 0 && (
+                                                    <div className="text-[10px] text-zinc-500">
+                                                        Synced {extensionToken.sync_count} time{extensionToken.sync_count !== 1 ? 's' : ''}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        {/* Download Links */}
+                                        <div className="space-y-2">
+                                            <span className="text-[10px] text-zinc-500 uppercase font-medium">Install Extension</span>
+                                            <div className="grid grid-cols-2 gap-2">
+                                                <a
+                                                    href="/extension/chrome"
+                                                    className="flex items-center justify-center gap-2 h-10 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 rounded-lg text-xs font-medium text-zinc-300 hover:text-white transition-colors"
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                >
+                                                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                                                        <path d="M12 0C8.21 0 4.831 1.757 2.632 4.501l3.953 6.848A5.454 5.454 0 0 1 12 6.545h10.691A12 12 0 0 0 12 0zM1.931 5.47A11.943 11.943 0 0 0 0 12c0 6.012 4.42 10.991 10.189 11.864l3.953-6.847a5.45 5.45 0 0 1-6.865-2.29zm13.342 2.166a5.446 5.446 0 0 1 1.45 7.09l.002.001h-.002l-5.344 9.257c.206.01.413.016.621.016 6.627 0 12-5.373 12-12 0-1.54-.29-3.011-.818-4.364zM12 16.364a4.364 4.364 0 1 1 0-8.728 4.364 4.364 0 0 1 0 8.728z"/>
+                                                    </svg>
+                                                    Chrome / Edge
+                                                </a>
+                                                <a
+                                                    href="/extension/firefox"
+                                                    className="flex items-center justify-center gap-2 h-10 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 rounded-lg text-xs font-medium text-zinc-300 hover:text-white transition-colors"
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                >
+                                                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                                                        <path d="M8.824 7.287c.008 0 .004 0 0 0zm-2.8-1.4c.006 0 .003 0 0 0zm16.754 2.161c-.505-1.215-1.53-2.528-2.333-2.943.654 1.283 1.033 2.57 1.177 3.53l.002.02c-1.314-3.278-3.544-4.6-5.366-7.477-.096-.147-.19-.3-.283-.453a3.95 3.95 0 0 1-.145-.282 2.421 2.421 0 0 1-.159-.402c-.002-.012-.003-.024-.005-.036-.009-.064-.015-.13-.019-.195a1.085 1.085 0 0 1 .014-.579.027.027 0 0 0-.02-.03.02.02 0 0 0-.015.001l-.016.007c-.03.017-.06.033-.09.051l-.046.027-.038.023a7.14 7.14 0 0 0-.97.713c-.296.25-.58.522-.85.817a9.28 9.28 0 0 0-.78.914 9.887 9.887 0 0 0-.936 1.467 12.095 12.095 0 0 0-1.265 3.486l-.101.496-.013.072-.074.443c-.03.188-.054.38-.075.572l-.027.293-.029.343-.035.568-.013.634c0 .207.003.414.01.62.032.98.174 1.943.422 2.875.164.612.371 1.21.62 1.787a11.929 11.929 0 0 0 5.217 5.478c.173.093.345.185.52.27l.098.047c.296.142.597.275.904.395l.006.002c.216.082.435.16.658.23l.182.059.249.072.252.068.23.057.256.056.223.046.258.05.218.039.262.039.219.031.262.03.222.024.262.02.224.016.264.011.224.009.266.003.221.002c.176-.001.352-.01.527-.023l.128-.014.182-.015.24-.035.135-.018.22-.044.122-.025.228-.059.109-.028.237-.078.093-.031.252-.1.072-.03.268-.125.05-.023.282-.155.026-.016.27-.175.009-.007a6.947 6.947 0 0 0 .532-.42l.029-.026c.08-.072.157-.147.232-.224l.058-.06.19-.215.071-.088.156-.21.083-.121.13-.211.08-.141.108-.21.068-.144.091-.217.055-.143.079-.236.044-.145.066-.26.03-.138.049-.293.019-.125.031-.328.009-.116.012-.386v-.035a8.102 8.102 0 0 0-.115-1.275l-.039-.195a7.63 7.63 0 0 0-.14-.59l-.062-.203a7.094 7.094 0 0 0-.218-.606l-.063-.148a6.77 6.77 0 0 0-.308-.6 6.05 6.05 0 0 0-.393-.584 6.25 6.25 0 0 0-.142-.18 6.37 6.37 0 0 0-.148-.177 5.83 5.83 0 0 0-.311-.337 5.6 5.6 0 0 0-.325-.306 5.434 5.434 0 0 0-.168-.143 5.138 5.138 0 0 0-.351-.266 5.116 5.116 0 0 0-.177-.12 5.023 5.023 0 0 0-.367-.219 5.1 5.1 0 0 0-.181-.096c-.124-.062-.251-.12-.379-.173a4.987 4.987 0 0 0-.183-.074 5.104 5.104 0 0 0-.39-.134 5.08 5.08 0 0 0-.181-.054 5.115 5.115 0 0 0-.4-.095 5.156 5.156 0 0 0-.175-.033 5.297 5.297 0 0 0-.411-.055 5.48 5.48 0 0 0-.166-.015 5.718 5.718 0 0 0-.423-.019c-.052 0-.104-.002-.156 0a6.076 6.076 0 0 0-.437.018c-.046.002-.092.008-.138.012a6.449 6.449 0 0 0-.45.057c-.04.006-.08.016-.12.023a6.901 6.901 0 0 0-.46.106c-.034.01-.069.021-.103.031a7.397 7.397 0 0 0-.468.16c-.027.01-.055.022-.082.033a7.921 7.921 0 0 0-.475.219c-.021.01-.042.022-.063.033a8.498 8.498 0 0 0-.481.28c-.016.01-.032.022-.048.032a9.117 9.117 0 0 0-.485.345c-.01.008-.02.017-.03.025a9.776 9.776 0 0 0-.488.412c-.006.005-.012.012-.018.017a10.494 10.494 0 0 0-.49.483l-.007.007a11.28 11.28 0 0 0-.49.557v.001a12.157 12.157 0 0 0-.49.636 13.18 13.18 0 0 0-.487.72l-.003.004a14.382 14.382 0 0 0-.482.809 15.927 15.927 0 0 0-.474.902c-.152.32-.303.644-.453.971a18.933 18.933 0 0 0-.444 1.044c-.136.357-.27.717-.401 1.08a20.58 20.58 0 0 0-.375 1.128c-.109.37-.215.743-.316 1.118-.092.34-.18.683-.264 1.026-.076.31-.148.621-.217.933-.063.285-.124.571-.18.857-.052.263-.1.527-.146.79-.042.24-.082.48-.118.72-.034.224-.064.449-.092.673-.026.21-.05.42-.072.63-.02.198-.038.396-.053.593-.014.187-.027.373-.037.559-.01.177-.016.353-.022.528-.005.167-.009.333-.01.498-.001.159 0 .316.002.474.002.152.008.304.015.455.007.146.017.291.029.436.012.14.027.28.044.418.018.135.038.269.061.402.024.131.05.26.08.389.031.127.065.252.102.376.04.122.082.242.128.361.049.118.101.233.157.347.06.113.122.222.19.33.07.107.145.21.224.31.084.103.172.2.265.295.1.099.205.19.316.278.12.094.245.18.377.26.145.087.296.163.455.231.178.074.364.133.557.177.221.05.45.078.686.085a3.78 3.78 0 0 0 .736-.047c.284-.047.57-.127.852-.24.325-.13.645-.304.952-.52.355-.25.693-.554 1.003-.91.346-.398.654-.862.91-1.393.283-.585.5-1.252.634-2.002.147-.828.193-1.754.127-2.766-.073-1.108-.28-2.312-.647-3.606-.406-1.429-.999-2.96-1.823-4.595-.912-1.812-2.095-3.748-3.623-5.809-1.688-2.277-3.757-4.702-6.313-7.281z"/>
+                                                    </svg>
+                                                    Firefox
+                                                </a>
+                                                <a
+                                                    href="/extension/safari"
+                                                    className="flex items-center justify-center gap-2 h-10 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 rounded-lg text-xs font-medium text-zinc-300 hover:text-white transition-colors"
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                >
+                                                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                                                        <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm0 1.5c5.799 0 10.5 4.701 10.5 10.5S17.799 22.5 12 22.5 1.5 17.799 1.5 12 6.201 1.5 12 1.5zm0 1.5a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm4.5 4.5l-6 3-3 6 6-3 3-6zm-4.5 3.75a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5z"/>
+                                                    </svg>
+                                                    Safari
+                                                </a>
+                                                <a
+                                                    href="https://github.com/yourusername/watch-together-extension"
+                                                    className="flex items-center justify-center gap-2 h-10 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 rounded-lg text-xs font-medium text-zinc-300 hover:text-white transition-colors"
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                >
+                                                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                                                        <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+                                                    </svg>
+                                                    Source Code
+                                                </a>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
