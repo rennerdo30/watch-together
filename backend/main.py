@@ -171,6 +171,7 @@ async def get_proxy_client():
         _proxy_client = httpx.AsyncClient(
             cookies=jar,
             follow_redirects=True,
+            max_redirects=3,  # Limit redirects to prevent YouTube CDN redirect loops
             timeout=httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=None),
             limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)
         )
