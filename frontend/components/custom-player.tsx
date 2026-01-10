@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 import { Loader2, Info, Activity } from 'lucide-react';
 import { PlayerControls } from './player-controls';
 import { QualityOption } from '@/lib/api';
-import { useDashSync, useAudioNormalization, useHlsPlayer, HlsQualityLevel } from './player/hooks';
+import { useDashSync, useDashPlayer, useAudioNormalization, useHlsPlayer, HlsQualityLevel } from './player/hooks';
 
 interface CustomPlayerProps {
     url: string | { src: string; type: string };
@@ -75,9 +75,6 @@ export function CustomPlayer({
     const audioRef = useRef<HTMLAudioElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const isAutoPlayingRef = useRef(false);
-    const dashInitializedRef = useRef<string | null>(null);
-    const qualitySwitchAbortRef = useRef<AbortController | null>(null);
-    const loadingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
     // Determine playback mode
     const isDashMode = streamType === 'dash' && !!videoUrl && !!audioUrl;
@@ -91,15 +88,10 @@ export function CustomPlayer({
     const [error, setError] = useState<string | null>(null);
 
     // === PLAYBACK STATE ===
-    const [isLoading, setIsLoading] = useState(true);
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
     const [liveLatency, setLiveLatency] = useState(0);
     const [seekableRange, setSeekableRange] = useState({ start: 0, end: 0 });
-
-    // === QUALITY STATE ===
-    const [qualities, setQualities] = useState<{ height: number; index: number; bitrate: number }[]>([]);
-    const [currentQuality, setCurrentQuality] = useState(-1);
 
     // === VOLUME STATE (persisted) ===
     const [volume, setVolume] = useState(() => {
@@ -138,9 +130,6 @@ export function CustomPlayer({
         enabled: isDashMode,
         initialVolume: volume,
         initialMuted: isMuted,
-        onBufferingChange: (buffering) => {
-            // Already handled in hook, but we can mirror to state if needed
-        },
         onPlayingChange: (playing) => {
             if (playing) onPlay?.();
             else onPause?.();
@@ -153,7 +142,38 @@ export function CustomPlayer({
         onError: setError,
     });
 
+    // === DASH PLAYER HOOK (initialization & quality management) ===
+    const dashPlayer = useDashPlayer({
+        videoRef,
+        audioRef,
+        videoUrl: videoUrl || '',
+        audioUrl: audioUrl || '',
+        enabled: isDashMode,
+        autoPlay,
+        initialTime,
+        isLive,
+        initialVolume: volume,
+        initialMuted: isMuted,
+        availableQualities,
+        onError: setError,
+        onQualityChangeNotify,
+        onReady: () => {
+            // Trigger autoplay through dashSync after both streams are ready
+            if (autoPlay) {
+                isAutoPlayingRef.current = true;
+                dashSync.play()
+                    .finally(() => {
+                        setTimeout(() => { isAutoPlayingRef.current = false; }, 1000);
+                    });
+            }
+        },
+    });
+
     // === HLS PLAYER HOOK ===
+    const [hlsLoading, setHlsLoading] = useState(true);
+    const [hlsQualities, setHlsQualities] = useState<HlsQualityLevel[]>([]);
+    const [hlsCurrentQuality, setHlsCurrentQuality] = useState(-1);
+
     const hlsPlayer = useHlsPlayer({
         videoRef,
         src: isDashMode ? '' : src, // Only use HLS if not in DASH mode
@@ -162,14 +182,18 @@ export function CustomPlayer({
         initialTime,
         isLive,
         onManifestParsed: (levels: HlsQualityLevel[]) => {
-            setQualities(levels);
-            setIsLoading(false);
+            setHlsQualities(levels);
+            setHlsLoading(false);
         },
-        onLevelSwitch: setCurrentQuality,
+        onLevelSwitch: setHlsCurrentQuality,
         onError: setError,
-        onLoadingChange: setIsLoading,
-        onBufferingChange: () => { }, // Handled by hook internally
+        onLoadingChange: setHlsLoading,
     });
+
+    // Derive loading/qualities/currentQuality from appropriate hook
+    const isLoading = isDashMode ? dashPlayer.isLoading : hlsLoading;
+    const qualities = isDashMode ? dashPlayer.qualities : hlsQualities;
+    const currentQuality = isDashMode ? dashPlayer.currentQuality : hlsCurrentQuality;
 
     // === AUDIO NORMALIZATION HOOK ===
     const normalization = useAudioNormalization({
@@ -181,140 +205,6 @@ export function CustomPlayer({
     // Derive buffering state from appropriate hook
     const isBuffering = isDashMode ? dashSync.isBuffering : hlsPlayer.isBuffering;
     const isPlaying = isDashMode ? dashSync.isPlaying : !videoRef.current?.paused;
-
-    // === DASH INITIALIZATION ===
-    useEffect(() => {
-        if (!isDashMode) {
-            dashInitializedRef.current = null;
-            return;
-        }
-
-        const video = videoRef.current;
-        const audio = audioRef.current;
-        if (!video || !audio || !videoUrl || !audioUrl) return;
-
-        // Prevent re-initialization with same URLs
-        const initKey = `${videoUrl}|${audioUrl}`;
-        if (dashInitializedRef.current === initKey) return;
-        dashInitializedRef.current = initKey;
-
-        console.log('[CustomPlayer] Initializing DASH mode');
-        setError(null);
-        setIsLoading(true);
-
-        // Set up video (use volume=0 instead of muted to prevent aggressive browser pausing)
-        // Some browsers pause muted videos in background tabs more aggressively than volume=0 videos
-        video.src = videoUrl;
-        video.volume = 0; // No audio from video element - audio comes from separate audio element
-        video.muted = false; // Keep muted=false to avoid background throttling
-        video.load();
-
-        // Set up audio with user's saved preferences
-        audio.src = audioUrl;
-        audio.muted = isMuted;
-        audio.volume = volume;
-        audio.load();
-
-        // Set up qualities from availableQualities
-        if (availableQualities && availableQualities.length > 0) {
-            const dashQualities = availableQualities.map((q, index) => ({
-                height: q.height,
-                bitrate: q.tbr ? q.tbr * 1000 : (q.height * 5000),
-                index,
-            }));
-            setQualities(dashQualities);
-            setCurrentQuality(0);
-        }
-
-        // Wait for both to load with timeout
-        let videoLoaded = false;
-        let audioLoaded = false;
-
-        // Set loading timeout (10 seconds)
-        loadingTimeoutRef.current = setTimeout(() => {
-            if (!videoLoaded || !audioLoaded) {
-                console.warn('[CustomPlayer] Loading timeout - one or both streams failed to load');
-                setError('Stream loading timed out. The video may be unavailable or region-locked.');
-                setIsLoading(false);
-            }
-        }, 10000);
-
-        const checkBothLoaded = () => {
-            if (videoLoaded && audioLoaded) {
-                // Clear the loading timeout
-                if (loadingTimeoutRef.current) {
-                    clearTimeout(loadingTimeoutRef.current);
-                    loadingTimeoutRef.current = null;
-                }
-
-                setIsLoading(false);
-                setDuration(video.duration || audio.duration);
-
-                // Re-apply volume/muted settings AFTER load completes
-                // (browsers can reset these during load)
-                audio.volume = volume;
-                audio.muted = isMuted;
-
-                // Set initial time
-                if (initialTime > 0 && Number.isFinite(initialTime) && !isLive) {
-                    video.currentTime = initialTime;
-                    audio.currentTime = initialTime;
-                    setCurrentTime(initialTime);
-                }
-
-                // Autoplay
-                if (autoPlay) {
-                    isAutoPlayingRef.current = true;
-                    dashSync.play()
-                        .finally(() => {
-                            setTimeout(() => { isAutoPlayingRef.current = false; }, 1000);
-                        });
-                }
-            }
-        };
-
-        const onVideoLoaded = () => { videoLoaded = true; checkBothLoaded(); };
-        const onAudioLoaded = () => { audioLoaded = true; checkBothLoaded(); };
-        const onVideoError = () => {
-            if (loadingTimeoutRef.current) {
-                clearTimeout(loadingTimeoutRef.current);
-                loadingTimeoutRef.current = null;
-            }
-            setError(`Video load failed: ${video.error?.message || 'Unknown'}`);
-            setIsLoading(false);
-        };
-        const onAudioError = () => {
-            if (loadingTimeoutRef.current) {
-                clearTimeout(loadingTimeoutRef.current);
-                loadingTimeoutRef.current = null;
-            }
-            setError(`Audio load failed: ${audio.error?.message || 'Unknown'}`);
-            setIsLoading(false);
-        };
-
-        video.addEventListener('loadedmetadata', onVideoLoaded, { once: true });
-        audio.addEventListener('loadedmetadata', onAudioLoaded, { once: true });
-        video.addEventListener('error', onVideoError, { once: true });
-        audio.addEventListener('error', onAudioError, { once: true });
-
-        return () => {
-            if (loadingTimeoutRef.current) {
-                clearTimeout(loadingTimeoutRef.current);
-                loadingTimeoutRef.current = null;
-            }
-            video.removeEventListener('loadedmetadata', onVideoLoaded);
-            audio.removeEventListener('loadedmetadata', onAudioLoaded);
-            video.removeEventListener('error', onVideoError);
-            audio.removeEventListener('error', onAudioError);
-            dashInitializedRef.current = null;
-
-            // Clean up audio element when switching modes
-            audio.pause();
-            audio.removeAttribute('src');
-            audio.load();
-        };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [videoUrl, audioUrl, isDashMode]);
 
     // === VIDEO EVENT HANDLERS (non-DASH mode) ===
     useEffect(() => {
@@ -471,61 +361,12 @@ export function CustomPlayer({
     }, [isDashMode, dashSync]);
 
     const handleQualityChange = useCallback((index: number) => {
-        if (isDashMode && availableQualities?.[index]) {
-            const video = videoRef.current;
-            const audio = audioRef.current;
-            if (!video) return;
-
-            // Abort any previous quality switch listener
-            if (qualitySwitchAbortRef.current) {
-                qualitySwitchAbortRef.current.abort();
-            }
-            qualitySwitchAbortRef.current = new AbortController();
-
-            const savedTime = video.currentTime;
-            const wasPlaying = !video.paused;
-            const selectedQuality = availableQualities[index];
-
-            console.log(`[CustomPlayer] Switching to quality ${index}: ${selectedQuality.height}p`);
-
-            // Notify backend for prefetch optimization (before switching)
-            const oldVideoUrl = video.src;
-            onQualityChangeNotify?.(oldVideoUrl, selectedQuality.video_url, audioUrl);
-
-            // Pause both during quality switch
-            video.pause();
-            audio?.pause();
-
-            // Change video source - audio stays the same (DASH uses shared audio track)
-            video.src = selectedQuality.video_url;
-            video.load();
-
-            const signal = qualitySwitchAbortRef.current.signal;
-
-            video.addEventListener('canplay', () => {
-                if (signal.aborted) return;
-
-                video.currentTime = savedTime;
-                if (audio) audio.currentTime = savedTime;
-
-                if (wasPlaying) {
-                    video.play().catch(console.warn);
-                    if (audio) {
-                        // Small delay to ensure video starts first
-                        setTimeout(() => {
-                            if (signal.aborted) return;
-                            audio.currentTime = video.currentTime;
-                            audio.play().catch(console.warn);
-                        }, 50);
-                    }
-                }
-            }, { once: true, signal });
-
-            setCurrentQuality(index);
+        if (isDashMode) {
+            dashPlayer.setQuality(index);
         } else {
             hlsPlayer.setLevel(index);
         }
-    }, [isDashMode, availableQualities, hlsPlayer, onQualityChangeNotify, audioUrl]);
+    }, [isDashMode, dashPlayer, hlsPlayer]);
 
     const toggleNormalization = useCallback(() => {
         const newVal = !isNormalizationEnabled;
