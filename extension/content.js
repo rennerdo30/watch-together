@@ -64,9 +64,9 @@
                     // Type guard: ensure node is an Element before accessing getAttribute
                     if (node instanceof Element && node.nodeName === 'META') {
                         if (node.getAttribute('name') === 'wt-ext-token') {
-                            if (checkForToken()) {
-                                observer.disconnect(); // Stop observing after successful detection
-                            }
+                            // Disconnect IMMEDIATELY to prevent race condition
+                            observer.disconnect();
+                            checkForToken();
                             return;
                         }
                     }
