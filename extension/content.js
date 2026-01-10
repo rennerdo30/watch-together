@@ -8,10 +8,18 @@
 (function() {
     'use strict';
 
+    // Flag to prevent duplicate token submissions
+    let tokenSent = false;
+
     /**
      * Check for Watch Together meta tags and extract token
      */
     function checkForToken() {
+        // Prevent duplicate submissions
+        if (tokenSent) {
+            return true; // Already sent, return true to disconnect observer
+        }
+
         const tokenMeta = document.querySelector('meta[name="wt-ext-token"]');
         const userMeta = document.querySelector('meta[name="wt-ext-user"]');
 
@@ -20,6 +28,7 @@
             const userEmail = userMeta.getAttribute('content');
 
             if (token && userEmail) {
+                tokenSent = true; // Mark as sent before async operation
                 console.log('[WT Sync] Token detected for user:', userEmail);
 
                 // Get the backend URL from the current page

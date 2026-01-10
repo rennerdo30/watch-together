@@ -53,9 +53,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     optionsBtn.addEventListener('click', () => chrome.runtime.openOptionsPage());
     sendBtn.addEventListener('click', handleSendToRoom);
     roomIdInput.addEventListener('input', () => {
-        chrome.storage.sync.set({ lastRoomId: roomIdInput.value }).catch(err => {
-            console.error('Failed to save room ID:', err);
-        });
+        const roomId = roomIdInput.value.trim();
+        // Only save valid room IDs (alphanumeric, hyphens, underscores)
+        if (!roomId || /^[a-zA-Z0-9_-]*$/.test(roomId)) {
+            chrome.storage.sync.set({ lastRoomId: roomId }).catch(err => {
+                console.error('Failed to save room ID:', err);
+            });
+        }
     });
 
     // Listen for stream detection updates
@@ -101,12 +105,16 @@ document.addEventListener('DOMContentLoaded', async () => {
                 lastSync.textContent = 'Never';
             }
 
-            // Domains
+            // Domains - use safe DOM manipulation to prevent XSS
             const domains = status.domains || [];
             domainCount.textContent = domains.length;
-            domainList.innerHTML = domains.map(d =>
-                `<span class="domain-tag">${d.replace(/^\./, '')}</span>`
-            ).join('');
+            domainList.innerHTML = '';
+            for (const domain of domains) {
+                const span = document.createElement('span');
+                span.className = 'domain-tag';
+                span.textContent = domain.replace(/^\./, '');
+                domainList.appendChild(span);
+            }
 
             // Auto-sync toggle
             autoSyncToggle.checked = status.autoSync;

@@ -142,7 +142,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
  */
 async function handleTokenDetected(token, userEmail, backendUrl) {
     console.log('[WT Sync] Token detected for user:', userEmail, 'backend:', backendUrl);
-    await chrome.storage.sync.set({ token, userEmail, backendUrl });
+
+    try {
+        await chrome.storage.sync.set({ token, userEmail, backendUrl });
+    } catch (err) {
+        console.error('[WT Sync] Failed to save token:', err);
+        return { success: false, error: 'Failed to save token to storage' };
+    }
 
     // Try an initial sync
     const result = await syncCookies();
@@ -276,6 +282,20 @@ async function syncCookies() {
             return { success: false, error: 'No backend URL configured. Visit Watch Together to configure.' };
         }
 
+        // Validate backend URL protocol to prevent security issues
+        try {
+            const parsedUrl = new URL(backendUrl);
+            if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+                console.error('[WT Sync] Invalid backend URL protocol:', parsedUrl.protocol);
+                await chrome.storage.sync.set({ lastSyncStatus: 'Invalid backend URL' });
+                return { success: false, error: 'Invalid backend URL protocol' };
+            }
+        } catch {
+            console.error('[WT Sync] Invalid backend URL format');
+            await chrome.storage.sync.set({ lastSyncStatus: 'Invalid backend URL' });
+            return { success: false, error: 'Invalid backend URL format' };
+        }
+
         // Send to backend
         const response = await fetch(`${backendUrl}/api/extension/sync`, {
             method: 'POST',
@@ -358,7 +378,7 @@ chrome.webRequest.onCompleted.addListener(
                 stream: detectedStreams.get(details.tabId)
             }).catch((err) => {
                 // Only log unexpected errors, not "no receiver" errors
-                if (!err.message?.includes('Receiving end does not exist')) {
+                if (err.message && !err.message.includes('Receiving end does not exist')) {
                     console.warn('[WT Sync] Failed to notify popup:', err.message);
                 }
             });

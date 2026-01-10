@@ -89,29 +89,32 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     /**
-     * Render domain list
+     * Render domain list - uses safe DOM manipulation to prevent XSS
      */
     function renderDomains(domains) {
-        domainList.innerHTML = domains.map(domain => `
-            <div class="domain-tag" data-domain="${domain}">
-                <span>${domain.replace(/^\./, '')}</span>
-                <button title="Remove domain">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="18" y1="6" x2="6" y2="18"/>
-                        <line x1="6" y1="6" x2="18" y2="18"/>
-                    </svg>
-                </button>
-            </div>
-        `).join('');
+        domainList.innerHTML = '';
 
-        // Add remove handlers
-        domainList.querySelectorAll('.domain-tag button').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                const tag = e.target.closest('.domain-tag');
-                const domain = tag.dataset.domain;
-                await removeDomain(domain);
-            });
-        });
+        for (const domain of domains) {
+            const div = document.createElement('div');
+            div.className = 'domain-tag';
+
+            const span = document.createElement('span');
+            span.textContent = domain.replace(/^\./, '');
+            div.appendChild(span);
+
+            const button = document.createElement('button');
+            button.title = 'Remove domain';
+            button.innerHTML = `
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"/>
+                    <line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+            `;
+            button.addEventListener('click', () => removeDomain(domain));
+            div.appendChild(button);
+
+            domainList.appendChild(div);
+        }
     }
 
     /**
