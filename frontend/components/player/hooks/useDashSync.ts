@@ -86,6 +86,20 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
 
     const config = { ...DEFAULT_CONFIG, ...userConfig };
 
+    // Use refs for callbacks to avoid recreating functions on every render
+    const callbackRefs = useRef({
+        onBufferingChange,
+        onPlayingChange,
+        onTimeUpdate,
+        onError,
+    });
+    callbackRefs.current = {
+        onBufferingChange,
+        onPlayingChange,
+        onTimeUpdate,
+        onError,
+    };
+
     // All mutable state stored in refs to avoid stale closures
     const stateRef = useRef<DashSyncState>({
         isPlaying: false,
@@ -178,7 +192,7 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
         lastHeavySyncTimeRef.current = now;
 
         updateState({ isSyncing: true, isBuffering: true, syncHealth: 'recovering' });
-        onBufferingChange?.(true);
+        callbackRefs.current.onBufferingChange?.(true);
 
         const wasPlaying = !video.paused;
 
@@ -210,7 +224,7 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
 
             consecutiveFailuresRef.current = 0;
             updateState({ isSyncing: false, isBuffering: false, syncHealth: 'good' });
-            onBufferingChange?.(false);
+            callbackRefs.current.onBufferingChange?.(false);
 
             if (wasPlaying) {
                 // Resume AudioContext if suspended (common after tab switch)
@@ -243,7 +257,7 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
 
             if (failCount >= MAX_CONSECUTIVE_FAILURES) {
                 updateState({ syncHealth: 'failed' });
-                onError?.('Synchronization failed repeatedly. Try refreshing the page.');
+                callbackRefs.current.onError?.('Synchronization failed repeatedly. Try refreshing the page.');
                 // Cooldown before allowing more syncs (exponential backoff)
                 const cooldown = HEAVY_SYNC_COOLDOWN_BASE_MS * Math.pow(2, failCount - 1);
                 console.log(`[DashSync] Entering cooldown for ${cooldown}ms`);
@@ -251,14 +265,14 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
 
             // Force resume even on failure
             updateState({ isSyncing: false, isBuffering: false });
-            onBufferingChange?.(false);
+            callbackRefs.current.onBufferingChange?.(false);
 
             if (wasPlaying) {
                 video.play().catch(() => { });
                 audio.play().catch(() => { });
             }
         }
-    }, [updateState, onBufferingChange, onError]);
+    }, [updateState]);
 
     /**
      * Safe audio play that tracks the promise to prevent race conditions
@@ -347,7 +361,7 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
         const newDuration = video.duration || audio.duration || 0;
         if (newTime !== currentState.currentTime || newDuration !== currentState.duration) {
             updateState({ currentTime: newTime, duration: newDuration });
-            onTimeUpdate?.(newTime, newDuration);
+            callbackRefs.current.onTimeUpdate?.(newTime, newDuration);
         }
 
         // Skip sync logic if video is paused or seeking
@@ -366,7 +380,7 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
             safeAudioPause(audio);
             if (!currentState.isBuffering) {
                 updateState({ isBuffering: true });
-                onBufferingChange?.(true);
+                callbackRefs.current.onBufferingChange?.(true);
             }
         }
 
@@ -377,7 +391,7 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
             audio.currentTime = video.currentTime; // Sync position first
             safeAudioPlay(audio);
             updateState({ isBuffering: false });
-            onBufferingChange?.(false);
+            callbackRefs.current.onBufferingChange?.(false);
         }
 
         // === DRIFT CORRECTION (Using playback rate for smooth correction) ===
@@ -427,7 +441,7 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
             console.log('[DashSync] Audio stopped while video playing, recovering...');
             recoverAudio(video, audio);
         }
-    }, [enabled, videoRef, audioRef, config, getBufferHealth, updateState, onTimeUpdate, onBufferingChange, performHeavySync, recoverAudio, safeAudioPlay, safeAudioPause]);
+    }, [enabled, videoRef, audioRef, config, getBufferHealth, updateState, performHeavySync, recoverAudio, safeAudioPlay, safeAudioPause]);
 
     // === PUBLIC API ===
 
@@ -448,7 +462,7 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
 
             await video.play();
             updateState({ isPlaying: true });
-            onPlayingChange?.(true);
+            callbackRefs.current.onPlayingChange?.(true);
 
             // Try to play audio (may fail due to autoplay policy)
             try {
@@ -469,9 +483,9 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
                 return;
             }
             console.error('[DashSync] Play failed:', error.message);
-            onError?.(error.message);
+            callbackRefs.current.onError?.(error.message);
         }
-    }, [videoRef, audioRef, updateState, onPlayingChange, onError]);
+    }, [videoRef, audioRef, updateState]);
 
     const pause = useCallback(() => {
         const video = videoRef.current;
@@ -481,8 +495,8 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
         audio?.pause();
 
         updateState({ isPlaying: false });
-        onPlayingChange?.(false);
-    }, [videoRef, audioRef, updateState, onPlayingChange]);
+        callbackRefs.current.onPlayingChange?.(false);
+    }, [videoRef, audioRef, updateState]);
 
     const seek = useCallback((time: number) => {
         const video = videoRef.current;
@@ -596,7 +610,7 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
 
         const onVideoPlay = () => {
             updateState({ isPlaying: true, isBuffering: false });
-            onPlayingChange?.(true);
+            callbackRefs.current.onPlayingChange?.(true);
 
             // Start audio when video starts (use safe wrapper)
             if (audio.paused) {
@@ -625,21 +639,21 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
 
             // User-initiated pause
             updateState({ isPlaying: false });
-            onPlayingChange?.(false);
+            callbackRefs.current.onPlayingChange?.(false);
             audio.pause();
         };
 
         const onVideoWaiting = () => {
             console.log('[DashSync] Video waiting');
             updateState({ isBuffering: true });
-            onBufferingChange?.(true);
+            callbackRefs.current.onBufferingChange?.(true);
             audio.pause(); // Stop audio immediately
         };
 
         const onVideoCanPlay = () => {
             if (stateRef.current.isBuffering && !stateRef.current.isSyncing) {
                 updateState({ isBuffering: false });
-                onBufferingChange?.(false);
+                callbackRefs.current.onBufferingChange?.(false);
 
                 // Resume audio if video is playing (use safe wrapper)
                 if (!video.paused) {
@@ -664,7 +678,7 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
 
         const onVideoEnded = () => {
             updateState({ isPlaying: false });
-            onPlayingChange?.(false);
+            callbackRefs.current.onPlayingChange?.(false);
             audio.pause();
         };
 
@@ -741,7 +755,7 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
             audio.removeEventListener('pause', onAudioPause);
             audio.removeEventListener('suspend', onAudioSuspend);
         };
-    }, [enabled, videoRef, audioRef, updateState, onPlayingChange, onBufferingChange]);
+    }, [enabled, videoRef, audioRef, updateState, safeAudioPlay]);
 
     return {
         ...state,

@@ -281,6 +281,7 @@ export function CustomPlayer({
                 loadingTimeoutRef.current = null;
             }
             setError(`Video load failed: ${video.error?.message || 'Unknown'}`);
+            setIsLoading(false);
         };
         const onAudioError = () => {
             if (loadingTimeoutRef.current) {
@@ -288,6 +289,7 @@ export function CustomPlayer({
                 loadingTimeoutRef.current = null;
             }
             setError(`Audio load failed: ${audio.error?.message || 'Unknown'}`);
+            setIsLoading(false);
         };
 
         video.addEventListener('loadedmetadata', onVideoLoaded, { once: true });
