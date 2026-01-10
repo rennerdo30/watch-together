@@ -108,13 +108,13 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
     }, []);
 
     /**
-     * Initialize HLS.js player
+     * Initialize HLS.js player or direct video playback
      */
     const initHls = useCallback(() => {
         const video = videoRef.current;
-        if (!video || !src || !enabled || !isHlsSource(src)) return;
+        if (!video || !src || !enabled) return;
 
-        // Destroy existing instance
+        // Destroy existing HLS instance
         if (hlsRef.current) {
             hlsRef.current.destroy();
             hlsRef.current = null;
@@ -122,6 +122,45 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
 
         setIsLoading(true);
         onLoadingChange?.(true);
+
+        // For non-HLS sources (direct MP4, etc.), use native video element
+        if (!isHlsSource(src)) {
+            console.log('[Player] Using native playback for:', src.slice(0, 80));
+            video.src = src;
+            video.load();
+
+            const onLoadedMetadata = () => {
+                setIsLoading(false);
+                onLoadingChange?.(false);
+
+                if (initialTime > 0 && Number.isFinite(initialTime)) {
+                    video.currentTime = initialTime;
+                }
+
+                if (autoPlay) {
+                    const savedMuted = localStorage.getItem('w2g-player-muted') === 'true';
+                    video.muted = savedMuted;
+
+                    isAutoPlayingRef.current = true;
+                    video.play().catch(() => {
+                        console.log('[Player] Autoplay blocked');
+                    }).finally(() => {
+                        setTimeout(() => { isAutoPlayingRef.current = false; }, 1000);
+                    });
+                }
+            };
+
+            const handleError = () => {
+                console.error('[Player] Native playback error');
+                onError?.('Failed to load video');
+                setIsLoading(false);
+                onLoadingChange?.(false);
+            };
+
+            video.addEventListener('loadedmetadata', onLoadedMetadata, { once: true });
+            video.addEventListener('error', handleError, { once: true });
+            return;
+        }
 
         if (isHlsSupported) {
             const hls = new Hls({
