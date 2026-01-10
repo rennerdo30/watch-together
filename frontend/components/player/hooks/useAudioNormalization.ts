@@ -18,7 +18,16 @@ export interface UseAudioNormalizationReturn {
     isSupported: boolean;
     /** Current connection status */
     connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
+    /** Disconnect and cleanup (call before element changes) */
+    disconnect: () => void;
 }
+
+// Global WeakMap to track which elements have MediaElementSourceNodes
+// This is CRITICAL because createMediaElementSource() can only be called once per element
+const connectedElements = new WeakMap<HTMLMediaElement, {
+    sourceNode: MediaElementAudioSourceNode;
+    audioContext: AudioContext;
+}>();
 
 /**
  * Compressor settings for night mode / normalization
@@ -112,7 +121,7 @@ export function useAudioNormalization(options: UseAudioNormalizationOptions): Us
         setConnectionStatus('connecting');
 
         try {
-            // Disconnect old source if needed
+            // Disconnect old source if switching elements
             if (sourceNodeRef.current && connectedElementRef.current !== element) {
                 try {
                     sourceNodeRef.current.disconnect();
@@ -122,19 +131,49 @@ export function useAudioNormalization(options: UseAudioNormalizationOptions): Us
                 sourceNodeRef.current = null;
             }
 
-            // Don't reconnect to same element
+            // Don't reconnect to same element if already connected
             if (connectedElementRef.current === element && sourceNodeRef.current) {
                 setConnectionStatus('connected');
                 return;
             }
 
-            // Create source from media element
-            // Note: MediaElementAudioSourceNode can only be created once per element
-            sourceNodeRef.current = ctx.createMediaElementSource(element);
+            // Check if this element was already connected (possibly in a previous render)
+            // MediaElementAudioSourceNode can only be created ONCE per element EVER
+            const existing = connectedElements.get(element);
+            if (existing) {
+                // Reuse the existing source node
+                sourceNodeRef.current = existing.sourceNode;
+                connectedElementRef.current = element;
+
+                // If the AudioContext is different, we can't reuse it
+                if (existing.audioContext !== ctx) {
+                    console.warn('[AudioNormalization] Element was connected to different AudioContext, cannot reconnect');
+                    setConnectionStatus('error');
+                    return;
+                }
+
+                console.log('[AudioNormalization] Reusing existing source node for', element.tagName);
+            } else {
+                // Create new source from media element
+                sourceNodeRef.current = ctx.createMediaElementSource(element);
+                // Track in global map
+                connectedElements.set(element, {
+                    sourceNode: sourceNodeRef.current,
+                    audioContext: ctx
+                });
+            }
+
             connectedElementRef.current = element;
 
             // Create processing nodes
             createNodes(ctx);
+
+            // Disconnect any existing connections first
+            try {
+                sourceNodeRef.current.disconnect();
+            } catch {
+                // May not be connected yet
+            }
 
             // Connect graph: Source -> Compressor -> Gain -> Destination
             sourceNodeRef.current.connect(compressorRef.current!);
@@ -153,6 +192,31 @@ export function useAudioNormalization(options: UseAudioNormalizationOptions): Us
             setConnectionStatus('error');
         }
     }, [getAudioContext, createNodes]);
+
+    /**
+     * Disconnect from current element (call before element changes)
+     */
+    const disconnect = useCallback(() => {
+        if (sourceNodeRef.current) {
+            try {
+                sourceNodeRef.current.disconnect();
+            } catch {
+                // Already disconnected
+            }
+            // Connect directly to destination so audio still plays
+            const ctx = audioContextRef.current;
+            if (ctx && connectedElementRef.current) {
+                try {
+                    sourceNodeRef.current.connect(ctx.destination);
+                } catch {
+                    // Ignore
+                }
+            }
+        }
+        sourceNodeRef.current = null;
+        connectedElementRef.current = null;
+        setConnectionStatus('disconnected');
+    }, []);
 
     /**
      * Bypass normalization (connect source directly to destination)
@@ -282,5 +346,6 @@ export function useAudioNormalization(options: UseAudioNormalizationOptions): Us
         isActive: enabled && connectionStatus === 'connected',
         isSupported,
         connectionStatus,
+        disconnect,
     };
 }

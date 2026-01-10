@@ -1,16 +1,14 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { getExtensionToken } from '@/lib/api';
 
 /**
  * Injects meta tags for browser extension to detect.
- * The extension reads these tags to auto-configure authentication.
+ * Uses direct DOM manipulation since Next.js client components
+ * in <head> don't render dynamic content properly.
  */
 export function ExtensionMeta() {
-    const [token, setToken] = useState<string | null>(null);
-    const [userEmail, setUserEmail] = useState<string | null>(null);
-
     useEffect(() => {
         // Get user email from Cloudflare header (set by middleware) or query param
         const searchParams = new URLSearchParams(window.location.search);
@@ -23,26 +21,41 @@ export function ExtensionMeta() {
             ?.split('=')[1];
 
         const email = mockUser || cfEmail;
-        if (!email) return;
+        if (!email) {
+            console.log('[ExtensionMeta] No user email found');
+            return;
+        }
 
-        setUserEmail(email);
+        console.log('[ExtensionMeta] User email:', email);
 
         // Fetch the API token
         getExtensionToken()
             .then(response => {
-                setToken(response.token.id);
+                const token = response.token.id;
+                console.log('[ExtensionMeta] Token received, injecting meta tags');
+
+                // Remove existing meta tags if any
+                document.querySelector('meta[name="wt-ext-token"]')?.remove();
+                document.querySelector('meta[name="wt-ext-user"]')?.remove();
+
+                // Create and inject meta tags directly into DOM
+                const tokenMeta = document.createElement('meta');
+                tokenMeta.name = 'wt-ext-token';
+                tokenMeta.content = token;
+                document.head.appendChild(tokenMeta);
+
+                const userMeta = document.createElement('meta');
+                userMeta.name = 'wt-ext-user';
+                userMeta.content = email;
+                document.head.appendChild(userMeta);
+
+                console.log('[ExtensionMeta] Meta tags injected successfully');
             })
             .catch(err => {
-                console.warn('Failed to fetch extension token:', err);
+                console.warn('[ExtensionMeta] Failed to fetch extension token:', err);
             });
     }, []);
 
-    if (!token || !userEmail) return null;
-
-    return (
-        <>
-            <meta name="wt-ext-token" content={token} />
-            <meta name="wt-ext-user" content={userEmail} />
-        </>
-    );
+    // This component doesn't render anything - it uses direct DOM manipulation
+    return null;
 }

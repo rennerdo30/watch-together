@@ -28,6 +28,8 @@ interface CustomPlayerProps {
     videoUrl?: string;
     audioUrl?: string;
     availableQualities?: QualityOption[];
+    // Callback for quality change notification (for prefetch optimization)
+    onQualityChangeNotify?: (oldVideoUrl: string, newVideoUrl: string, audioUrl: string | undefined) => void;
 }
 
 interface PlayerAPI {
@@ -66,6 +68,7 @@ export function CustomPlayer({
     videoUrl,
     audioUrl,
     availableQualities,
+    onQualityChangeNotify,
 }: CustomPlayerProps) {
     // === REFS ===
     const videoRef = useRef<HTMLVideoElement>(null);
@@ -479,29 +482,48 @@ export function CustomPlayer({
 
             const savedTime = video.currentTime;
             const wasPlaying = !video.paused;
+            const selectedQuality = availableQualities[index];
 
-            console.log(`[CustomPlayer] Switching to quality ${index}: ${availableQualities[index].height}p`);
+            console.log(`[CustomPlayer] Switching to quality ${index}: ${selectedQuality.height}p`);
 
-            // Pause audio during quality switch
+            // Notify backend for prefetch optimization (before switching)
+            const oldVideoUrl = video.src;
+            onQualityChangeNotify?.(oldVideoUrl, selectedQuality.video_url, audioUrl);
+
+            // Pause both during quality switch
+            video.pause();
             audio?.pause();
 
-            // Change video source
-            video.src = availableQualities[index].video_url;
+            // Change video source - audio stays the same (DASH uses shared audio track)
+            video.src = selectedQuality.video_url;
+            video.load();
+
+            const signal = qualitySwitchAbortRef.current.signal;
 
             video.addEventListener('canplay', () => {
+                if (signal.aborted) return;
+
                 video.currentTime = savedTime;
                 if (audio) audio.currentTime = savedTime;
+
                 if (wasPlaying) {
                     video.play().catch(console.warn);
-                    audio?.play().catch(console.warn);
+                    if (audio) {
+                        // Small delay to ensure video starts first
+                        setTimeout(() => {
+                            if (signal.aborted) return;
+                            audio.currentTime = video.currentTime;
+                            audio.play().catch(console.warn);
+                        }, 50);
+                    }
                 }
-            }, { once: true, signal: qualitySwitchAbortRef.current.signal });
+            }, { once: true, signal });
 
             setCurrentQuality(index);
         } else {
             hlsPlayer.setLevel(index);
         }
-    }, [isDashMode, availableQualities, hlsPlayer]);
+    }, [isDashMode, availableQualities, hlsPlayer, onQualityChangeNotify, audioUrl]);
 
     const toggleNormalization = useCallback(() => {
         const newVal = !isNormalizationEnabled;

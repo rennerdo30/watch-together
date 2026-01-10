@@ -127,8 +127,16 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
             const hls = new Hls({
                 enableWorker: true,
                 lowLatencyMode: isLive,
-                backBufferLength: 90,
-                liveSyncDurationCount: 3,
+                // Buffer configuration for reduced buffering
+                backBufferLength: 120,          // Keep 2 minutes of back buffer (was 90)
+                maxBufferLength: 60,            // Buffer up to 60 seconds ahead
+                maxMaxBufferLength: 120,        // Allow up to 2 minutes in good conditions
+                liveSyncDurationCount: 4,       // Sync 4 segments behind live edge (was 3)
+                // Quality selection
+                startLevel: -1,                 // Auto-select initial quality
+                abrBandWidthFactor: 0.9,        // Conservative quality selection
+                abrBandWidthUpFactor: 0.7,      // Cautious quality upgrades
+                // Retry configuration
                 fragLoadingRetryDelay: 1000,
                 manifestLoadingRetryDelay: 1000,
                 levelLoadingRetryDelay: 1000,

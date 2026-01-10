@@ -81,11 +81,14 @@ export function useRoomSync({
     const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
     const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
+    // Reconnection with exponential backoff
+    const reconnectAttempts = useRef<number>(0);
+    const MAX_RECONNECT_ATTEMPTS = 15;
+    const BASE_RECONNECT_DELAY = 1000;
+    const MAX_RECONNECT_DELAY = 30000;
+
     // Latency tracking
     const latencyRef = useRef<number>(0);
-
-    // Internal update counter to prevent feedback loops
-    const internalUpdateCount = useRef(0);
 
     // Sync threshold ref for access in callbacks
     const syncThresholdRef = useRef(syncThreshold);
@@ -103,6 +106,10 @@ export function useRoomSync({
         timestamp: 0,
     });
 
+    // Ref to track current roomState (avoids stale closure in callbacks)
+    const roomStateRef = useRef<RoomState>(roomState);
+    useEffect(() => { roomStateRef.current = roomState; }, [roomState]);
+
     const [syncInfo, setSyncInfo] = useState<SyncInfo>({
         isPlaying: false,
         timestamp: 0,
@@ -115,13 +122,13 @@ export function useRoomSync({
     // Message handler
     const handleMessage = useCallback((msg: { type: string; payload: any }) => {
         const { type, payload } = msg;
-        internalUpdateCount.current += 1;
 
         switch (type) {
             case 'sync':
                 // Initial sync or reconnect
                 if (payload.video_data) {
-                    const currentVideoUrl = roomState.videoData?.original_url;
+                    // Use ref to get current video URL (avoids stale closure)
+                    const currentVideoUrl = roomStateRef.current.videoData?.original_url;
                     const newVideoUrl = payload.video_data.original_url;
 
                     if (!currentVideoUrl || currentVideoUrl !== newVideoUrl) {
@@ -215,7 +222,9 @@ export function useRoomSync({
 
             case 'seek':
                 if (playerRef.current) {
-                    playerRef.current.currentTime?.(payload.timestamp);
+                    // Apply latency compensation to seek (same as heartbeat)
+                    const compensatedSeekTime = payload.timestamp + (latencyRef.current / 1000);
+                    playerRef.current.currentTime?.(compensatedSeekTime);
                     const video = playerRef.current.getVideoElement?.();
                     if (video) video.playbackRate = 1.0;
                 }
@@ -253,15 +262,25 @@ export function useRoomSync({
 
                     const video = playerRef.current.getVideoElement?.();
                     if (video) {
-                        if (Math.abs(drift) > 3) {
+                        // Check if we're in DASH mode (video has volume=0 and there's a separate audio element)
+                        // In DASH mode, useDashSync handles its own A/V sync, so we should only do hard seeks
+                        // and avoid playback rate manipulation which would desync audio
+                        const isDashMode = video.volume === 0 && !video.muted;
+
+                        if (Math.abs(drift) > syncThresholdRef.current) {
+                            // Hard seek for large drift (works for both modes)
                             playerRef.current.currentTime?.(compensatedTimestamp);
                             video.playbackRate = 1.0;
-                        } else if (drift > 0.5) {
-                            video.playbackRate = 1.05;
-                        } else if (drift < -0.5) {
-                            video.playbackRate = 0.95;
-                        } else {
-                            video.playbackRate = 1.0;
+                        } else if (!isDashMode) {
+                            // Only adjust playback rate in HLS mode (not DASH)
+                            // DASH has its own sync via useDashSync that manages both video and audio
+                            if (drift > 0.5) {
+                                video.playbackRate = 1.05;
+                            } else if (drift < -0.5) {
+                                video.playbackRate = 0.95;
+                            } else {
+                                video.playbackRate = 1.0;
+                            }
                         }
                     }
 
@@ -284,11 +303,7 @@ export function useRoomSync({
             }));
         }
 
-        // Decrement counter
-        setTimeout(() => {
-            internalUpdateCount.current = Math.max(0, internalUpdateCount.current - 1);
-        }, 300);
-    }, [roomState.videoData?.original_url, playerRef, onVideoChange]);
+    }, [playerRef, onVideoChange]); // Use roomStateRef.current instead of roomState in closure
 
     // Connect function
     const connect = useCallback(() => {
@@ -307,6 +322,7 @@ export function useRoomSync({
 
         ws.onopen = () => {
             setConnected(true);
+            reconnectAttempts.current = 0; // Reset on successful connection
             if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
 
             pingIntervalRef.current = setInterval(() => {
@@ -329,7 +345,19 @@ export function useRoomSync({
         ws.onclose = () => {
             setConnected(false);
             if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
-            reconnectTimer.current = setTimeout(connect, 3000);
+
+            // Exponential backoff for reconnection
+            if (reconnectAttempts.current < MAX_RECONNECT_ATTEMPTS) {
+                const delay = Math.min(
+                    BASE_RECONNECT_DELAY * Math.pow(1.5, reconnectAttempts.current),
+                    MAX_RECONNECT_DELAY
+                );
+                reconnectAttempts.current++;
+                console.log(`[RoomSync] Reconnecting in ${Math.round(delay)}ms (attempt ${reconnectAttempts.current}/${MAX_RECONNECT_ATTEMPTS})`);
+                reconnectTimer.current = setTimeout(connect, delay);
+            } else {
+                console.error('[RoomSync] Max reconnection attempts reached');
+            }
         };
 
         ws.onerror = () => ws.close();

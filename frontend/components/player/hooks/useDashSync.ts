@@ -17,11 +17,14 @@ interface DashSyncConfig {
 }
 
 const DEFAULT_CONFIG: DashSyncConfig = {
-    bufferThreshold: 0.3,      // Pause audio if less than 0.3s buffered
-    driftThreshold: 0.15,      // Correct drift > 150ms (increased to reduce glitches)
-    syncFrequency: 4,          // Check sync 4 times per second (reduced frequency)
-    heavySyncThreshold: 0.5,   // Heavy sync if drift > 500ms
+    bufferThreshold: 0.8,      // Pause audio if less than 0.8s buffered (was 0.3 - higher threshold for stability)
+    driftThreshold: 0.2,       // Correct drift > 200ms (was 0.15 - allow slightly more drift)
+    syncFrequency: 4,          // Check sync 4 times per second
+    heavySyncThreshold: 0.8,   // Heavy sync if drift > 800ms (was 0.5 - higher threshold)
 };
+
+// Minimum buffer required before resuming audio after buffering
+const MIN_BUFFER_FOR_RESUME = 1.5;  // Require 1.5s buffer before resuming audio
 
 export interface UseDashSyncOptions {
     videoRef: React.RefObject<HTMLVideoElement | null>;
@@ -109,6 +112,12 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
     const audioPlayPromiseRef = useRef<Promise<void> | null>(null);
     const isPlayingAudioRef = useRef<boolean>(false);
 
+    // Recovery attempt tracking to prevent infinite loops
+    const recoveryAttemptsRef = useRef<number>(0);
+    const lastRecoveryTimeRef = useRef<number>(0);
+    const MAX_RECOVERY_ATTEMPTS = 5;
+    const RECOVERY_RESET_MS = 10000; // Reset counter after 10s of no recovery attempts
+
     // React state for triggering re-renders (minimal)
     const [state, setState] = useState<DashSyncState>(stateRef.current);
 
@@ -145,20 +154,26 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
 
     /**
      * Perform heavy sync - pause both, seek, and resume
+     * @param emergencyBypass - If true, bypass cooldown for extreme desync situations
      */
     const performHeavySync = useCallback(async (
         video: HTMLVideoElement,
         audio: HTMLAudioElement,
-        targetTime: number
+        targetTime: number,
+        emergencyBypass: boolean = false
     ) => {
         if (stateRef.current.isSyncing) return;
 
         // Check cooldown (with exponential backoff based on failure count)
+        // Emergency bypass allows critical corrections even during cooldown
         const now = Date.now();
         const cooldownMs = HEAVY_SYNC_COOLDOWN_BASE_MS * Math.pow(2, Math.min(consecutiveFailuresRef.current, 4));
-        if (now - lastHeavySyncTimeRef.current < cooldownMs) {
+        if (!emergencyBypass && now - lastHeavySyncTimeRef.current < cooldownMs) {
             console.log(`[DashSync] Heavy sync on cooldown, skipping (${cooldownMs}ms)`);
             return;
+        }
+        if (emergencyBypass) {
+            console.log('[DashSync] Emergency sync bypass activated for extreme desync');
         }
         lastHeavySyncTimeRef.current = now;
 
@@ -198,6 +213,23 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
             onBufferingChange?.(false);
 
             if (wasPlaying) {
+                // Resume AudioContext if suspended (common after tab switch)
+                // This is necessary because audio.play() may succeed but produce no sound
+                // if the AudioContext is suspended
+                if (typeof window !== 'undefined' && 'AudioContext' in window) {
+                    try {
+                        // Check if there's a suspended AudioContext we need to resume
+                        // The audio element may be routed through Web Audio API for normalization
+                        const audioContext = (audio as any)._audioContext as AudioContext | undefined;
+                        if (audioContext && audioContext.state === 'suspended') {
+                            await audioContext.resume();
+                            console.log('[DashSync] Resumed suspended AudioContext');
+                        }
+                    } catch (e) {
+                        // Ignore - AudioContext may not exist or may not be accessible
+                    }
+                }
+
                 await video.play();
                 await audio.play();
             }
@@ -339,8 +371,9 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
         }
 
         // Resume audio if buffer recovered and video is playing
-        if (minBuffer >= config.bufferThreshold && audio.paused && !video.paused && currentState.isBuffering && !isPlayingAudioRef.current) {
-            console.log(`[DashSync] Buffer recovered: ${minBuffer.toFixed(2)}s, resuming audio`);
+        // Use higher threshold for resume to ensure smoother playback
+        if (minBuffer >= MIN_BUFFER_FOR_RESUME && audio.paused && !video.paused && currentState.isBuffering && !isPlayingAudioRef.current) {
+            console.log(`[DashSync] Buffer recovered: ${minBuffer.toFixed(2)}s (>= ${MIN_BUFFER_FOR_RESUME}s), resuming audio`);
             audio.currentTime = video.currentTime; // Sync position first
             safeAudioPlay(audio);
             updateState({ isBuffering: false });
@@ -354,10 +387,17 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
 
             updateState({ lastDrift: drift });
 
-            if (absDrift > config.heavySyncThreshold) {
+            // Emergency threshold for extreme desync (bypasses cooldown)
+            const EMERGENCY_DESYNC_THRESHOLD = 2.0; // 2 seconds
+
+            if (absDrift > EMERGENCY_DESYNC_THRESHOLD) {
+                // Emergency sync - extreme desync, bypass cooldown
+                console.error(`[DashSync] EMERGENCY sync triggered: drift=${drift.toFixed(3)}s (>${EMERGENCY_DESYNC_THRESHOLD}s)`);
+                performHeavySync(video, audio, video.currentTime, true); // Emergency bypass
+            } else if (absDrift > config.heavySyncThreshold) {
                 // Heavy sync needed - pause both and resync
                 console.warn(`[DashSync] Heavy sync triggered: drift=${drift.toFixed(3)}s`);
-                performHeavySync(video, audio, video.currentTime);
+                performHeavySync(video, audio, video.currentTime, false);
             } else if (absDrift > config.driftThreshold) {
                 // Use playback rate adjustment for smooth correction instead of time jumps
                 // This prevents audio pops/clicks
@@ -475,19 +515,15 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
         if (audio) {
             audio.muted = muted;
 
-            // If unmuting and audio is paused while video plays, start audio
+            // If unmuting and audio is paused while video plays, start audio (use safe wrapper)
             if (!muted && audio.paused && video && !video.paused) {
                 audio.currentTime = video.currentTime;
-                audio.play().catch((e) => {
-                    if (e.name !== 'NotAllowedError') {
-                        console.warn('[DashSync] Audio play on unmute failed:', e.message);
-                    }
-                });
+                safeAudioPlay(audio);
             }
         }
 
         updateState({ muted });
-    }, [audioRef, videoRef, updateState]);
+    }, [audioRef, videoRef, updateState, safeAudioPlay]);
 
     // === EFFECT: Start/stop sync loop (using setInterval for background tab support) ===
     useEffect(() => {
@@ -562,14 +598,10 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
             updateState({ isPlaying: true, isBuffering: false });
             onPlayingChange?.(true);
 
-            // Start audio when video starts
+            // Start audio when video starts (use safe wrapper)
             if (audio.paused) {
                 audio.currentTime = video.currentTime;
-                audio.play().catch((e) => {
-                    if (e.name !== 'NotAllowedError') {
-                        console.warn('[DashSync] Audio start failed:', e.message);
-                    }
-                });
+                safeAudioPlay(audio);
             }
         };
 
@@ -609,10 +641,10 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
                 updateState({ isBuffering: false });
                 onBufferingChange?.(false);
 
-                // Resume audio if video is playing
+                // Resume audio if video is playing (use safe wrapper)
                 if (!video.paused) {
                     audio.currentTime = video.currentTime;
-                    audio.play().catch(() => { });
+                    safeAudioPlay(audio);
                 }
             }
         };
@@ -623,10 +655,10 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
         };
 
         const onVideoSeeked = () => {
-            // Sync audio after seek
+            // Sync audio after seek (use safe wrapper)
             audio.currentTime = video.currentTime;
             if (!video.paused) {
-                audio.play().catch(() => { });
+                safeAudioPlay(audio);
             }
         };
 
@@ -639,29 +671,46 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
         // === Audio event listeners for background tab recovery ===
         const onAudioPause = () => {
             // If audio paused but video is still playing, this is likely browser throttling
-            // Try to resume immediately
+            // Try to resume with rate limiting to prevent infinite loops
             if (!video.paused && !video.seeking && !stateRef.current.isSyncing) {
-                console.log('[DashSync] Audio paused unexpectedly, attempting recovery...');
-                // Small delay to avoid tight loop with browser
+                const now = Date.now();
+
+                // Reset recovery counter if it's been a while since last recovery
+                if (now - lastRecoveryTimeRef.current > RECOVERY_RESET_MS) {
+                    recoveryAttemptsRef.current = 0;
+                }
+
+                // Check if we've exceeded max recovery attempts
+                if (recoveryAttemptsRef.current >= MAX_RECOVERY_ATTEMPTS) {
+                    console.warn('[DashSync] Max recovery attempts reached, stopping recovery');
+                    return;
+                }
+
+                recoveryAttemptsRef.current++;
+                lastRecoveryTimeRef.current = now;
+
+                console.log(`[DashSync] Audio paused unexpectedly, attempting recovery (${recoveryAttemptsRef.current}/${MAX_RECOVERY_ATTEMPTS})...`);
+
+                // Use exponential backoff for recovery delay
+                const delay = Math.min(100 * Math.pow(2, recoveryAttemptsRef.current - 1), 2000);
+
                 setTimeout(() => {
-                    if (!video.paused && audio.paused) {
+                    if (!video.paused && audio.paused && !isPlayingAudioRef.current) {
                         audio.currentTime = video.currentTime;
-                        audio.play().catch((e) => {
-                            if (e.name !== 'NotAllowedError' && e.name !== 'AbortError') {
-                                console.warn('[DashSync] Audio recovery failed:', e.message);
-                            }
-                        });
+                        safeAudioPlay(audio);
                     }
-                }, 100);
+                }, delay);
             }
         };
 
         const onAudioSuspend = () => {
             // Browser is suspending the audio resource (common in background)
-            // Try to keep it alive by resuming
-            if (!video.paused && audio.paused) {
-                console.log('[DashSync] Audio suspended, attempting to keep alive...');
-                audio.play().catch(() => { });
+            // Only try to recover if we haven't exceeded limits
+            if (!video.paused && audio.paused && !isRecoveringRef.current) {
+                if (recoveryAttemptsRef.current < MAX_RECOVERY_ATTEMPTS) {
+                    console.log('[DashSync] Audio suspended, attempting to keep alive...');
+                    safeAudioPlay(audio);
+                }
             }
         };
 
