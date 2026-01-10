@@ -560,6 +560,8 @@ async def proxy_stream(request: Request, url: str):
             response_headers = {
                 "Access-Control-Allow-Origin": "*",
                 "Accept-Ranges": "bytes",
+                # Prevent HTTP/2 connection reuse issues with large streams
+                "Connection": "close",
             }
             for key in ["content-type", "content-length", "content-range"]:
                 if key in r.headers:

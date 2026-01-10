@@ -27,6 +27,7 @@ export interface DashQualityLevel {
     height: number;
     bitrate: number;
     index: number;
+    vcodec?: string;
 }
 
 export interface UseDashPlayerReturn {
@@ -171,8 +172,10 @@ export function useDashPlayer(options: UseDashPlayerOptions): UseDashPlayerRetur
         if (dashInitializedRef.current === initKey) {
             // If already initialized with same URLs, check if elements are already loaded
             // This handles the case where effect re-runs due to other dependency changes
+            console.log('[DashPlayer] Already initialized with same URLs, video.readyState:', video.readyState, 'audio.readyState:', audio.readyState);
             if (video.readyState >= 1 && audio.readyState >= 1) {
                 // Both have metadata loaded, ensure loading is false
+                console.log('[DashPlayer] Both already loaded, setting isLoading=false');
                 setIsLoading(false);
                 callbackRefs.current.onLoadingChange?.(false);
             }
@@ -204,6 +207,7 @@ export function useDashPlayer(options: UseDashPlayerOptions): UseDashPlayerRetur
                 height: q.height,
                 bitrate: q.tbr ? q.tbr * 1000 : (q.height * 5000),
                 index,
+                vcodec: q.vcodec,
             }));
             setQualities(dashQualities);
             setCurrentQuality(0);
@@ -227,6 +231,7 @@ export function useDashPlayer(options: UseDashPlayerOptions): UseDashPlayerRetur
         }, 10000);
 
         const checkBothLoaded = () => {
+            console.log('[DashPlayer] checkBothLoaded: video=', videoLoaded, 'audio=', audioLoaded);
             if (videoLoaded && audioLoaded) {
                 // Clear the loading timeout
                 if (loadingTimeoutRef.current) {
@@ -254,10 +259,19 @@ export function useDashPlayer(options: UseDashPlayerOptions): UseDashPlayerRetur
             }
         };
 
-        const onVideoLoaded = () => { videoLoaded = true; checkBothLoaded(); };
-        const onAudioLoaded = () => { audioLoaded = true; checkBothLoaded(); };
+        const onVideoLoaded = () => {
+            console.log('[DashPlayer] Video loadedmetadata fired, readyState:', video.readyState);
+            videoLoaded = true;
+            checkBothLoaded();
+        };
+        const onAudioLoaded = () => {
+            console.log('[DashPlayer] Audio loadedmetadata fired, readyState:', audio.readyState);
+            audioLoaded = true;
+            checkBothLoaded();
+        };
 
         const onVideoError = () => {
+            console.error('[DashPlayer] Video error:', video.error?.code, video.error?.message);
             if (loadingTimeoutRef.current) {
                 clearTimeout(loadingTimeoutRef.current);
                 loadingTimeoutRef.current = null;
@@ -270,6 +284,7 @@ export function useDashPlayer(options: UseDashPlayerOptions): UseDashPlayerRetur
         };
 
         const onAudioError = () => {
+            console.error('[DashPlayer] Audio error:', audio.error?.code, audio.error?.message);
             if (loadingTimeoutRef.current) {
                 clearTimeout(loadingTimeoutRef.current);
                 loadingTimeoutRef.current = null;
