@@ -61,19 +61,17 @@ Watch Together is a real-time collaborative video synchronization platform enabl
 
 ```yaml
 services:
-  frontend:     # Next.js 16 + React 19
-    port: 3000
-
-  backend:      # FastAPI + yt-dlp
-    port: 8000
+  frontend:     # Next.js 16 + React 19 (internal port 3000, not exposed)
+  backend:      # FastAPI + yt-dlp (internal port 8000, not exposed)
     volumes:
       - ./data:/app/data
-
-  proxy:        # Nginx reverse proxy
-    port: 80
-
+  bgutil:       # PO token provider (internal port 4416, not exposed)
+  proxy:        # Nginx reverse proxy (port 80, only externally exposed port)
+    ports: ["80:80"]
   tunnel:       # Cloudflare Tunnel (optional)
 ```
+
+All container images are pinned to specific versions. Resource limits (memory + CPU) are configured for each service. Only the nginx proxy port is exposed to the host network.
 
 ## Core Components
 
@@ -204,7 +202,7 @@ The video proxy handles CORS bypass and implements multi-tier caching.
 │     └───────────────────────────────────────────────────────┘  │
 │                                                                  │
 │  3. Response headers:                                           │
-│     ├── Access-Control-Allow-Origin: *                          │
+│     ├── Access-Control-Allow-Origin: (configured via env)       │
 │     ├── Accept-Ranges: bytes                                    │
 │     ├── Content-Range: bytes x-y/total                          │
 │     └── Connection: close (HTTP/2 compatibility)                │
@@ -336,11 +334,18 @@ type ServerMessage =
 
 ## Security Considerations
 
-1. **Cookie Storage**: Stored server-side in Netscape format, linked to user identity
-2. **Room Access**: All users can join any room (authentication handled by Cloudflare)
-3. **Proxy**: Only whitelisted domains (YouTube, Twitch CDNs) are proxied
-4. **Non-root Containers**: All services run as non-root users
-5. **Input Validation**: Room IDs sanitized to alphanumeric + hyphen/underscore
+1. **SSRF Protection**: `validate_proxy_url()` blocks access to private/reserved/loopback IPs via `ipaddress` module + DNS resolution
+2. **CORS**: Configurable via `ALLOWED_ORIGINS` env var. Credentials disabled when wildcard origin is used
+3. **Authentication**: Cloudflare Zero Trust header (`cf-access-authenticated-user-email`) in production; `?user=` query param only when `DEVELOPMENT_MODE=true`
+4. **Cookie Storage**: Stored server-side in Netscape format, linked to user identity. Upload limited to 1MB with format validation
+5. **Room Access**: All users can join any room (authentication handled by Cloudflare)
+6. **Connection Limits**: `MAX_CONNECTIONS_PER_ROOM` (50) and `MAX_CONNECTIONS_PER_USER` (10) prevent resource exhaustion
+7. **Room ID Sanitization**: IDs restricted to alphanumeric + hyphen/underscore via regex
+8. **Non-root Containers**: All services run as non-root users
+9. **Container Hardening**: Pinned image versions, memory/CPU resource limits, internal ports not exposed to host
+10. **Security Headers**: Nginx sets CSP, HSTS, Permissions-Policy, X-Content-Type-Options, X-Frame-Options
+11. **Extension Security**: Host permissions scoped to specific video CDN domains; tokens stored in `chrome.storage.local` (not synced across devices)
+12. **WebSocket Security**: Room state initialization protected by `_state_lock` for atomic creation + role assignment
 
 ## Performance Optimizations
 

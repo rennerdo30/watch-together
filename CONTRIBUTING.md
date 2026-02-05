@@ -61,10 +61,16 @@ npm run dev
 
 ### Development Identity
 
-For local development without Cloudflare, use the `?user=` query parameter:
+For local development without Cloudflare, set `DEVELOPMENT_MODE=true` and use the `?user=` query parameter:
+```bash
+# Backend must have DEVELOPMENT_MODE enabled
+DEVELOPMENT_MODE=true uvicorn main:app --reload --port 8000
+```
 ```
 http://localhost:3000/room/test?user=dev@example.com
 ```
+
+> **Note**: The `?user=` query parameter only works when `DEVELOPMENT_MODE=true` is set. This is disabled by default to prevent user impersonation in production.
 
 ## Project Structure
 
@@ -248,6 +254,18 @@ Use GitHub Issues with:
 
 Please report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 Do not open public issues for potential security vulnerabilities.
+
+### Security Guidelines for Contributors
+
+When contributing code, keep these security measures in mind:
+
+- **SSRF Protection**: Any new endpoints that accept URLs must validate them via `validate_proxy_url()` to block access to private/internal networks
+- **CORS**: Origins are configured via `ALLOWED_ORIGINS` env var. Never hardcode `allow_origins=["*"]` with `allow_credentials=True`
+- **Authentication**: The `?user=` query param auth is gated behind `DEVELOPMENT_MODE` env var. Never add unauthenticated access paths in production code
+- **Input Validation**: Room IDs are sanitized to `[a-zA-Z0-9_-]`. Validate all user inputs at system boundaries
+- **Cookie Handling**: Cookie uploads are limited to 1MB and validated for Netscape format. Apply similar validation to new cookie-accepting endpoints
+- **WebSocket Limits**: Connection limits are enforced per-room (50) and per-user (10). Consider resource implications when adding new WebSocket features
+- **Docker**: Container images are pinned to specific versions. Resource limits are configured. Internal services are not exposed on host ports
 
 ## Code of Conduct
 

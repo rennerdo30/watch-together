@@ -12,6 +12,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **PNG Icons**: Added multi-size PNG icons for browser extension
 - **User Detection**: `/api/me` endpoint for automatic user identification
 
+### Security Hardening
+- **SSRF Protection**: Added `validate_proxy_url()` with private IP blocking via `ipaddress` module + DNS resolution
+- **CORS Configuration**: Made configurable via `ALLOWED_ORIGINS` env var; credentials disabled when wildcard
+- **Connection Limits**: Added `MAX_CONNECTIONS_PER_ROOM` (50) and `MAX_CONNECTIONS_PER_USER` (10) limits
+- **Room ID Sanitization**: Restrict to alphanumeric, hyphen, underscore only
+- **Auth Hardening**: Query parameter auth fallback gated behind `DEVELOPMENT_MODE` env var
+- **Cookie Validation**: Added 1MB upload size limit and Netscape format validation
+- **WebSocket Concurrency**: Room state initialization protected with `_state_lock` for atomic creation + role assignment
+- **Heartbeat Locking**: `get_sync_payload` acquires room lock to prevent reading during modification
+- **Cache Robustness**: In-flight request wait has 60s timeout; TOCTOU race in bucket cache fixed
+- **Heartbeat Backoff**: Exponential backoff on consecutive heartbeat errors
+- **Nginx Security Headers**: Added `Content-Security-Policy`, `Strict-Transport-Security`, `Permissions-Policy`
+- **Docker Hardening**: Pinned image versions, added container resource limits, removed exposed internal ports
+- **Extension Permissions**: Restricted `host_permissions` to specific video CDN domains
+- **Extension Token Storage**: Moved tokens from `chrome.storage.sync` to `chrome.storage.local`
+
 ### Fixed
 - **HTTP/2 Protocol Errors**: Added `Connection: close` header and disabled chunked encoding to prevent streaming issues
 - **DASH Loading State**: Fixed loading spinner stuck on true when video/audio already loaded
@@ -22,10 +38,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Nginx Timeouts**: Increased proxy timeouts for large video streams (600s)
 - **Direct MP4 Streams**: Handle non-HLS sources correctly in player
 - **Extension Security**: Fixed multiple security and stability issues in cookie sync
+- **setInterval Leak**: Fixed useDashSync interval accumulation via ref-based callback pattern
+- **Stale Closures**: Fixed useRoomSync stale `playerRef`/`onVideoChange` via `playerRefRef`/`onVideoChangeRef` pattern
+- **AudioContext Leak**: Cleanup now triggers on `sourceElement` change (browser limit ~6 contexts)
+- **DASH Error Listeners**: Fixed gap where error listeners weren't attached on early return
+- **DASH Mode Detection**: Replaced fragile `volume === 0 && !muted` heuristic with `data-stream-type` attribute
+- **Sidebar Resize Leak**: Fixed `mousemove`/`mouseup` listener leak on component unmount
+- **SSR Hydration Mismatch**: Volume/muted state loaded via `useEffect` instead of `useState` initializer
 
 ### Changed
 - **DASH Sync Hook**: Applied callback refs pattern to prevent stale closures
 - **Player Refactor**: Extracted DASH initialization logic to dedicated hook
+- **Dynamic Referer**: Proxy sets referer header dynamically based on URL domain
 
 ---
 

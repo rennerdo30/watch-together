@@ -41,9 +41,12 @@ docker compose logs -f
 ```
 
 The application runs on:
-- **Port 80**: Nginx proxy (main entry point)
-- **Port 3000**: Next.js frontend (internal)
-- **Port 8000**: FastAPI backend (internal)
+- **Port 80**: Nginx proxy (main entry point, only externally exposed port)
+
+Internal services (not exposed to host by default):
+- **Port 3000**: Next.js frontend (Docker-internal only)
+- **Port 8000**: FastAPI backend (Docker-internal only)
+- **Port 4416**: bgutil PO token provider (Docker-internal only)
 
 ## Deployment Options
 
@@ -184,7 +187,13 @@ npm install --legacy-peer-deps
 npm run dev
 ```
 
+Set `DEVELOPMENT_MODE=true` environment variable to enable `?user=` query parameter auth:
+```bash
+DEVELOPMENT_MODE=true uvicorn main:app --reload --port 8000
+```
 Access at http://localhost:3000 with `?user=dev@example.com` for identity.
+
+> **Warning**: Never enable `DEVELOPMENT_MODE` in production. It allows impersonation via query parameter.
 
 ## Configuration
 
@@ -194,6 +203,12 @@ Access at http://localhost:3000 with `?user=dev@example.com` for identity.
 |----------|-------------|---------|
 | `TUNNEL_TOKEN` | Cloudflare Tunnel token | (required for CF) |
 | `DATA_DIR` | Data storage directory | `./data` |
+| `ALLOWED_ORIGINS` | Comma-separated CORS origins (e.g., `https://watch.example.com`) | `*` (wildcard) |
+| `DEVELOPMENT_MODE` | Enable dev features like query param auth (`true`/`false`) | `false` |
+| `MAX_CONNECTIONS_PER_ROOM` | Maximum WebSocket connections per room | `50` |
+| `MAX_CONNECTIONS_PER_USER` | Maximum WebSocket connections per user | `10` |
+
+> **Security Note**: In production, always set `ALLOWED_ORIGINS` to your specific domain(s). When `ALLOWED_ORIGINS` is `*`, CORS credentials are automatically disabled. The `DEVELOPMENT_MODE` flag enables `?user=` query parameter authentication - never enable in production.
 
 ### Data Persistence
 
@@ -214,6 +229,19 @@ The internal Nginx configuration is at `nginx/nginx.conf`. Key settings:
 - **Video Proxy**: Extended timeouts (600s), disabled buffering
 - **WebSocket**: 24-hour timeout for long sessions
 - **Streaming**: Chunked encoding disabled for compatibility
+- **Security Headers**: CSP, HSTS, Permissions-Policy, X-Content-Type-Options, X-Frame-Options
+
+### Container Resource Limits
+
+All containers have memory and CPU limits configured via `deploy.resources.limits`:
+
+| Service | Memory Limit | CPU Limit |
+|---------|-------------|-----------|
+| Backend | 1 GB | 2.0 |
+| Frontend | 512 MB | 1.0 |
+| Proxy (Nginx) | 128 MB | 0.5 |
+| Tunnel | 128 MB | 0.5 |
+| bgutil | 512 MB | 1.0 |
 
 ## Browser Extension
 
