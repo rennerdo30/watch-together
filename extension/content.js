@@ -28,6 +28,12 @@
             const userEmail = userMeta.getAttribute('content');
 
             if (token && userEmail) {
+                // Validate token and email format to prevent storage exhaustion
+                if (token.length > 500 || userEmail.length > 254) {
+                    console.warn('[WT Sync] Token or email too long');
+                    return false;
+                }
+
                 tokenSent = true; // Mark as sent before async operation
                 console.log('[WT Sync] Token detected for user:', userEmail);
 

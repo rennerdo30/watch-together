@@ -27,6 +27,10 @@ const detectedStreams = new Map(); // tabId -> { url, type, timestamp, pageUrl }
 // Sync mutex to prevent concurrent sync operations
 let syncInProgress = false;
 
+// Rate limiting for sync operations
+let lastSyncTime = 0;
+const MIN_SYNC_INTERVAL_MS = 5000; // 5 seconds between syncs
+
 // Stream cleanup interval (1 hour max age)
 const STREAM_MAX_AGE_MS = 60 * 60 * 1000;
 
@@ -251,6 +255,14 @@ async function getBackendUrl() {
  * Sync cookies to Watch Together backend
  */
 async function syncCookies() {
+    // Rate limit check
+    const now = Date.now();
+    if (now - lastSyncTime < MIN_SYNC_INTERVAL_MS) {
+        const waitSec = Math.ceil((MIN_SYNC_INTERVAL_MS - (now - lastSyncTime)) / 1000);
+        console.log(`[WT Sync] Rate limited, wait ${waitSec}s`);
+        return { success: false, error: `Please wait ${waitSec}s before syncing again` };
+    }
+
     // Prevent concurrent sync operations
     if (syncInProgress) {
         console.log('[WT Sync] Sync already in progress, skipping');
@@ -258,6 +270,7 @@ async function syncCookies() {
     }
 
     syncInProgress = true;
+    lastSyncTime = now;
     console.log('[WT Sync] Starting cookie sync...');
 
     try {
@@ -362,8 +375,27 @@ function isVideoManifest(url) {
     return null;
 }
 
+// Scoped URL patterns for video stream detection (instead of <all_urls>)
+const VIDEO_SITE_PATTERNS = [
+    '*://*.youtube.com/*',
+    '*://*.googlevideo.com/*',
+    '*://*.ytimg.com/*',
+    '*://*.twitch.tv/*',
+    '*://*.ttvnw.net/*',
+    '*://*.jtvnw.net/*',
+    '*://*.vimeo.com/*',
+    '*://*.vimeocdn.com/*',
+    '*://*.dailymotion.com/*',
+    '*://*.dm-event.net/*',
+    '*://*.dmcdn.net/*',
+    '*://*.crunchyroll.com/*',
+    '*://*.akamaized.net/*',
+    '*://*.cloudfront.net/*',
+    '*://*.fastly.net/*',
+];
+
 /**
- * Listen for web requests to detect video streams
+ * Listen for web requests to detect video streams (scoped to video sites)
  */
 chrome.webRequest.onCompleted.addListener(
     (details) => {
@@ -384,14 +416,14 @@ chrome.webRequest.onCompleted.addListener(
                 tabId: details.tabId,
                 stream: detectedStreams.get(details.tabId)
             }).catch((err) => {
-                // Only log unexpected errors, not "no receiver" errors
-                if (err.message && !err.message.includes('Receiving end does not exist')) {
-                    console.warn('[WT Sync] Failed to notify popup:', err.message);
+                const errorMsg = err?.message || String(err);
+                if (!errorMsg.includes('Receiving end does not exist')) {
+                    console.warn('[WT Sync] Failed to notify popup:', errorMsg);
                 }
             });
         }
     },
-    { urls: ['<all_urls>'] },
+    { urls: VIDEO_SITE_PATTERNS },
     []
 );
 
@@ -406,8 +438,8 @@ chrome.tabs.onRemoved.addListener((tabId) => {
  * Clean up detected streams when tab navigates to a new page
  */
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-    // Clear stream when navigation starts (before new page loads)
-    if (changeInfo.status === 'loading' && changeInfo.url) {
+    // Clear stream when navigation starts (catches SPA and all navigation types)
+    if (changeInfo.status === 'loading') {
         detectedStreams.delete(tabId);
     }
 });

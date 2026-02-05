@@ -420,7 +420,11 @@ async def get_cached_format(original_url: str) -> Optional[Dict[str, Any]]:
             return None
         
         logger.info(f"Format cache HIT for: {original_url[:60]}...")
-        return json.loads(row["video_data"])
+        try:
+            return json.loads(row["video_data"])
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.error(f"Corrupt format cache entry for {original_url[:60]}: {e}")
+            return None
 
 
 async def cache_format(original_url: str, video_data: Dict[str, Any], ttl_seconds: int = None) -> None:

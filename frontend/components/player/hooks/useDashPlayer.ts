@@ -323,6 +323,11 @@ export function useDashPlayer(options: UseDashPlayerOptions): UseDashPlayerRetur
                 clearTimeout(loadingTimeoutRef.current);
                 loadingTimeoutRef.current = null;
             }
+            // Abort any pending quality switch
+            if (qualitySwitchAbortRef.current) {
+                qualitySwitchAbortRef.current.abort();
+                qualitySwitchAbortRef.current = null;
+            }
             video.removeEventListener('loadedmetadata', onVideoLoaded);
             audio.removeEventListener('loadedmetadata', onAudioLoaded);
             video.removeEventListener('error', onVideoError);

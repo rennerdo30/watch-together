@@ -230,11 +230,18 @@ document.addEventListener('DOMContentLoaded', async () => {
                 sendStatus.textContent = result.message || 'Video queued!';
                 sendStatus.className = 'send-status success';
 
-                // Open Watch Together room in new tab
-                const storage = await chrome.storage.sync.get(['backendUrl']);
+                // Open Watch Together room in new tab (use local storage, validate protocol)
+                const storage = await chrome.storage.local.get(['backendUrl']);
                 if (storage.backendUrl) {
-                    const roomUrl = `${storage.backendUrl}/room/${encodeURIComponent(roomId)}`;
-                    chrome.tabs.create({ url: roomUrl });
+                    try {
+                        const parsed = new URL(storage.backendUrl);
+                        if (['http:', 'https:'].includes(parsed.protocol)) {
+                            const roomUrl = `${storage.backendUrl}/room/${encodeURIComponent(roomId)}`;
+                            chrome.tabs.create({ url: roomUrl });
+                        }
+                    } catch (urlErr) {
+                        console.error('Invalid backend URL:', urlErr);
+                    }
                 }
             } else {
                 sendStatus.textContent = result.error || 'Failed to send';

@@ -256,22 +256,23 @@ class ConnectionManager:
                 if rid not in self.active_connections or not self.active_connections[rid]:
                     stale_rooms.append(rid)
 
-        for rid in stale_rooms:
-            # Re-check before deletion to avoid TOCTOU race
-            if rid not in self.active_connections or not self.active_connections[rid]:
-                if rid in self.room_states:
-                    del self.room_states[rid]
-                if rid in self._room_locks:
-                    del self._room_locks[rid]
-                await delete_room(rid)
-                logger.info(f"Cleaned up stale room: {rid}")
+        # Delete stale rooms under _state_lock to prevent TOCTOU with new connections
+        async with self._state_lock:
+            for rid in stale_rooms:
+                if rid not in self.active_connections or not self.active_connections[rid]:
+                    if rid in self.room_states:
+                        del self.room_states[rid]
+                    if rid in self._room_locks:
+                        del self._room_locks[rid]
+                    await delete_room(rid)
+                    logger.info(f"Cleaned up stale room: {rid}")
 
-        # Clean orphan locks for rooms that no longer exist in room_states
-        orphan_locks = [rid for rid in self._room_locks if rid not in self.room_states]
-        for rid in orphan_locks:
-            del self._room_locks[rid]
-        if orphan_locks:
-            logger.info(f"Cleaned up {len(orphan_locks)} orphan room locks")
+            # Clean orphan locks for rooms that no longer exist in room_states
+            orphan_locks = [rid for rid in self._room_locks if rid not in self.room_states]
+            for rid in orphan_locks:
+                del self._room_locks[rid]
+            if orphan_locks:
+                logger.info(f"Cleaned up {len(orphan_locks)} orphan room locks")
     
     async def disconnect_and_notify(self, websocket: WebSocket, room_id: str):
         await self.disconnect(websocket, room_id)

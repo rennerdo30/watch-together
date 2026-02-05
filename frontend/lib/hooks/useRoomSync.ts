@@ -115,6 +115,9 @@ export function useRoomSync({
     // Latency tracking
     const latencyRef = useRef<number>(0);
 
+    // Track sync retry timeouts for proper cleanup
+    const syncRetryRef = useRef<NodeJS.Timeout | null>(null);
+
     // Sync threshold ref for access in callbacks
     const syncThresholdRef = useRef(syncThreshold);
     useEffect(() => { syncThresholdRef.current = syncThreshold; }, [syncThreshold]);
@@ -213,9 +216,11 @@ export function useRoomSync({
 
                 if (!applyPlayerSync() && payload.video_data) {
                     // Player not ready - retry after a short delay
-                    const retryTimeout = setTimeout(() => applyPlayerSync(), 500);
-                    // Cleanup on next message (best-effort)
-                    setTimeout(() => clearTimeout(retryTimeout), 5000);
+                    if (syncRetryRef.current) clearTimeout(syncRetryRef.current);
+                    syncRetryRef.current = setTimeout(() => {
+                        applyPlayerSync();
+                        syncRetryRef.current = null;
+                    }, 500);
                 }
                 break;
 
@@ -433,6 +438,7 @@ export function useRoomSync({
             if (wsRef.current) wsRef.current.close();
             if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
             if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+            if (syncRetryRef.current) clearTimeout(syncRetryRef.current);
         };
     }, [connect]);
 

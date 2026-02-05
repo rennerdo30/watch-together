@@ -168,40 +168,43 @@ async def sync_heartbeat_task():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan - start/stop background tasks."""
-    # Initialize database and run migrations
-    init_database()
+    tasks = []
+    try:
+        # Initialize database and run migrations
+        init_database()
 
-    # Load persisted room states
-    await manager.initialize()
-    logger.info(f"Loaded {len(manager.room_states)} rooms from database")
+        # Load persisted room states
+        await manager.initialize()
+        logger.info(f"Loaded {len(manager.room_states)} rooms from database")
 
-    tasks = [
-        asyncio.create_task(cleanup_task()),
-        asyncio.create_task(cache_cleanup_task()),
-        asyncio.create_task(sync_heartbeat_task()),
-        asyncio.create_task(prefetch_cleanup_task()),
-    ]
-    logger.info("Started background tasks: room cleanup, cache cleanup, sync heartbeat, prefetch cleanup")
-    yield
+        tasks = [
+            asyncio.create_task(cleanup_task()),
+            asyncio.create_task(cache_cleanup_task()),
+            asyncio.create_task(sync_heartbeat_task()),
+            asyncio.create_task(prefetch_cleanup_task()),
+        ]
+        logger.info("Started background tasks: room cleanup, cache cleanup, sync heartbeat, prefetch cleanup")
+        yield
+    finally:
+        # Cancel and await all background tasks (even on startup failure)
+        for task in tasks:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass  # Expected when task is cancelled
+            except Exception as e:
+                logger.warning(f"Error during task shutdown: {e}")
 
-    # Cancel and await all background tasks
-    for task in tasks:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass  # Expected when task is cancelled
-        except Exception as e:
-            logger.warning(f"Error during task shutdown: {e}")
+        if tasks:
+            logger.info("All background tasks shut down cleanly")
 
-    logger.info("All background tasks shut down cleanly")
-
-    # Clean up HTTP client
-    global _proxy_client
-    if _proxy_client is not None:
-        await _proxy_client.aclose()
-        _proxy_client = None
-        logger.info("Closed proxy HTTP client")
+        # Clean up HTTP client
+        global _proxy_client
+        if _proxy_client is not None:
+            await _proxy_client.aclose()
+            _proxy_client = None
+            logger.info("Closed proxy HTTP client")
 
 
 # ============================================================================
@@ -779,9 +782,13 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
     )
     if not connected:
         return
+    MAX_WS_MESSAGE_SIZE = 100 * 1024  # 100KB
     try:
         while True:
             data = await websocket.receive_text()
+            if len(data) > MAX_WS_MESSAGE_SIZE:
+                logger.warning(f"Oversized message from {user_email}: {len(data)} bytes")
+                continue
             try:
                 message = json.loads(data)
             except json.JSONDecodeError:

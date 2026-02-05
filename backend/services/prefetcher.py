@@ -247,7 +247,10 @@ async def cleanup_stale_sessions():
         ]
         for url in stale:
             session = _prefetch_sessions.pop(url)
-            await session.cleanup()
+            try:
+                await session.cleanup()
+            except Exception as e:
+                logger.error(f"Failed to cleanup prefetch session {url[:60]}: {e}")
         if stale:
             logger.info(f"Cleaned up {len(stale)} stale prefetch sessions")
 

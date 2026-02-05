@@ -27,6 +27,13 @@ _RATE_LIMIT_MAX_REQUESTS = 10  # Max uploads per window
 def _check_rate_limit(user_email: str) -> None:
     """Check and enforce per-user rate limit. Raises HTTPException if exceeded."""
     now = time.time()
+
+    # Periodic cleanup of stale entries to prevent unbounded growth
+    if len(_rate_limit_store) > 1000:
+        stale_keys = [k for k, (_, ts) in _rate_limit_store.items() if now - ts > _RATE_LIMIT_WINDOW * 2]
+        for k in stale_keys:
+            del _rate_limit_store[k]
+
     entry = _rate_limit_store.get(user_email)
     if entry:
         count, window_start = entry

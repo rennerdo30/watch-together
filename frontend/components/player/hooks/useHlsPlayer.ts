@@ -349,15 +349,19 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
     }, [videoRef, src, enabled, autoPlay, initialTime, isLive, isHlsSource, isHlsSupported, isNativeHls]);
 
     // === EFFECT: Initialize on mount/src change ===
+    const initVersionRef = useRef(0);
     useEffect(() => {
         // Reset lastSrcRef when src changes to allow reinitialization
         if (src !== lastSrcRef.current) {
             lastSrcRef.current = ''; // Clear to allow initHls to run
         }
 
+        const currentVersion = ++initVersionRef.current;
         let initTimer: number | null = null;
         if (enabled && src) {
             initTimer = window.setTimeout(() => {
+                // Verify this is still the current version (prevents double init on rapid changes)
+                if (initVersionRef.current !== currentVersion) return;
                 initHls();
             }, 0);
         }
