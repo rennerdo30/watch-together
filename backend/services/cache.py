@@ -224,11 +224,17 @@ async def get_or_fetch_segment(url: str, fetch_fn) -> bytes:
             event = None  # Signal that we're the fetcher
     
     if event is not None:
-        # Wait for the other request to complete
-        await event.wait()
+        # Wait for the other request to complete (with timeout to prevent hanging)
+        try:
+            await asyncio.wait_for(event.wait(), timeout=60.0)
+        except asyncio.TimeoutError:
+            logger.warning(f"In-flight request wait timed out: {url[:60]}...")
+            raise Exception("Timed out waiting for in-flight request")
         result_data, result_error = _in_flight_results.get(url, (None, None))
         if result_error:
             raise result_error
+        if result_data is None:
+            raise Exception("In-flight request returned no data")
         return result_data
     
     # We're the fetcher

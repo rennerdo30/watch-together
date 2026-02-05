@@ -22,6 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import StreamingResponse, Response
 from contextlib import asynccontextmanager
 import httpx
+import ipaddress
 import aiofiles
 import yt_dlp
 
@@ -53,6 +54,50 @@ from connection_manager import manager
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Allowed origins for CORS (set via environment variable, comma-separated)
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "").split(",") if os.environ.get("ALLOWED_ORIGINS") else ["*"]
+
+# Connection limits
+MAX_CONNECTIONS_PER_ROOM = int(os.environ.get("MAX_CONNECTIONS_PER_ROOM", "50"))
+MAX_CONNECTIONS_PER_USER = int(os.environ.get("MAX_CONNECTIONS_PER_USER", "10"))
+
+
+def _is_private_ip(hostname: str) -> bool:
+    """Check if a hostname resolves to a private/reserved IP address."""
+    try:
+        addr = ipaddress.ip_address(hostname)
+        return addr.is_private or addr.is_reserved or addr.is_loopback or addr.is_link_local
+    except ValueError:
+        # Not an IP literal - resolve hostname
+        import socket
+        try:
+            resolved = socket.getaddrinfo(hostname, None)
+            for family, _type, _proto, _canonname, sockaddr in resolved:
+                ip_str = sockaddr[0]
+                addr = ipaddress.ip_address(ip_str)
+                if addr.is_private or addr.is_reserved or addr.is_loopback or addr.is_link_local:
+                    return True
+        except socket.gaierror:
+            return True  # Can't resolve = block
+    return False
+
+
+def validate_proxy_url(url: str) -> None:
+    """Validate that a proxy URL is safe (no SSRF). Raises HTTPException on failure."""
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+
+    # Must be http or https
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(status_code=400, detail="Only http/https URLs are allowed")
+
+    if not parsed.hostname:
+        raise HTTPException(status_code=400, detail="Invalid URL: no hostname")
+
+    # Block private/internal IPs
+    if _is_private_ip(parsed.hostname):
+        raise HTTPException(status_code=400, detail="Access to internal networks is not allowed")
+
 
 # ============================================================================
 # Background Tasks
@@ -67,12 +112,15 @@ async def cleanup_task():
 
 async def sync_heartbeat_task():
     """Background task for sync heartbeat - broadcasts authoritative time every 5 seconds."""
+    consecutive_errors = 0
     while True:
         await asyncio.sleep(5)
         try:
             for room_id, state in list(manager.room_states.items()):
                 if state.get("is_playing") and manager.active_connections.get(room_id):
-                    sync_payload = manager.get_sync_payload(room_id)
+                    # H8: Acquire room lock to prevent reading state while it's being modified
+                    async with manager._get_room_lock(room_id):
+                        sync_payload = manager.get_sync_payload(room_id)
                     await manager.broadcast({
                         "type": "heartbeat",
                         "payload": {
@@ -81,8 +129,15 @@ async def sync_heartbeat_task():
                             "is_playing": True
                         }
                     }, room_id)
+            consecutive_errors = 0
         except Exception as e:
-            logger.warning(f"Heartbeat error: {e}")
+            consecutive_errors += 1
+            if consecutive_errors <= 3:
+                logger.warning(f"Heartbeat error: {e}")
+            elif consecutive_errors == 4:
+                logger.error(f"Heartbeat errors persist ({consecutive_errors}x), suppressing further warnings")
+            # M3: Exponential backoff for failing heartbeats
+            await asyncio.sleep(min(2 ** consecutive_errors, 30))
 
 
 # ============================================================================
@@ -136,8 +191,8 @@ app = FastAPI(title="Watch Together Backend", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True if ALLOWED_ORIGINS != ["*"] else False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -409,9 +464,23 @@ async def proxy_stream(request: Request, url: str):
     if not url:
         raise HTTPException(status_code=400, detail="Missing URL")
 
-    referer = "https://www.youtube.com/"
-    if "twitch.tv" in url or "ttvnw.net" in url:
+    # SSRF protection: validate URL before proxying
+    validate_proxy_url(url)
+
+    # Dynamic referer based on URL domain
+    from urllib.parse import urlparse
+    parsed_url = urlparse(url)
+    hostname = parsed_url.hostname or ""
+    if "youtube.com" in hostname or "googlevideo.com" in hostname or "ytimg.com" in hostname:
+        referer = "https://www.youtube.com/"
+    elif "twitch.tv" in hostname or "ttvnw.net" in hostname:
         referer = "https://www.twitch.tv/"
+    elif "vimeo.com" in hostname or "vimeocdn.com" in hostname:
+        referer = "https://vimeo.com/"
+    elif "dailymotion.com" in hostname or "dm-event.net" in hostname:
+        referer = "https://www.dailymotion.com/"
+    else:
+        referer = f"{parsed_url.scheme}://{hostname}/"
 
     host = request.headers.get("host")
     proto = "https" if request.headers.get("x-forwarded-proto") == "https" else "http"
@@ -523,7 +592,11 @@ async def proxy_stream(request: Request, url: str):
                         try:
                             cache_file = await aiofiles.open(bucket_cache_path, 'rb')
                             await cache_file.seek(offset)
-                            os.utime(bucket_cache_path, None)
+                            # M1: Wrap utime in its own try-except for TOCTOU race
+                            try:
+                                os.utime(bucket_cache_path, None)
+                            except (FileNotFoundError, OSError):
+                                pass  # File may have been deleted between open and utime
                         except FileNotFoundError:
                             logger.warning(f"Bucket cache file deleted during read: {bucket_cache_path}")
                             # Fall through to upstream fetch
@@ -665,11 +738,34 @@ async def proxy_stream(request: Request, url: str):
 @app.websocket("/ws/{room_id}")
 async def websocket_endpoint(websocket: WebSocket, room_id: str):
     """WebSocket handler for room synchronization."""
+    # H1: Sanitize room ID to prevent injection attacks
+    room_id = re.sub(r'[^a-zA-Z0-9_-]', '', room_id)
+    if not room_id:
+        await websocket.close(code=4000, reason="Invalid room ID")
+        return
+
     user_email = websocket.headers.get("cf-access-authenticated-user-email")
     if not user_email:
         user_email = websocket.query_params.get("user")
     if not user_email:
         user_email = "Guest"
+
+    # H2: Connection limits - per room
+    room_connections = len(manager.active_connections.get(room_id, []))
+    if room_connections >= MAX_CONNECTIONS_PER_ROOM:
+        await websocket.accept()
+        await websocket.close(code=4001, reason="Room is full")
+        return
+
+    # H2: Connection limits - per user
+    user_connection_count = sum(
+        1 for conns in manager.active_connections.values()
+        for ws in conns if getattr(ws, "user_email", None) == user_email
+    )
+    if user_connection_count >= MAX_CONNECTIONS_PER_USER:
+        await websocket.accept()
+        await websocket.close(code=4002, reason="Too many connections")
+        return
 
     await manager.connect(websocket, room_id, user_email)
     try:

@@ -93,35 +93,31 @@ export function CustomPlayer({
     const [liveLatency, setLiveLatency] = useState(0);
     const [seekableRange, setSeekableRange] = useState({ start: 0, end: 0 });
 
-    // === VOLUME STATE (persisted) ===
-    const [volume, setVolume] = useState(() => {
-        if (typeof window !== 'undefined') {
-            const saved = localStorage.getItem('w2g-player-volume');
-            return saved !== null ? parseFloat(saved) : 1.0;
-        }
-        return 1.0;
-    });
-    const [isMuted, setIsMuted] = useState(() => {
-        if (typeof window !== 'undefined') {
-            return localStorage.getItem('w2g-player-muted') === 'true';
-        }
-        return false;
-    });
+    // === VOLUME STATE (persisted via useEffect to avoid SSR hydration mismatch) ===
+    const [volume, setVolume] = useState(1.0);
+    const [isMuted, setIsMuted] = useState(false);
+    const volumeInitializedRef = useRef(false);
 
-    // === NORMALIZATION STATE (persisted) ===
-    const [isNormalizationEnabled, setIsNormalizationEnabled] = useState(() => {
-        if (typeof window !== 'undefined') {
-            return localStorage.getItem('w2g-player-normalization') !== 'false';
+    useEffect(() => {
+        if (!volumeInitializedRef.current) {
+            volumeInitializedRef.current = true;
+            const savedVolume = localStorage.getItem('w2g-player-volume');
+            if (savedVolume !== null) setVolume(parseFloat(savedVolume));
+            const savedMuted = localStorage.getItem('w2g-player-muted');
+            if (savedMuted === 'true') setIsMuted(true);
         }
-        return true;
-    });
-    const [normalizationGain, setNormalizationGain] = useState(() => {
-        if (typeof window !== 'undefined') {
-            const saved = localStorage.getItem('w2g-player-normalization-gain');
-            return saved !== null ? parseFloat(saved) : 1.0;
-        }
-        return 1.0;
-    });
+    }, []);
+
+    // === NORMALIZATION STATE (persisted via useEffect to avoid SSR hydration mismatch) ===
+    const [isNormalizationEnabled, setIsNormalizationEnabled] = useState(true);
+    const [normalizationGain, setNormalizationGain] = useState(1.0);
+
+    useEffect(() => {
+        const savedNorm = localStorage.getItem('w2g-player-normalization');
+        if (savedNorm === 'false') setIsNormalizationEnabled(false);
+        const savedGain = localStorage.getItem('w2g-player-normalization-gain');
+        if (savedGain !== null) setNormalizationGain(parseFloat(savedGain));
+    }, []);
 
     // === DASH SYNC HOOK ===
     const dashSync = useDashSync({
@@ -407,6 +403,7 @@ export function CustomPlayer({
                 poster={poster}
                 className="w-full h-full object-contain"
                 playsInline
+                data-stream-type={isDashMode ? 'dash' : 'hls'}
                 onClick={() => {
                     if (isLive) return;
                     handlePlayToggle();

@@ -331,11 +331,11 @@ export function useAudioNormalization(options: UseAudioNormalizationOptions): Us
         };
     }, []);
 
-    // === EFFECT: Cleanup on unmount ===
+    // === EFFECT: Close AudioContext when source element changes or on unmount ===
+    // This prevents leaking AudioContexts (browsers limit to ~6 concurrent ones)
     useEffect(() => {
         return () => {
             if (audioContextRef.current) {
-                // Close AudioContext
                 audioContextRef.current.close().catch(() => { });
                 audioContextRef.current = null;
             }
@@ -344,7 +344,7 @@ export function useAudioNormalization(options: UseAudioNormalizationOptions): Us
             gainNodeRef.current = null;
             connectedElementRef.current = null;
         };
-    }, []);
+    }, [sourceElement]);
 
     return {
         isActive: enabled && connectionStatus === 'connected',

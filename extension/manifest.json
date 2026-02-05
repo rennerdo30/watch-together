@@ -12,18 +12,27 @@
   ],
   "host_permissions": [
     "https://*.youtube.com/*",
+    "https://*.googlevideo.com/*",
     "https://*.twitch.tv/*",
+    "https://*.ttvnw.net/*",
     "https://*.vimeo.com/*",
+    "https://*.vimeocdn.com/*",
     "https://*.dailymotion.com/*",
-    "https://*.crunchyroll.com/*",
-    "*://*/*"
+    "https://*.dm-event.net/*",
+    "https://*.crunchyroll.com/*"
   ],
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
     {
-      "matches": ["*://*/*"],
+      "matches": [
+        "https://*.youtube.com/*",
+        "https://*.twitch.tv/*",
+        "https://*.vimeo.com/*",
+        "https://*.dailymotion.com/*",
+        "https://*.crunchyroll.com/*"
+      ],
       "js": ["content.js"],
       "run_at": "document_end"
     }

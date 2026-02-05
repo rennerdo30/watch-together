@@ -7,6 +7,8 @@ from core.config import COOKIES_DIR
 
 logger = logging.getLogger(__name__)
 
+DEVELOPMENT_MODE = os.environ.get("DEVELOPMENT_MODE", "").lower() in ("true", "1", "yes")
+
 
 def get_user_cookie_path(user_email: str) -> str:
     """
@@ -38,10 +40,14 @@ def get_user_cookie_path(user_email: str) -> str:
 
 
 def get_user_from_request(request) -> str:
-    """Extract user identity from Cloudflare header or query param."""
+    """Extract user identity from Cloudflare header or query param.
+
+    Query param fallback is only available in DEVELOPMENT_MODE to prevent
+    impersonation attacks in production.
+    """
     # Try Cloudflare Access header first
     user_email = request.headers.get("cf-access-authenticated-user-email")
-    # Fallback to query param for dev/testing
-    if not user_email:
+    # Fallback to query param only in development mode
+    if not user_email and DEVELOPMENT_MODE:
         user_email = request.query_params.get("user")
     return user_email

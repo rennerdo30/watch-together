@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["cookies"])
 
 
+MAX_COOKIE_SIZE = 1 * 1024 * 1024  # 1MB limit
+
+
 class CookieContent(pydantic.BaseModel):
     content: str
 
@@ -54,6 +57,20 @@ async def update_cookies(request: Request, cookie_data: CookieContent):
         content = cookie_data.content
         if not content.strip():
             raise HTTPException(status_code=400, detail="Empty content")
+
+        # Validate size
+        if len(content.encode('utf-8')) > MAX_COOKIE_SIZE:
+            raise HTTPException(status_code=400, detail="Cookie content exceeds 1MB limit")
+
+        # Validate basic Netscape format
+        lines = [l.strip() for l in content.splitlines() if l.strip() and not l.strip().startswith('#')]
+        for line in lines[:5]:  # Check first few data lines
+            parts = line.split('\t')
+            if len(parts) != 7:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid Netscape cookie format. Each data line must have 7 tab-separated fields."
+                )
 
         # 1. Save to Database
         from services.database import save_user_cookies

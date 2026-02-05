@@ -144,7 +144,7 @@ async function handleTokenDetected(token, userEmail, backendUrl) {
     console.log('[WT Sync] Token detected for user:', userEmail, 'backend:', backendUrl);
 
     try {
-        await chrome.storage.sync.set({ token, userEmail, backendUrl });
+        await chrome.storage.local.set({ token, userEmail, backendUrl });
     } catch (err) {
         console.error('[WT Sync] Failed to save token:', err);
         return { success: false, error: 'Failed to save token to storage' };
@@ -169,14 +169,16 @@ async function updateSettings(settings) {
  * Get current extension status
  */
 async function getStatus() {
-    const storage = await chrome.storage.sync.get(['token', 'userEmail', 'lastSync', 'lastSyncStatus', 'domains', 'autoSync']);
+    // Credentials from local storage, preferences from sync storage
+    const local = await chrome.storage.local.get(['token', 'userEmail', 'backendUrl', 'lastSync', 'lastSyncStatus']);
+    const sync = await chrome.storage.sync.get(['domains', 'autoSync']);
     return {
-        connected: !!storage.token,
-        userEmail: storage.userEmail || null,
-        lastSync: storage.lastSync || null,
-        lastSyncStatus: storage.lastSyncStatus || null,
-        domains: storage.domains || DEFAULT_DOMAINS,
-        autoSync: storage.autoSync !== false
+        connected: !!local.token,
+        userEmail: local.userEmail || null,
+        lastSync: local.lastSync || null,
+        lastSyncStatus: local.lastSyncStatus || null,
+        domains: sync.domains || DEFAULT_DOMAINS,
+        autoSync: sync.autoSync !== false
     };
 }
 
@@ -240,7 +242,7 @@ async function getCookiesForDomains(domains) {
  * Get the backend URL from storage or default
  */
 async function getBackendUrl() {
-    const storage = await chrome.storage.sync.get(['backendUrl']);
+    const storage = await chrome.storage.local.get(['backendUrl']);
     // Default to the current tab's origin if we have a token
     return storage.backendUrl || null;
 }
@@ -259,11 +261,13 @@ async function syncCookies() {
     console.log('[WT Sync] Starting cookie sync...');
 
     try {
-        const storage = await chrome.storage.sync.get(['token', 'domains', 'backendUrl']);
+        const local = await chrome.storage.local.get(['token', 'backendUrl']);
+        const sync = await chrome.storage.sync.get(['domains']);
+        const storage = { ...sync, ...local };
 
         if (!storage.token) {
             console.log('[WT Sync] No token configured');
-            await chrome.storage.sync.set({ lastSyncStatus: 'No token configured' });
+            await chrome.storage.local.set({ lastSyncStatus: 'No token configured' });
             return { success: false, error: 'No token configured' };
         }
 
@@ -272,7 +276,7 @@ async function syncCookies() {
 
         if (cookies.length === 0) {
             console.log('[WT Sync] No cookies to sync');
-            await chrome.storage.sync.set({ lastSyncStatus: 'No cookies found' });
+            await chrome.storage.local.set({ lastSyncStatus: 'No cookies found' });
             return { success: false, error: 'No cookies found for configured domains' };
         }
 
@@ -281,7 +285,7 @@ async function syncCookies() {
 
         if (!backendUrl) {
             console.log('[WT Sync] No backend URL configured');
-            await chrome.storage.sync.set({ lastSyncStatus: 'No backend URL' });
+            await chrome.storage.local.set({ lastSyncStatus: 'No backend URL' });
             return { success: false, error: 'No backend URL configured. Visit Watch Together to configure.' };
         }
 
@@ -290,12 +294,12 @@ async function syncCookies() {
             const parsedUrl = new URL(backendUrl);
             if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
                 console.error('[WT Sync] Invalid backend URL protocol:', parsedUrl.protocol);
-                await chrome.storage.sync.set({ lastSyncStatus: 'Invalid backend URL' });
+                await chrome.storage.local.set({ lastSyncStatus: 'Invalid backend URL' });
                 return { success: false, error: 'Invalid backend URL protocol' };
             }
         } catch {
             console.error('[WT Sync] Invalid backend URL format');
-            await chrome.storage.sync.set({ lastSyncStatus: 'Invalid backend URL' });
+            await chrome.storage.local.set({ lastSyncStatus: 'Invalid backend URL' });
             return { success: false, error: 'Invalid backend URL format' };
         }
 
@@ -323,7 +327,7 @@ async function syncCookies() {
         const result = await response.json();
         const now = Date.now();
 
-        await chrome.storage.sync.set({
+        await chrome.storage.local.set({
             lastSync: now,
             lastSyncStatus: 'Success'
         });
@@ -333,7 +337,7 @@ async function syncCookies() {
 
     } catch (err) {
         console.error('[WT Sync] Sync failed:', err);
-        await chrome.storage.sync.set({ lastSyncStatus: err.message });
+        await chrome.storage.local.set({ lastSyncStatus: err.message });
         return { success: false, error: err.message };
     } finally {
         syncInProgress = false;
@@ -432,7 +436,7 @@ async function sendToRoom(roomId, videoUrl, pageUrl) {
     console.log(`[WT Sync] Sending to room ${roomId}:`, videoUrl?.slice(0, 80) || pageUrl);
 
     try {
-        const storage = await chrome.storage.sync.get(['token', 'backendUrl']);
+        const storage = await chrome.storage.local.get(['token', 'backendUrl']);
 
         if (!storage.token || !storage.backendUrl) {
             return { success: false, error: 'Not connected to Watch Together' };

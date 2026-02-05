@@ -146,28 +146,39 @@ export default function RoomPage() {
         }
     }, []);
 
-    const startResizing = (e: React.MouseEvent) => {
-        isResizing.current = true;
-        document.addEventListener('mousemove', handleMouseMove);
-        document.addEventListener('mouseup', stopResizing);
-        document.body.style.cursor = 'col-resize';
-    };
+    const handleMouseMoveRef = useRef<(e: MouseEvent) => void>(() => {});
+    const stopResizingRef = useRef<() => void>(() => {});
 
-    const stopResizing = () => {
-        isResizing.current = false;
-        document.removeEventListener('mousemove', handleMouseMove);
-        document.removeEventListener('mouseup', stopResizing);
-        document.body.style.cursor = 'default';
-        localStorage.setItem('wt_sidebar_width', sidebarWidth.toString());
-    };
-
-    const handleMouseMove = (e: MouseEvent) => {
+    handleMouseMoveRef.current = (e: MouseEvent) => {
         if (!isResizing.current) return;
         const width = window.innerWidth - e.clientX;
         if (width >= 240 && width <= 600) {
             setSidebarWidth(width);
         }
     };
+
+    stopResizingRef.current = () => {
+        isResizing.current = false;
+        document.removeEventListener('mousemove', handleMouseMoveRef.current);
+        document.removeEventListener('mouseup', stopResizingRef.current);
+        document.body.style.cursor = 'default';
+        localStorage.setItem('wt_sidebar_width', sidebarWidth.toString());
+    };
+
+    const startResizing = (e: React.MouseEvent) => {
+        isResizing.current = true;
+        document.addEventListener('mousemove', handleMouseMoveRef.current);
+        document.addEventListener('mouseup', stopResizingRef.current);
+        document.body.style.cursor = 'col-resize';
+    };
+
+    // Cleanup resize listeners on unmount to prevent leaks
+    useEffect(() => {
+        return () => {
+            document.removeEventListener('mousemove', handleMouseMoveRef.current);
+            document.removeEventListener('mouseup', stopResizingRef.current);
+        };
+    }, []);
 
     const handleDragStart = (event: DragStartEvent) => {
         setActiveDragId(event.active.id as string);

@@ -119,6 +119,12 @@ export function useRoomSync({
     const syncThresholdRef = useRef(syncThreshold);
     useEffect(() => { syncThresholdRef.current = syncThreshold; }, [syncThreshold]);
 
+    // Callback refs to avoid stale closures and prevent WebSocket reconnections
+    const playerRefRef = useRef(playerRef);
+    useEffect(() => { playerRefRef.current = playerRef; }, [playerRef]);
+    const onVideoChangeRef = useRef(onVideoChange);
+    useEffect(() => { onVideoChangeRef.current = onVideoChange; }, [onVideoChange]);
+
     // Room state
     const [roomState, setRoomState] = useState<RoomState>({
         videoData: null,
@@ -144,7 +150,7 @@ export function useRoomSync({
 
     const [loadingQueueIndex, setLoadingQueueIndex] = useState<number | null>(null);
 
-    // Message handler
+    // Message handler - uses refs for playerRef and onVideoChange to avoid stale closures
     const handleMessage = useCallback((msg: RoomWsMessage) => {
         const type = msg.type;
         const payload = msg.payload ?? {};
@@ -164,7 +170,7 @@ export function useRoomSync({
                             resolveUrl(newVideoUrl)
                                 .then((freshData) => {
                                     setRoomState(prev => ({ ...prev, videoData: freshData }));
-                                    onVideoChange?.(freshData);
+                                    onVideoChangeRef.current?.(freshData);
                                 })
                                 .catch(() => {
                                     setRoomState(prev => ({ ...prev, videoData: syncVideoData }));
@@ -187,17 +193,18 @@ export function useRoomSync({
                 }));
 
                 // Sync player state
-                if (playerRef.current && payload.video_data) {
+                if (playerRefRef.current.current && payload.video_data) {
+                    const player = playerRefRef.current.current;
                     const serverTimestamp = typeof payload.timestamp === 'number' ? payload.timestamp : 0;
-                    if (payload.is_playing) Promise.resolve(playerRef.current.play?.()).catch(() => { });
-                    else playerRef.current.pause?.();
+                    if (payload.is_playing) Promise.resolve(player.play?.()).catch(() => { });
+                    else player.pause?.();
 
                     const isLive = payload.video_data.is_live;
                     if (!isLive || serverTimestamp !== 0) {
-                        const playerTime = playerRef.current.currentTime?.() ?? 0;
+                        const playerTime = player.currentTime?.() ?? 0;
                         const diff = Math.abs(playerTime - serverTimestamp);
                         if (diff > syncThresholdRef.current) {
-                            playerRef.current.currentTime?.(serverTimestamp);
+                            player.currentTime?.(serverTimestamp);
                         }
                     }
                 }
@@ -223,7 +230,7 @@ export function useRoomSync({
                     resolveUrl(queuedVideoData.original_url)
                         .then((freshData) => {
                             setRoomState(prev => ({ ...prev, videoData: freshData }));
-                            onVideoChange?.(freshData);
+                            onVideoChangeRef.current?.(freshData);
                         })
                         .catch(() => { });
                 } else if (payload.video_data) {
@@ -233,33 +240,36 @@ export function useRoomSync({
                 break;
 
             case 'play':
-                if (playerRef.current) {
+                if (playerRefRef.current.current) {
+                    const player = playerRefRef.current.current;
                     const serverTimestamp = typeof payload.timestamp === 'number' ? payload.timestamp : 0;
                     if (!(payload.video_data?.is_live && serverTimestamp === 0)) {
-                        playerRef.current.currentTime?.(serverTimestamp);
+                        player.currentTime?.(serverTimestamp);
                     }
-                    playerRef.current.play?.();
+                    player.play?.();
                 }
                 setRoomState(prev => ({ ...prev, isPlaying: true }));
                 break;
 
             case 'pause':
-                if (playerRef.current) {
+                if (playerRefRef.current.current) {
+                    const player = playerRefRef.current.current;
                     const serverTimestamp = typeof payload.timestamp === 'number' ? payload.timestamp : 0;
-                    playerRef.current.pause?.();
+                    player.pause?.();
                     if (!(payload.video_data?.is_live && serverTimestamp === 0)) {
-                        playerRef.current.currentTime?.(serverTimestamp);
+                        player.currentTime?.(serverTimestamp);
                     }
                 }
                 setRoomState(prev => ({ ...prev, isPlaying: false }));
                 break;
 
             case 'seek':
-                if (playerRef.current && typeof payload.timestamp === 'number') {
+                if (playerRefRef.current.current && typeof payload.timestamp === 'number') {
+                    const player = playerRefRef.current.current;
                     // Apply latency compensation to seek (same as heartbeat)
                     const compensatedSeekTime = payload.timestamp + (latencyRef.current / 1000);
-                    playerRef.current.currentTime?.(compensatedSeekTime);
-                    const video = playerRef.current.getVideoElement?.();
+                    player.currentTime?.(compensatedSeekTime);
+                    const video = player.getVideoElement?.();
                     if (video) video.playbackRate = 1.0;
                 }
                 break;
@@ -291,21 +301,21 @@ export function useRoomSync({
                 break;
 
             case 'heartbeat':
-                if (playerRef.current && payload.is_playing && typeof payload.timestamp === 'number') {
-                    const currentTime = playerRef.current.currentTime?.() ?? 0;
+                if (playerRefRef.current.current && payload.is_playing && typeof payload.timestamp === 'number') {
+                    const player = playerRefRef.current.current;
+                    const currentTime = player.currentTime?.() ?? 0;
                     const compensatedTimestamp = payload.timestamp + (latencyRef.current / 1000);
                     const drift = compensatedTimestamp - currentTime;
 
-                    const video = playerRef.current.getVideoElement?.();
+                    const video = player.getVideoElement?.();
                     if (video) {
-                        // Check if we're in DASH mode (video has volume=0 and there's a separate audio element)
-                        // In DASH mode, useDashSync handles its own A/V sync, so we should only do hard seeks
-                        // and avoid playback rate manipulation which would desync audio
-                        const isDashMode = video.volume === 0 && !video.muted;
+                        // Check if we're in DASH mode using data attribute set by custom-player
+                        // (more reliable than checking video.volume === 0 && !video.muted)
+                        const isDashMode = video.dataset.streamType === 'dash';
 
                         if (Math.abs(drift) > syncThresholdRef.current) {
                             // Hard seek for large drift (works for both modes)
-                            playerRef.current.currentTime?.(compensatedTimestamp);
+                            player.currentTime?.(compensatedTimestamp);
                             video.playbackRate = 1.0;
                         } else if (!isDashMode) {
                             // Only adjust playback rate in HLS mode (not DASH)
@@ -339,7 +349,7 @@ export function useRoomSync({
             }));
         }
 
-    }, [playerRef, onVideoChange]); // Use roomStateRef.current instead of roomState in closure
+    }, []); // All external deps accessed via refs to prevent reconnections
 
     // Connect function
     const connect = useCallback(function connectSocket() {

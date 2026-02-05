@@ -347,8 +347,10 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
     /**
      * Core sync loop - runs via setInterval to support background tabs
      * (requestAnimationFrame stops when tab is hidden)
+     * Stored in a ref to prevent setInterval recreation on every dependency change.
      */
-    const syncLoop = useCallback(() => {
+    const syncLoopRef = useRef<() => void>(() => {});
+    syncLoopRef.current = useCallback(() => {
         if (!enabled) return;
 
         const video = videoRef.current;
@@ -446,6 +448,11 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
             recoverAudio(video, audio);
         }
     }, [enabled, videoRef, audioRef, config, getBufferHealth, updateState, performHeavySync, recoverAudio, safeAudioPlay, safeAudioPause]);
+
+    // Stable wrapper that always calls the latest syncLoop via ref
+    const stableSyncLoop = useCallback(() => {
+        syncLoopRef.current();
+    }, []);
 
     // === PUBLIC API ===
 
@@ -553,12 +560,13 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
             return;
         }
 
-        // Start the sync loop with setInterval
-        // setInterval continues running in background tabs (throttled to ~1Hz by browser)
-        syncIntervalIdRef.current = setInterval(syncLoop, syncIntervalMs);
+        // Start the sync loop with setInterval using the stable wrapper.
+        // The stable wrapper always calls the latest syncLoop via ref,
+        // so the interval never needs to be recreated when callbacks change.
+        syncIntervalIdRef.current = setInterval(stableSyncLoop, syncIntervalMs);
 
         // Also run immediately
-        syncLoop();
+        stableSyncLoop();
 
         return () => {
             if (syncIntervalIdRef.current) {
@@ -566,7 +574,7 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
                 syncIntervalIdRef.current = null;
             }
         };
-    }, [enabled, syncLoop, syncIntervalMs]);
+    }, [enabled, stableSyncLoop, syncIntervalMs]);
 
     // === EFFECT: Handle visibility change (tab switching) ===
     useEffect(() => {

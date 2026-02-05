@@ -179,7 +179,24 @@ export function useDashPlayer(options: UseDashPlayerOptions): UseDashPlayerRetur
                 setIsLoading(false);
                 callbackRefs.current.onLoadingChange?.(false);
             }
-            return;
+
+            // Always attach error listeners even on early return (H9: error listener gap fix)
+            const onVideoError = () => {
+                const errorMsg = `Video error: ${video.error?.message || 'Unknown'}`;
+                setError(errorMsg);
+                callbackRefs.current.onError?.(errorMsg);
+            };
+            const onAudioError = () => {
+                const errorMsg = `Audio error: ${audio.error?.message || 'Unknown'}`;
+                setError(errorMsg);
+                callbackRefs.current.onError?.(errorMsg);
+            };
+            video.addEventListener('error', onVideoError);
+            audio.addEventListener('error', onAudioError);
+            return () => {
+                video.removeEventListener('error', onVideoError);
+                audio.removeEventListener('error', onAudioError);
+            };
         }
         dashInitializedRef.current = initKey;
 

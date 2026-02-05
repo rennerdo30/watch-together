@@ -139,41 +139,49 @@ class ConnectionManager:
 
     async def connect(self, websocket: WebSocket, room_id: str, user_email: str):
         await websocket.accept()
-        if room_id not in self.active_connections:
-            self.active_connections[room_id] = []
-            
-        if room_id not in self.room_states:
-            self.room_states[room_id] = {
-                "video_data": None,
-                "is_playing": False,
-                "timestamp": 0,
-                "last_sync_time": time.time(),
-                "members": [],
-                "queue": [],
-                "roles": {},
-                "playing_index": -1,
-                "permanent": False
-            }
-        
-        # Ensure 'members' and 'last_sync_time' exist in state
-        if "members" not in self.room_states[room_id]:
-            self.room_states[room_id]["members"] = []
-        if "last_sync_time" not in self.room_states[room_id]:
-            self.room_states[room_id]["last_sync_time"] = time.time()
-        # Clear empty_since flag since someone has rejoined
-        if "empty_since" in self.room_states[room_id]:
-            del self.room_states[room_id]["empty_since"]
 
-        # Assign role if needed
-        current_roles = self.room_states[room_id].get("roles", {})
-        if not current_roles:
-            # First user becomes admin
-            current_roles[user_email] = "admin"
-        elif user_email not in current_roles:
-            # Default to user
-            current_roles[user_email] = "user"
-        
-        self.room_states[room_id]["roles"] = current_roles
+        # Use state lock for atomic room creation + role assignment (H7: race condition fix)
+        async with self._state_lock:
+            if room_id not in self.active_connections:
+                self.active_connections[room_id] = []
+
+            if room_id not in self.room_states:
+                self.room_states[room_id] = {
+                    "video_data": None,
+                    "is_playing": False,
+                    "timestamp": 0,
+                    "last_sync_time": time.time(),
+                    "members": [],
+                    "queue": [],
+                    "roles": {},
+                    "playing_index": -1,
+                    "permanent": False
+                }
+
+            # Ensure per-room lock exists
+            if room_id not in self._room_locks:
+                self._room_locks[room_id] = asyncio.Lock()
+
+            # Ensure 'members' and 'last_sync_time' exist in state
+            if "members" not in self.room_states[room_id]:
+                self.room_states[room_id]["members"] = []
+            if "last_sync_time" not in self.room_states[room_id]:
+                self.room_states[room_id]["last_sync_time"] = time.time()
+            # Clear empty_since flag since someone has rejoined
+            if "empty_since" in self.room_states[room_id]:
+                del self.room_states[room_id]["empty_since"]
+
+            # Assign role if needed (atomic with room creation)
+            current_roles = self.room_states[room_id].get("roles", {})
+            if not current_roles:
+                # First user becomes admin
+                current_roles[user_email] = "admin"
+            elif user_email not in current_roles:
+                # Default to user
+                current_roles[user_email] = "user"
+
+            self.room_states[room_id]["roles"] = current_roles
+
         await self._save_room_state(room_id)
 
         self.active_connections[room_id].append(websocket)
