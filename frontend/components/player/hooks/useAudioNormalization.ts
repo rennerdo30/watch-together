@@ -271,7 +271,11 @@ export function useAudioNormalization(options: UseAudioNormalizationOptions): Us
         if (enabled) {
             // Connect to element if not already connected
             if (connectedElementRef.current !== sourceElement) {
-                connectSource(sourceElement);
+                // Defer connection to avoid synchronous state updates directly inside this effect.
+                const timerId = window.setTimeout(() => {
+                    connectSource(sourceElement);
+                }, 0);
+                return () => window.clearTimeout(timerId);
             } else if (connectionStatus === 'connected') {
                 // Already connected, ensure chain is connected
                 reconnectNormalization();

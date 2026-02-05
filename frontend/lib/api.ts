@@ -35,6 +35,13 @@ export interface ResolveResponse {
     audio_options?: AudioOption[];
 }
 
+export interface RoomSummary {
+    id: string;
+    active_users: number;
+    current_video?: string;
+    queue_size: number;
+}
+
 export async function resolveUrl(url: string): Promise<ResolveResponse> {
     const encodedUrl = encodeURIComponent(url);
     const ua = typeof window !== 'undefined' ? encodeURIComponent(navigator.userAgent) : '';
@@ -56,7 +63,7 @@ export async function resolveUrl(url: string): Promise<ResolveResponse> {
 
     return res.json();
 }
-export async function fetchRooms(): Promise<any[]> {
+export async function fetchRooms(): Promise<RoomSummary[]> {
     const res = await fetch(`${API_BASE_URL}/api/rooms`, { cache: 'no-store' });
     if (!res.ok) return [];
     return res.json();

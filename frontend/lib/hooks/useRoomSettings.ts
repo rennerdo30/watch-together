@@ -20,6 +20,11 @@ import {
 } from '@/lib/themes';
 import toast from 'react-hot-toast';
 
+const getErrorMessage = (error: unknown, fallback: string): string => {
+    if (error instanceof Error) return error.message;
+    return fallback;
+};
+
 export interface UseRoomSettingsReturn {
     // Theme
     activeTheme: Theme;
@@ -186,8 +191,8 @@ export function useRoomSettings(): UseRoomSettingsReturn {
 
             toast.success('Cookies saved!');
             setCookieContent('');
-        } catch (err: any) {
-            toast.error(err.message || 'Failed to save cookies');
+        } catch (err: unknown) {
+            toast.error(getErrorMessage(err, 'Failed to save cookies'));
         } finally {
             setIsSavingCookies(false);
         }

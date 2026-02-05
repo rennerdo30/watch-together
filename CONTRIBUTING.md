@@ -8,7 +8,10 @@ Thank you for your interest in contributing to Watch Together! This document pro
 - [Code Style](#code-style)
 - [Making Changes](#making-changes)
 - [Testing](#testing)
+- [GitHub Workflows](#github-workflows)
 - [Pull Request Process](#pull-request-process)
+- [Security](#security)
+- [Code of Conduct](#code-of-conduct)
 
 ## Development Setup
 
@@ -198,6 +201,15 @@ cd frontend && npm run build
 cd backend && python -m py_compile main.py connection_manager.py
 ```
 
+## GitHub Workflows
+
+This repository uses GitHub Actions for quality, security, and release automation:
+
+- **CI** (`.github/workflows/ci.yml`): backend tests, frontend lint/build, extension sanity checks
+- **CodeQL** (`.github/workflows/codeql.yml`): security scanning for Python and TypeScript/JavaScript
+- **Container Publish** (`.github/workflows/docker-publish.yml`): publish backend/frontend images to GHCR on `main`
+- **Dependabot** (`.github/dependabot.yml`): automated dependency update pull requests
+
 ## Pull Request Process
 
 1. **Fork** the repository
@@ -231,6 +243,15 @@ Use GitHub Issues with:
 - **Bug reports**: Steps to reproduce, expected vs actual behavior, browser/OS info
 - **Feature requests**: Clear description of the feature and use case
 - **Questions**: Check existing issues first, then ask
+
+## Security
+
+Please report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+Do not open public issues for potential security vulnerabilities.
+
+## Code of Conduct
+
+By participating in this project, you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Questions?
 

@@ -2,15 +2,20 @@
 
 import React, { useState } from 'react';
 import { Loader2, Plus, Play } from 'lucide-react';
-import { resolveUrl } from '@/lib/api';
+import { resolveUrl, type ResolveResponse } from '@/lib/api';
 import toast from 'react-hot-toast';
 
 interface UrlInputFormProps {
-    onPlayNow: (videoData: any) => void;
-    onAddToQueue: (videoData: any) => void;
+    onPlayNow: (videoData: ResolveResponse) => void;
+    onAddToQueue: (videoData: ResolveResponse) => void;
     accentColor: string;
     disabled?: boolean;
 }
+
+const getErrorMessage = (error: unknown, fallback: string): string => {
+    if (error instanceof Error) return error.message;
+    return fallback;
+};
 
 export function UrlInputForm({
     onPlayNow,
@@ -30,9 +35,9 @@ export function UrlInputForm({
             onPlayNow(data);
             setInputUrl('');
             toast.success(`Playing: ${data.title}`);
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error(err);
-            toast.error(err.message || 'Failed to resolve video');
+            toast.error(getErrorMessage(err, 'Failed to resolve video'));
         } finally {
             setLoading(false);
         }
@@ -46,9 +51,9 @@ export function UrlInputForm({
             onAddToQueue(data);
             setInputUrl('');
             toast.success(`Added to queue: ${data.title}`);
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error(err);
-            toast.error(err.message || 'Failed to resolve video');
+            toast.error(getErrorMessage(err, 'Failed to resolve video'));
         } finally {
             setLoading(false);
         }

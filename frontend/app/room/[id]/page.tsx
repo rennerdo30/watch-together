@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
     Loader2, Users, Link as LinkIcon,
@@ -24,6 +24,39 @@ function getWsUrl(roomId: string) {
     const host = window.location.host;
     return `${protocol}//${host}/ws/${roomId}`;
 }
+
+interface RoomPlayer {
+    play: () => Promise<void> | void;
+    pause: () => void;
+    currentTime: (time?: number) => number;
+    getDuration: () => number;
+    setVolume: (val: number) => void;
+    getVideoElement: () => HTMLVideoElement | null;
+}
+
+type WsPayload = {
+    video_data?: ResolveResponse;
+    members?: { email: string }[];
+    queue?: ResolveResponse[];
+    roles?: Record<string, string>;
+    your_email?: string;
+    playing_index?: number;
+    permanent?: boolean;
+    is_playing?: boolean;
+    timestamp?: number;
+    client_time?: number;
+    [key: string]: unknown;
+};
+
+interface WsMessage {
+    type: string;
+    payload?: WsPayload;
+}
+
+const getErrorMessage = (error: unknown, fallback: string): string => {
+    if (error instanceof Error) return error.message;
+    return fallback;
+};
 
 export default function RoomPage() {
     const { id: roomId } = useParams() as { id: string };
@@ -86,7 +119,7 @@ export default function RoomPage() {
 
     // WS & Player Refs
     const wsRef = useRef<WebSocket | null>(null);
-    const playerRef = useRef<any>(null);
+    const playerRef = useRef<RoomPlayer | null>(null);
     const internalUpdateCount = useRef(0); // Counter to prevent feedback loops during sync
     const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
 
@@ -279,31 +312,33 @@ export default function RoomPage() {
     // Note: We no longer need a local ticker for syncState.timestamp
     // The badge now uses actualPlayerTime which is updated via onTimeUpdate
 
-    const handleWsMessage = (msg: any) => {
-        const { type, payload } = msg;
+    const handleWsMessage = (msg: WsMessage) => {
+        const type = msg.type;
+        const payload = msg.payload ?? {};
         internalUpdateCount.current += 1; // Increment counter to block local events
 
         switch (type) {
             case 'sync':
                 // On sync (initial load or reconnect), set video data and re-resolve for fresh DASH URLs
                 if (payload.video_data) {
-                    const isSameVideo = videoData?.original_url === payload.video_data.original_url;
+                    const syncVideoData = payload.video_data;
+                    const isSameVideo = videoData?.original_url === syncVideoData.original_url;
 
                     if (!videoData || !isSameVideo) {
                         // New video or first load: Re-resolve for fresh stream URLs
-                        if (payload.video_data.original_url) {
+                        if (syncVideoData.original_url) {
                             console.log('[Room] Sync: Re-resolving video for fresh stream URLs...');
-                            resolveUrl(payload.video_data.original_url)
+                            resolveUrl(syncVideoData.original_url)
                                 .then((freshData) => {
                                     console.log('[Room] Sync: Got fresh stream:', freshData.stream_type, freshData.quality);
                                     setVideoData(freshData);
                                 })
                                 .catch((err) => {
                                     console.warn('[Room] Sync: Re-resolve failed, using cached data:', err.message);
-                                    setVideoData(payload.video_data);
+                                    setVideoData(syncVideoData);
                                 });
                         } else {
-                            setVideoData(payload.video_data);
+                            setVideoData(syncVideoData);
                         }
                     } else {
                         // Same video already loaded, just update state if needed
@@ -318,16 +353,17 @@ export default function RoomPage() {
                 if (typeof payload.permanent === 'boolean') setIsPermanent(payload.permanent);
 
                 if (playerRef.current && payload.video_data) {
-                    if (payload.is_playing) playerRef.current.play?.().catch(() => { });
+                    const serverTimestamp = typeof payload.timestamp === 'number' ? payload.timestamp : 0;
+                    if (payload.is_playing) Promise.resolve(playerRef.current.play?.()).catch(() => { });
                     else playerRef.current.pause?.();
 
                     const isLive = payload.video_data.is_live;
-                    if (isLive && payload.timestamp === 0) {
+                    if (isLive && serverTimestamp === 0) {
                         // Stay at live edge
                     } else if (playerRef.current) {
                         const playerTime = playerRef.current.currentTime();
-                        const diff = Math.abs(playerTime - payload.timestamp);
-                        if (diff > syncThresholdRef.current) playerRef.current.currentTime(payload.timestamp);
+                        const diff = Math.abs(playerTime - serverTimestamp);
+                        if (diff > syncThresholdRef.current) playerRef.current.currentTime(serverTimestamp);
                     }
                 }
                 break;
@@ -341,11 +377,12 @@ export default function RoomPage() {
                 // ALWAYS re-resolve when playing a video to get fresh stream URLs
                 // YouTube URLs expire, so we can't cache them
                 if (payload.video_data?.original_url) {
+                    const queuedVideoData = payload.video_data;
                     console.log('[Room] Re-resolving video for fresh stream URLs...');
                     // Show cached data immediately as placeholder
-                    setVideoData(payload.video_data);
+                    setVideoData(queuedVideoData);
 
-                    resolveUrl(payload.video_data.original_url)
+                    resolveUrl(queuedVideoData.original_url)
                         .then((freshData) => {
                             console.log('[Room] Got fresh stream:', freshData.stream_type, freshData.quality);
                             setVideoData(freshData);
@@ -354,35 +391,39 @@ export default function RoomPage() {
                             console.warn('[Room] Re-resolve failed:', err.message);
                             // Keep showing cached data, might still work if not expired
                         });
-                } else {
+                } else if (payload.video_data) {
                     setVideoData(payload.video_data);
                 }
                 break;
             case 'play':
                 if (playerRef.current) {
-                    if (!(payload.video_data?.is_live && payload.timestamp === 0)) {
-                        playerRef.current.currentTime(payload.timestamp);
+                    const serverTimestamp = typeof payload.timestamp === 'number' ? payload.timestamp : 0;
+                    if (!(payload.video_data?.is_live && serverTimestamp === 0)) {
+                        playerRef.current.currentTime(serverTimestamp);
                     }
                     playerRef.current.play();
                 }
                 break;
             case 'pause':
                 if (playerRef.current) {
+                    const serverTimestamp = typeof payload.timestamp === 'number' ? payload.timestamp : 0;
                     playerRef.current.pause();
-                    if (!(payload.video_data?.is_live && payload.timestamp === 0)) {
-                        playerRef.current.currentTime(payload.timestamp);
+                    if (!(payload.video_data?.is_live && serverTimestamp === 0)) {
+                        playerRef.current.currentTime(serverTimestamp);
                     }
                 }
                 break;
             case 'seek':
                 // Intentional seek - always hard jump
-                if (playerRef.current) playerRef.current.currentTime(payload.timestamp);
+                if (playerRef.current && typeof payload.timestamp === 'number') {
+                    playerRef.current.currentTime(payload.timestamp);
+                }
                 // Reset playback rate after seek
                 const seekVideo = playerRef.current?.getVideoElement?.();
                 if (seekVideo) seekVideo.playbackRate = 1.0;
                 break;
             case 'queue_update':
-                setQueue(payload.queue);
+                if (payload.queue) setQueue(payload.queue);
                 if (typeof payload.playing_index === 'number') setPlayingIndex(payload.playing_index);
                 break;
             case 'roles_update':
@@ -403,7 +444,7 @@ export default function RoomPage() {
                 break;
             case 'heartbeat':
                 // Gradual sync - adjust playback rate instead of jumping for small drifts
-                if (playerRef.current && payload.is_playing && payload.timestamp !== undefined) {
+                if (playerRef.current && payload.is_playing && typeof payload.timestamp === 'number') {
                     const currentTime = playerRef.current.currentTime();
                     // Compensate for latency (one-way delay)
                     const compensatedTimestamp = payload.timestamp + (latencyRef.current / 1000);
@@ -451,7 +492,7 @@ export default function RoomPage() {
         setTimeout(() => { internalUpdateCount.current = Math.max(0, internalUpdateCount.current - 1); }, 300);
     };
 
-    const sendMsg = (type: string, payload?: any) => {
+    const sendMsg = (type: string, payload?: unknown) => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
             wsRef.current.send(JSON.stringify({ type, payload }));
         }
@@ -466,9 +507,9 @@ export default function RoomPage() {
             sendMsg('set_video', { video_data: data });
             setInputUrl('');
             toast.success(`Playing: ${data.title}`);
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error(err);
-            toast.error(err.message || 'Failed to resolve video');
+            toast.error(getErrorMessage(err, 'Failed to resolve video'));
         } finally { setLoading(false); }
     };
 
@@ -480,9 +521,9 @@ export default function RoomPage() {
             sendMsg('queue_add', { video_data: data });
             setInputUrl('');
             toast.success(`Added to queue: ${data.title}`);
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error(err);
-            toast.error(err.message || 'Failed to resolve video');
+            toast.error(getErrorMessage(err, 'Failed to resolve video'));
         } finally { setLoading(false); }
     };
 
@@ -1157,8 +1198,8 @@ export default function RoomPage() {
                                                         }
                                                         toast.success("Cookies saved!");
                                                         setCookieContent('');
-                                                    } catch (err: any) {
-                                                        toast.error(err.message || "Failed to save cookies");
+                                                    } catch (err: unknown) {
+                                                        toast.error(getErrorMessage(err, "Failed to save cookies"));
                                                     } finally {
                                                         setIsSavingCookies(false);
                                                     }
@@ -1227,8 +1268,8 @@ export default function RoomPage() {
                                                                 const response = await regenerateExtensionToken();
                                                                 setExtensionToken(response.token);
                                                                 toast.success('Token regenerated!');
-                                                            } catch (err: any) {
-                                                                toast.error(err.message || 'Failed to regenerate');
+                                                            } catch (err: unknown) {
+                                                                toast.error(getErrorMessage(err, 'Failed to regenerate'));
                                                             } finally {
                                                                 setIsRegeneratingToken(false);
                                                             }

@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { Bug, Copy, Check } from 'lucide-react';
+import type { ResolveResponse } from '@/lib/api';
 
 interface DebugPanelProps {
     syncInfo: {
@@ -10,10 +11,10 @@ interface DebugPanelProps {
         lastSync: string;
         latency?: number;
     };
-    videoData: any;
+    videoData: ResolveResponse | null;
     connected: boolean;
     members: { email: string }[];
-    queue: any[];
+    queue: ResolveResponse[];
     playingIndex: number;
     actualPlayerTime: number;
 }

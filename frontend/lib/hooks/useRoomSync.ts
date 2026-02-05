@@ -45,7 +45,7 @@ export interface SyncInfo {
 
 export interface UseRoomSyncOptions {
     roomId: string;
-    playerRef: React.MutableRefObject<any>;
+    playerRef: React.MutableRefObject<RoomPlayer | null>;
     syncThreshold: number;
     onVideoChange?: (videoData: ResolveResponse) => void;
 }
@@ -58,8 +58,33 @@ export interface UseRoomSyncReturn {
     loadingQueueIndex: number | null;
 
     // Actions  
-    sendMessage: (type: string, payload?: any) => void;
+    sendMessage: (type: string, payload?: unknown) => void;
     setLoadingQueueIndex: (index: number | null) => void;
+}
+
+interface RoomPlayer {
+    play?: () => Promise<void> | void;
+    pause?: () => void;
+    currentTime?: (time?: number) => number;
+    getVideoElement?: () => HTMLVideoElement | null;
+}
+
+type RoomWsPayload = {
+    video_data?: ResolveResponse;
+    members?: { email: string }[];
+    queue?: ResolveResponse[];
+    roles?: Record<string, string>;
+    your_email?: string;
+    playing_index?: number;
+    is_playing?: boolean;
+    timestamp?: number;
+    client_time?: number;
+    [key: string]: unknown;
+};
+
+interface RoomWsMessage {
+    type: string;
+    payload?: RoomWsPayload;
 }
 
 function getWsUrl(roomId: string) {
@@ -120,16 +145,18 @@ export function useRoomSync({
     const [loadingQueueIndex, setLoadingQueueIndex] = useState<number | null>(null);
 
     // Message handler
-    const handleMessage = useCallback((msg: { type: string; payload: any }) => {
-        const { type, payload } = msg;
+    const handleMessage = useCallback((msg: RoomWsMessage) => {
+        const type = msg.type;
+        const payload = msg.payload ?? {};
 
         switch (type) {
             case 'sync':
                 // Initial sync or reconnect
                 if (payload.video_data) {
+                    const syncVideoData = payload.video_data;
                     // Use ref to get current video URL (avoids stale closure)
                     const currentVideoUrl = roomStateRef.current.videoData?.original_url;
-                    const newVideoUrl = payload.video_data.original_url;
+                    const newVideoUrl = syncVideoData.original_url;
 
                     if (!currentVideoUrl || currentVideoUrl !== newVideoUrl) {
                         // Re-resolve for fresh URLs
@@ -140,10 +167,10 @@ export function useRoomSync({
                                     onVideoChange?.(freshData);
                                 })
                                 .catch(() => {
-                                    setRoomState(prev => ({ ...prev, videoData: payload.video_data }));
+                                    setRoomState(prev => ({ ...prev, videoData: syncVideoData }));
                                 });
                         } else {
-                            setRoomState(prev => ({ ...prev, videoData: payload.video_data }));
+                            setRoomState(prev => ({ ...prev, videoData: syncVideoData }));
                         }
                     }
                 }
@@ -161,49 +188,55 @@ export function useRoomSync({
 
                 // Sync player state
                 if (playerRef.current && payload.video_data) {
-                    if (payload.is_playing) playerRef.current.play?.().catch(() => { });
+                    const serverTimestamp = typeof payload.timestamp === 'number' ? payload.timestamp : 0;
+                    if (payload.is_playing) Promise.resolve(playerRef.current.play?.()).catch(() => { });
                     else playerRef.current.pause?.();
 
                     const isLive = payload.video_data.is_live;
-                    if (!isLive || payload.timestamp !== 0) {
+                    if (!isLive || serverTimestamp !== 0) {
                         const playerTime = playerRef.current.currentTime?.() ?? 0;
-                        const diff = Math.abs(playerTime - payload.timestamp);
+                        const diff = Math.abs(playerTime - serverTimestamp);
                         if (diff > syncThresholdRef.current) {
-                            playerRef.current.currentTime?.(payload.timestamp);
+                            playerRef.current.currentTime?.(serverTimestamp);
                         }
                     }
                 }
                 break;
 
             case 'user_joined':
-            case 'user_left':
-                if (payload.members) {
-                    setRoomState(prev => ({ ...prev, members: payload.members }));
+            case 'user_left': {
+                const updatedMembers = payload.members;
+                if (updatedMembers) {
+                    setRoomState(prev => ({ ...prev, members: updatedMembers }));
                 }
                 break;
+            }
 
             case 'set_video':
                 setLoadingQueueIndex(null);
                 setSyncInfo(prev => ({ ...prev, timestamp: 0, isPlaying: true }));
 
                 if (payload.video_data?.original_url) {
-                    setRoomState(prev => ({ ...prev, videoData: payload.video_data }));
+                    const queuedVideoData = payload.video_data;
+                    setRoomState(prev => ({ ...prev, videoData: queuedVideoData }));
 
-                    resolveUrl(payload.video_data.original_url)
+                    resolveUrl(queuedVideoData.original_url)
                         .then((freshData) => {
                             setRoomState(prev => ({ ...prev, videoData: freshData }));
                             onVideoChange?.(freshData);
                         })
                         .catch(() => { });
-                } else {
-                    setRoomState(prev => ({ ...prev, videoData: payload.video_data }));
+                } else if (payload.video_data) {
+                    const fallbackVideoData = payload.video_data;
+                    setRoomState(prev => ({ ...prev, videoData: fallbackVideoData }));
                 }
                 break;
 
             case 'play':
                 if (playerRef.current) {
-                    if (!(payload.video_data?.is_live && payload.timestamp === 0)) {
-                        playerRef.current.currentTime?.(payload.timestamp);
+                    const serverTimestamp = typeof payload.timestamp === 'number' ? payload.timestamp : 0;
+                    if (!(payload.video_data?.is_live && serverTimestamp === 0)) {
+                        playerRef.current.currentTime?.(serverTimestamp);
                     }
                     playerRef.current.play?.();
                 }
@@ -212,16 +245,17 @@ export function useRoomSync({
 
             case 'pause':
                 if (playerRef.current) {
+                    const serverTimestamp = typeof payload.timestamp === 'number' ? payload.timestamp : 0;
                     playerRef.current.pause?.();
-                    if (!(payload.video_data?.is_live && payload.timestamp === 0)) {
-                        playerRef.current.currentTime?.(payload.timestamp);
+                    if (!(payload.video_data?.is_live && serverTimestamp === 0)) {
+                        playerRef.current.currentTime?.(serverTimestamp);
                     }
                 }
                 setRoomState(prev => ({ ...prev, isPlaying: false }));
                 break;
 
             case 'seek':
-                if (playerRef.current) {
+                if (playerRef.current && typeof payload.timestamp === 'number') {
                     // Apply latency compensation to seek (same as heartbeat)
                     const compensatedSeekTime = payload.timestamp + (latencyRef.current / 1000);
                     playerRef.current.currentTime?.(compensatedSeekTime);
@@ -233,19 +267,21 @@ export function useRoomSync({
             case 'queue_update':
                 setRoomState(prev => ({
                     ...prev,
-                    queue: payload.queue,
+                    queue: payload.queue ?? prev.queue,
                     playingIndex: payload.playing_index ?? prev.playingIndex,
                 }));
                 break;
 
-            case 'roles_update':
-                if (payload.roles) {
-                    setRoomState(prev => ({ ...prev, roles: payload.roles }));
+            case 'roles_update': {
+                const updatedRoles = payload.roles;
+                if (updatedRoles) {
+                    setRoomState(prev => ({ ...prev, roles: updatedRoles }));
                 }
                 break;
+            }
 
             case 'pong':
-                if (payload.client_time) {
+                if (typeof payload.client_time === 'number') {
                     const rtt = performance.now() - payload.client_time;
                     latencyRef.current = latencyRef.current === 0
                         ? rtt / 2
@@ -255,7 +291,7 @@ export function useRoomSync({
                 break;
 
             case 'heartbeat':
-                if (playerRef.current && payload.is_playing && payload.timestamp !== undefined) {
+                if (playerRef.current && payload.is_playing && typeof payload.timestamp === 'number') {
                     const currentTime = playerRef.current.currentTime?.() ?? 0;
                     const compensatedTimestamp = payload.timestamp + (latencyRef.current / 1000);
                     const drift = compensatedTimestamp - currentTime;
@@ -306,7 +342,7 @@ export function useRoomSync({
     }, [playerRef, onVideoChange]); // Use roomStateRef.current instead of roomState in closure
 
     // Connect function
-    const connect = useCallback(() => {
+    const connect = useCallback(function connectSocket() {
         if (!roomId || typeof window === 'undefined') return;
 
         let url = getWsUrl(roomId);
@@ -354,7 +390,7 @@ export function useRoomSync({
                 );
                 reconnectAttempts.current++;
                 console.log(`[RoomSync] Reconnecting in ${Math.round(delay)}ms (attempt ${reconnectAttempts.current}/${MAX_RECONNECT_ATTEMPTS})`);
-                reconnectTimer.current = setTimeout(connect, delay);
+                reconnectTimer.current = setTimeout(connectSocket, delay);
             } else {
                 console.error('[RoomSync] Max reconnection attempts reached');
             }
@@ -364,7 +400,7 @@ export function useRoomSync({
     }, [roomId, handleMessage]);
 
     // Send message function
-    const sendMessage = useCallback((type: string, payload?: any) => {
+    const sendMessage = useCallback((type: string, payload?: unknown) => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
             wsRef.current.send(JSON.stringify({ type, payload }));
         }

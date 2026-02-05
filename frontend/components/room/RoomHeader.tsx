@@ -1,13 +1,14 @@
 'use client';
 
 import React from 'react';
-import { Home, Settings, Users, ListVideo, Crown, Infinity } from 'lucide-react';
+import { Home, Settings, Infinity } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import type { ResolveResponse } from '@/lib/api';
 
 interface RoomHeaderProps {
     roomId: string;
     connected: boolean;
-    videoData: any;
+    videoData: ResolveResponse | null;
     actualPlayerTime: number;
     isPlaying: boolean;
     isPermanent: boolean;

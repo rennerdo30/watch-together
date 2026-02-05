@@ -1,0 +1,16 @@
+# Default code owners
+* @rennerdo30
+
+# Backend
+/backend/ @rennerdo30
+
+# Frontend
+/frontend/ @rennerdo30
+
+# Browser extension
+/extension/ @rennerdo30
+
+# Infrastructure and CI
+/.github/ @rennerdo30
+/docker-compose.yml @rennerdo30
+/nginx/ @rennerdo30

@@ -4,6 +4,8 @@
 [![Docker](https://img.shields.io/badge/Docker-Ready-blue?logo=docker)](docker-compose.yml)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
+[![CI](https://github.com/rennerdo30/watch-together/actions/workflows/ci.yml/badge.svg)](https://github.com/rennerdo30/watch-together/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/rennerdo30/watch-together/actions/workflows/codeql.yml/badge.svg)](https://github.com/rennerdo30/watch-together/actions/workflows/codeql.yml)
 
 A real-time video synchronization platform for watching YouTube, Twitch, and 1800+ other sites together. Built with Next.js 16, FastAPI, and yt-dlp.
 
@@ -122,7 +124,10 @@ watch-together/
 ├── extension/             # Browser extension for cookie sync
 ├── nginx/                 # Nginx configuration
 ├── docker-compose.yml     # Container orchestration
-└── docs/                  # Documentation
+├── CONTRIBUTING.md        # Contribution guidelines
+├── DEPLOYMENT.md          # Deployment guide
+├── SECURITY.md            # Security policy
+└── SUPPORT.md             # Support policy
 ```
 
 ## Documentation
@@ -132,6 +137,9 @@ watch-together/
 - [SPECIFICATION.md](SPECIFICATION.md) - Technical specification
 - [CHANGELOG.md](CHANGELOG.md) - Version history
 - [ISSUES.md](ISSUES.md) - Known issues and roadmap
+- [SECURITY.md](SECURITY.md) - Responsible vulnerability disclosure
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) - Community standards
+- [SUPPORT.md](SUPPORT.md) - Support channels and expectations
 
 ## Tech Stack
 

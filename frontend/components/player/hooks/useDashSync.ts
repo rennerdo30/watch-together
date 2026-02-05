@@ -16,6 +16,10 @@ interface DashSyncConfig {
     heavySyncThreshold: number;
 }
 
+interface AudioElementWithContext extends HTMLAudioElement {
+    _audioContext?: AudioContext;
+}
+
 const DEFAULT_CONFIG: DashSyncConfig = {
     bufferThreshold: 0.8,      // Pause audio if less than 0.8s buffered (was 0.3 - higher threshold for stability)
     driftThreshold: 0.2,       // Correct drift > 200ms (was 0.15 - allow slightly more drift)
@@ -234,7 +238,7 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
                     try {
                         // Check if there's a suspended AudioContext we need to resume
                         // The audio element may be routed through Web Audio API for normalization
-                        const audioContext = (audio as any)._audioContext as AudioContext | undefined;
+                        const audioContext = (audio as AudioElementWithContext)._audioContext;
                         if (audioContext && audioContext.state === 'suspended') {
                             await audioContext.resume();
                             console.log('[DashSync] Resumed suspended AudioContext');

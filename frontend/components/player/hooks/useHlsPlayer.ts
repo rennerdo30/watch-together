@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useEffect, useCallback, useState } from 'react';
+import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import Hls from 'hls.js';
 
 export interface UseHlsPlayerOptions {
@@ -82,13 +82,15 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
         onLoadingChange,
         onBufferingChange,
     });
-    callbackRefs.current = {
-        onManifestParsed,
-        onLevelSwitch,
-        onError,
-        onLoadingChange,
-        onBufferingChange,
-    };
+    useEffect(() => {
+        callbackRefs.current = {
+            onManifestParsed,
+            onLevelSwitch,
+            onError,
+            onLoadingChange,
+            onBufferingChange,
+        };
+    }, [onManifestParsed, onLevelSwitch, onError, onLoadingChange, onBufferingChange]);
 
     // State
     const [isLoading, setIsLoading] = useState(true);
@@ -104,8 +106,11 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
 
     // Check HLS support
     const isHlsSupported = typeof window !== 'undefined' && Hls.isSupported();
-    const isNativeHls = typeof window !== 'undefined' &&
-        videoRef.current?.canPlayType('application/vnd.apple.mpegurl') === 'probably';
+    const isNativeHls = useMemo(() => {
+        if (typeof window === 'undefined') return false;
+        const testVideo = document.createElement('video');
+        return testVideo.canPlayType('application/vnd.apple.mpegurl') === 'probably';
+    }, []);
 
     /**
      * Check if source is HLS
@@ -350,11 +355,17 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
             lastSrcRef.current = ''; // Clear to allow initHls to run
         }
 
+        let initTimer: number | null = null;
         if (enabled && src) {
-            initHls();
+            initTimer = window.setTimeout(() => {
+                initHls();
+            }, 0);
         }
 
         return () => {
+            if (initTimer) {
+                window.clearTimeout(initTimer);
+            }
             if (hlsRef.current) {
                 hlsRef.current.destroy();
                 hlsRef.current = null;
