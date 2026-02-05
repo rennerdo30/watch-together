@@ -200,8 +200,10 @@ _format_cache: Dict[str, Tuple[dict, float]] = {}
 # In-flight request tracking for deduplication
 # Maps URL to (asyncio.Event, bytes | None, error | None)
 _in_flight_requests: Dict[str, asyncio.Event] = {}
-_in_flight_results: Dict[str, Tuple[Optional[bytes], Optional[Exception]]] = {}
+_in_flight_results: Dict[str, Tuple[Optional[bytes], Optional[Exception], float]] = {}  # Added timestamp
 _in_flight_lock = asyncio.Lock()
+_IN_FLIGHT_MAX_SIZE = 100  # Max tracked in-flight results before forced cleanup
+_IN_FLIGHT_RESULT_TTL = 30.0  # Seconds to keep results before cleanup
 
 
 async def get_or_fetch_segment(url: str, fetch_fn) -> bytes:
@@ -230,20 +232,23 @@ async def get_or_fetch_segment(url: str, fetch_fn) -> bytes:
         except asyncio.TimeoutError:
             logger.warning(f"In-flight request wait timed out: {url[:60]}...")
             raise Exception("Timed out waiting for in-flight request")
-        result_data, result_error = _in_flight_results.get(url, (None, None))
+        result = _in_flight_results.get(url)
+        if result is None:
+            raise Exception("In-flight request returned no data")
+        result_data, result_error, _ = result
         if result_error:
             raise result_error
         if result_data is None:
             raise Exception("In-flight request returned no data")
         return result_data
-    
+
     # We're the fetcher
     try:
         data = await fetch_fn()
-        _in_flight_results[url] = (data, None)
+        _in_flight_results[url] = (data, None, time.time())
         return data
     except Exception as e:
-        _in_flight_results[url] = (None, e)
+        _in_flight_results[url] = (None, e, time.time())
         raise
     finally:
         # Signal waiters and cleanup
@@ -251,14 +256,23 @@ async def get_or_fetch_segment(url: str, fetch_fn) -> bytes:
             if url in _in_flight_requests:
                 _in_flight_requests[url].set()
                 del _in_flight_requests[url]
-            # Schedule cleanup of result after short delay
-            asyncio.create_task(_cleanup_in_flight_result(url))
+            # Inline cleanup of stale results (prevents unbounded growth)
+            _cleanup_stale_in_flight_results()
 
 
-async def _cleanup_in_flight_result(url: str, delay: float = 5.0):
-    """Clean up in-flight result after a short delay."""
-    await asyncio.sleep(delay)
-    _in_flight_results.pop(url, None)
+def _cleanup_stale_in_flight_results():
+    """Remove stale in-flight results. Called under _in_flight_lock."""
+    now = time.time()
+    stale_keys = [
+        k for k, (_, _, ts) in _in_flight_results.items()
+        if now - ts > _IN_FLIGHT_RESULT_TTL
+    ]
+    for k in stale_keys:
+        del _in_flight_results[k]
+    # Force evict oldest if still over limit
+    while len(_in_flight_results) > _IN_FLIGHT_MAX_SIZE:
+        oldest_key = min(_in_flight_results, key=lambda k: _in_flight_results[k][2])
+        del _in_flight_results[oldest_key]
 
 
 def parse_range_header(range_header: str) -> Tuple[int, int | None]:

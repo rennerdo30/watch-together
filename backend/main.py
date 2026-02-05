@@ -62,14 +62,31 @@ MAX_CONNECTIONS_PER_ROOM = int(os.environ.get("MAX_CONNECTIONS_PER_ROOM", "50"))
 MAX_CONNECTIONS_PER_USER = int(os.environ.get("MAX_CONNECTIONS_PER_USER", "10"))
 
 
+# Trusted CDN domains that are safe to proxy (skip SSRF checks for performance)
+_TRUSTED_CDN_SUFFIXES = (
+    ".googlevideo.com", ".ytimg.com", ".youtube.com", ".ggpht.com",
+    ".twitch.tv", ".ttvnw.net", ".jtvnw.net",
+    ".akamaized.net", ".akamaihd.net",
+    ".cloudfront.net", ".fastly.net",
+    ".vimeocdn.com", ".vimeo.com",
+    ".dailymotion.com", ".dm-event.net", ".dmcdn.net",
+)
+
+
+def _is_trusted_cdn(hostname: str) -> bool:
+    """Check if hostname belongs to a trusted video CDN."""
+    hostname_lower = hostname.lower()
+    return any(hostname_lower.endswith(suffix) for suffix in _TRUSTED_CDN_SUFFIXES)
+
+
 def _is_private_ip(hostname: str) -> bool:
     """Check if a hostname resolves to a private/reserved IP address."""
+    import socket
     try:
         addr = ipaddress.ip_address(hostname)
         return addr.is_private or addr.is_reserved or addr.is_loopback or addr.is_link_local
     except ValueError:
-        # Not an IP literal - resolve hostname
-        import socket
+        # Not an IP literal - resolve hostname and check ALL resolved IPs
         try:
             resolved = socket.getaddrinfo(hostname, None)
             for family, _type, _proto, _canonname, sockaddr in resolved:
@@ -93,6 +110,10 @@ def validate_proxy_url(url: str) -> None:
 
     if not parsed.hostname:
         raise HTTPException(status_code=400, detail="Invalid URL: no hostname")
+
+    # Skip SSRF check for trusted video CDN domains (immune to DNS rebinding)
+    if _is_trusted_cdn(parsed.hostname):
+        return
 
     # Block private/internal IPs
     if _is_private_ip(parsed.hostname):
@@ -750,24 +771,14 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
     if not user_email:
         user_email = "Guest"
 
-    # H2: Connection limits - per room
-    room_connections = len(manager.active_connections.get(room_id, []))
-    if room_connections >= MAX_CONNECTIONS_PER_ROOM:
-        await websocket.accept()
-        await websocket.close(code=4001, reason="Room is full")
-        return
-
-    # H2: Connection limits - per user
-    user_connection_count = sum(
-        1 for conns in manager.active_connections.values()
-        for ws in conns if getattr(ws, "user_email", None) == user_email
+    # Connection limits are checked atomically inside connect() under _state_lock
+    connected = await manager.connect(
+        websocket, room_id, user_email,
+        max_per_room=MAX_CONNECTIONS_PER_ROOM,
+        max_per_user=MAX_CONNECTIONS_PER_USER,
     )
-    if user_connection_count >= MAX_CONNECTIONS_PER_USER:
-        await websocket.accept()
-        await websocket.close(code=4002, reason="Too many connections")
+    if not connected:
         return
-
-    await manager.connect(websocket, room_id, user_email)
     try:
         while True:
             data = await websocket.receive_text()
@@ -778,6 +789,9 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 continue
 
             msg_type = message.get("type")
+            if not isinstance(msg_type, str) or len(msg_type) > 50:
+                logger.warning(f"Invalid message type from {user_email} in room {room_id}")
+                continue
             payload = message.get("payload", {})
             
             if msg_type == "play":

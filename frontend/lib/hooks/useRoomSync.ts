@@ -192,9 +192,10 @@ export function useRoomSync({
                     timestamp: payload.timestamp ?? prev.timestamp,
                 }));
 
-                // Sync player state
-                if (playerRefRef.current.current && payload.video_data) {
-                    const player = playerRefRef.current.current;
+                // Sync player state (retry briefly if player not ready yet)
+                const applyPlayerSync = () => {
+                    const player = playerRefRef.current?.current;
+                    if (!player || !payload.video_data) return false;
                     const serverTimestamp = typeof payload.timestamp === 'number' ? payload.timestamp : 0;
                     if (payload.is_playing) Promise.resolve(player.play?.()).catch(() => { });
                     else player.pause?.();
@@ -207,6 +208,14 @@ export function useRoomSync({
                             player.currentTime?.(serverTimestamp);
                         }
                     }
+                    return true;
+                };
+
+                if (!applyPlayerSync() && payload.video_data) {
+                    // Player not ready - retry after a short delay
+                    const retryTimeout = setTimeout(() => applyPlayerSync(), 500);
+                    // Cleanup on next message (best-effort)
+                    setTimeout(() => clearTimeout(retryTimeout), 5000);
                 }
                 break;
 

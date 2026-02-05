@@ -2,8 +2,10 @@
 Cookie management API routes.
 """
 import os
+import time
 import logging
 import aiofiles
+from typing import Dict, Tuple
 from fastapi import APIRouter, Request, HTTPException
 import pydantic
 
@@ -15,6 +17,27 @@ router = APIRouter(prefix="/api", tags=["cookies"])
 
 
 MAX_COOKIE_SIZE = 1 * 1024 * 1024  # 1MB limit
+
+# Simple in-memory rate limiter: user_email -> (request_count, window_start)
+_rate_limit_store: Dict[str, Tuple[int, float]] = {}
+_RATE_LIMIT_WINDOW = 60.0  # 1 minute
+_RATE_LIMIT_MAX_REQUESTS = 10  # Max uploads per window
+
+
+def _check_rate_limit(user_email: str) -> None:
+    """Check and enforce per-user rate limit. Raises HTTPException if exceeded."""
+    now = time.time()
+    entry = _rate_limit_store.get(user_email)
+    if entry:
+        count, window_start = entry
+        if now - window_start < _RATE_LIMIT_WINDOW:
+            if count >= _RATE_LIMIT_MAX_REQUESTS:
+                raise HTTPException(status_code=429, detail="Too many cookie upload requests. Try again later.")
+            _rate_limit_store[user_email] = (count + 1, window_start)
+        else:
+            _rate_limit_store[user_email] = (1, now)
+    else:
+        _rate_limit_store[user_email] = (1, now)
 
 
 class CookieContent(pydantic.BaseModel):
@@ -53,6 +76,8 @@ async def update_cookies(request: Request, cookie_data: CookieContent):
     if not user_email:
         raise HTTPException(status_code=401, detail="User identity required. Please log in.")
 
+    _check_rate_limit(user_email)
+
     try:
         content = cookie_data.content
         if not content.strip():
@@ -62,9 +87,11 @@ async def update_cookies(request: Request, cookie_data: CookieContent):
         if len(content.encode('utf-8')) > MAX_COOKIE_SIZE:
             raise HTTPException(status_code=400, detail="Cookie content exceeds 1MB limit")
 
-        # Validate basic Netscape format
+        # Validate basic Netscape format (all data lines)
         lines = [l.strip() for l in content.splitlines() if l.strip() and not l.strip().startswith('#')]
-        for line in lines[:5]:  # Check first few data lines
+        if not lines:
+            raise HTTPException(status_code=400, detail="No cookie data lines found")
+        for line in lines:
             parts = line.split('\t')
             if len(parts) != 7:
                 raise HTTPException(

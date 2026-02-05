@@ -137,13 +137,29 @@ class ConnectionManager:
         state.pop("last_sync_time", None)
         return state
 
-    async def connect(self, websocket: WebSocket, room_id: str, user_email: str):
+    async def connect(self, websocket: WebSocket, room_id: str, user_email: str,
+                      max_per_room: int = 50, max_per_user: int = 10) -> bool:
+        """Connect a websocket to a room. Returns False if connection limits exceeded."""
         await websocket.accept()
 
-        # Use state lock for atomic room creation + role assignment (H7: race condition fix)
+        # Use state lock for atomic room creation + role assignment + connection limit checks
         async with self._state_lock:
             if room_id not in self.active_connections:
                 self.active_connections[room_id] = []
+
+            # Connection limit checks (inside lock to prevent TOCTOU race)
+            room_connections = len(self.active_connections.get(room_id, []))
+            if room_connections >= max_per_room:
+                await websocket.close(code=4001, reason="Room is full")
+                return False
+
+            user_connection_count = sum(
+                1 for conns in self.active_connections.values()
+                for ws in conns if getattr(ws, "user_email", None) == user_email
+            )
+            if user_connection_count >= max_per_user:
+                await websocket.close(code=4002, reason="Too many connections")
+                return False
 
             if room_id not in self.room_states:
                 self.room_states[room_id] = {
@@ -182,11 +198,12 @@ class ConnectionManager:
 
             self.room_states[room_id]["roles"] = current_roles
 
+            # Append connection inside lock to prevent race condition
+            self.active_connections[room_id].append(websocket)
+            setattr(websocket, "user_email", user_email)
+
         await self._save_room_state(room_id)
 
-        self.active_connections[room_id].append(websocket)
-        setattr(websocket, "user_email", user_email)
-        
         # Update members list based on current active connections
         active_emails = [getattr(ws, "user_email", "Guest") for ws in self.active_connections[room_id]]
         self.room_states[room_id]["members"] = [{"email": email} for email in sorted(list(set(active_emails)))]
@@ -198,11 +215,13 @@ class ConnectionManager:
             "type": "sync",
             "payload": sync_payload
         })
-        
+
         await self.broadcast({
-            "type": "user_joined", 
+            "type": "user_joined",
             "payload": {"email": user_email, "members": self.room_states[room_id]["members"]}
         }, room_id)
+
+        return True
 
     async def disconnect(self, websocket: WebSocket, room_id: str):
         if room_id in self.active_connections:
@@ -246,6 +265,13 @@ class ConnectionManager:
                     del self._room_locks[rid]
                 await delete_room(rid)
                 logger.info(f"Cleaned up stale room: {rid}")
+
+        # Clean orphan locks for rooms that no longer exist in room_states
+        orphan_locks = [rid for rid in self._room_locks if rid not in self.room_states]
+        for rid in orphan_locks:
+            del self._room_locks[rid]
+        if orphan_locks:
+            logger.info(f"Cleaned up {len(orphan_locks)} orphan room locks")
     
     async def disconnect_and_notify(self, websocket: WebSocket, room_id: str):
         await self.disconnect(websocket, room_id)

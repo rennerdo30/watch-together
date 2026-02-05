@@ -552,11 +552,13 @@ export function useDashSync(options: UseDashSyncOptions): UseDashSyncReturn {
 
     // === EFFECT: Start/stop sync loop (using setInterval for background tab support) ===
     useEffect(() => {
+        // Always clear existing interval first to prevent accumulation
+        if (syncIntervalIdRef.current) {
+            clearInterval(syncIntervalIdRef.current);
+            syncIntervalIdRef.current = null;
+        }
+
         if (!enabled) {
-            if (syncIntervalIdRef.current) {
-                clearInterval(syncIntervalIdRef.current);
-                syncIntervalIdRef.current = null;
-            }
             return;
         }
 

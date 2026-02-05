@@ -58,6 +58,22 @@ async def sync_cookies(
         if not content.strip():
             raise HTTPException(status_code=400, detail="Empty cookie content")
 
+        # Validate size (1MB limit, same as cookie upload)
+        if len(content.encode('utf-8')) > 1 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="Cookie content exceeds 1MB limit")
+
+        # Validate Netscape format (all data lines must have 7 tab-separated fields)
+        data_lines = [l.strip() for l in content.splitlines() if l.strip() and not l.strip().startswith('#')]
+        if not data_lines:
+            raise HTTPException(status_code=400, detail="No cookie data lines found")
+        for line in data_lines:
+            parts = line.split('\t')
+            if len(parts) != 7:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid Netscape cookie format. Each data line must have 7 tab-separated fields."
+                )
+
         # 1. Save to Database
         from services.database import save_user_cookies, update_token_sync
         await save_user_cookies(user_email, content)

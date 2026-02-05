@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
     Loader2, Users, Link as LinkIcon,
@@ -146,39 +146,40 @@ export default function RoomPage() {
         }
     }, []);
 
-    const handleMouseMoveRef = useRef<(e: MouseEvent) => void>(() => {});
-    const stopResizingRef = useRef<() => void>(() => {});
+    // Stable resize handlers stored once in refs to avoid listener identity issues
+    const sidebarWidthRef = useRef(sidebarWidth);
+    useEffect(() => { sidebarWidthRef.current = sidebarWidth; }, [sidebarWidth]);
 
-    handleMouseMoveRef.current = (e: MouseEvent) => {
+    const handleMouseMove = useCallback((e: MouseEvent) => {
         if (!isResizing.current) return;
         const width = window.innerWidth - e.clientX;
         if (width >= 240 && width <= 600) {
             setSidebarWidth(width);
         }
-    };
+    }, []);
 
-    stopResizingRef.current = () => {
+    const stopResizing = useCallback(() => {
         isResizing.current = false;
-        document.removeEventListener('mousemove', handleMouseMoveRef.current);
-        document.removeEventListener('mouseup', stopResizingRef.current);
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', stopResizing);
         document.body.style.cursor = 'default';
-        localStorage.setItem('wt_sidebar_width', sidebarWidth.toString());
-    };
+        localStorage.setItem('wt_sidebar_width', sidebarWidthRef.current.toString());
+    }, [handleMouseMove]);
 
-    const startResizing = (e: React.MouseEvent) => {
+    const startResizing = useCallback((e: React.MouseEvent) => {
         isResizing.current = true;
-        document.addEventListener('mousemove', handleMouseMoveRef.current);
-        document.addEventListener('mouseup', stopResizingRef.current);
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', stopResizing);
         document.body.style.cursor = 'col-resize';
-    };
+    }, [handleMouseMove, stopResizing]);
 
     // Cleanup resize listeners on unmount to prevent leaks
     useEffect(() => {
         return () => {
-            document.removeEventListener('mousemove', handleMouseMoveRef.current);
-            document.removeEventListener('mouseup', stopResizingRef.current);
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', stopResizing);
         };
-    }, []);
+    }, [handleMouseMove, stopResizing]);
 
     const handleDragStart = (event: DragStartEvent) => {
         setActiveDragId(event.active.id as string);
