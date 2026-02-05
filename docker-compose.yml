@@ -28,7 +28,7 @@ services:
     build: ./frontend
     container_name: watch-together-frontend
     ports:
-      - "3000:3000"
+      - "3030:3000"
     restart: unless-stopped
     depends_on:
       - backend
