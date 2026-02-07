@@ -6,7 +6,7 @@ h11==0.16.0
 idna==3.11
 pydantic==2.12.5
 pydantic_core==2.41.5
-starlette==0.50.0
+starlette==0.52.1
 typing_extensions==4.15.0
 uvicorn[standard]==0.40.0
 yt-dlp
