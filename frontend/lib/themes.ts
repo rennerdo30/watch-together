@@ -1,3 +1,12 @@
+/**
+ * Foreground classes for text sitting on a filled accent surface. Defined in
+ * `app/globals.css`; unlike `text-white` / `text-black` they keep their value
+ * when the light colour scheme is active, because the accent underneath them
+ * does not change either.
+ */
+export const ON_ACCENT_LIGHT = 'on-accent-light';
+export const ON_ACCENT_DARK = 'on-accent-dark';
+
 export type Theme = {
     id: string;
     name: string;
@@ -35,7 +44,7 @@ export const THEMES: Theme[] = [
         header: 'bg-[#09090b]/95',
         sidebar: 'bg-[#0f0f12]/80',
         accent: 'bg-violet-500',
-        text: 'text-white',
+        text: ON_ACCENT_LIGHT,
         border: 'border-white/10',
         colors: {
             bg: '#09090b',
@@ -51,7 +60,7 @@ export const THEMES: Theme[] = [
         header: 'bg-[#0a0a14]/95',
         sidebar: 'bg-[#0f0f1a]/80',
         accent: 'bg-blue-500',
-        text: 'text-white',
+        text: ON_ACCENT_LIGHT,
         border: 'border-blue-500/15',
         colors: {
             bg: '#0a0a14',
@@ -67,7 +76,7 @@ export const THEMES: Theme[] = [
         header: 'bg-[#080c08]/95',
         sidebar: 'bg-[#0a120a]/80',
         accent: 'bg-emerald-500',
-        text: 'text-white',
+        text: ON_ACCENT_LIGHT,
         border: 'border-emerald-500/15',
         colors: {
             bg: '#080c08',
@@ -83,7 +92,7 @@ export const THEMES: Theme[] = [
         header: 'bg-[#0c0808]/95',
         sidebar: 'bg-[#120a0a]/80',
         accent: 'bg-rose-500',
-        text: 'text-white',
+        text: ON_ACCENT_LIGHT,
         border: 'border-rose-500/15',
         colors: {
             bg: '#0c0808',
@@ -99,7 +108,7 @@ export const THEMES: Theme[] = [
         header: 'bg-[#0c0a06]/95',
         sidebar: 'bg-[#12100a]/80',
         accent: 'bg-amber-500',
-        text: 'text-black',
+        text: ON_ACCENT_DARK,
         border: 'border-amber-500/15',
         colors: {
             bg: '#0c0a06',
@@ -114,6 +123,9 @@ export const THEMES: Theme[] = [
         bg: 'bg-[#0a0a0a]',
         header: 'bg-[#0a0a0a]/95',
         sidebar: 'bg-[#111111]/80',
+        // Mono is the one theme whose accent is a neutral, so `bg-white` and
+        // `text-black` are deliberate: both flip with the colour scheme and stay
+        // in contrast with each other.
         accent: 'bg-white',
         text: 'text-black',
         border: 'border-white/10',
@@ -176,7 +188,7 @@ export function createCustomTheme(name: string, bgColor: string, accentColor: st
         header: `bg-[${bgColor}]/95`,
         sidebar: `bg-[${bgSecondary}]/80`,
         accent: `bg-[${accentColor}]`,
-        text: 'text-white',
+        text: ON_ACCENT_LIGHT,
         border: `border-[${accentColor}]/15`,
         colors: {
             bg: bgColor,

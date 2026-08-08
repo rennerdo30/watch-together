@@ -121,6 +121,7 @@ export function PlayerControls({
                             step="0.1"
                             value={currentTime}
                             onChange={handleSeekChange}
+                            aria-label="Seek"
                             className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                         />
                     </div>
@@ -144,19 +145,25 @@ export function PlayerControls({
                     <div className="flex items-center gap-2">
                         {/* Play/Pause */}
                         <button
+                            type="button"
                             onClick={onPlayToggle}
+                            aria-label={isPlaying ? 'Pause' : 'Play'}
+                            title={isPlaying ? 'Pause' : 'Play'}
                             className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-all hover:scale-105 active:scale-95"
                         >
-                            {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
+                            {isPlaying ? <Pause aria-hidden="true" className="w-5 h-5" /> : <Play aria-hidden="true" className="w-5 h-5 ml-0.5" />}
                         </button>
 
                         {/* Volume */}
                         <div className="flex items-center gap-1 group">
                             <button
+                                type="button"
                                 onClick={onMuteToggle}
+                                aria-label={isMuted || volume === 0 ? 'Unmute' : 'Mute'}
+                                title={isMuted || volume === 0 ? 'Unmute' : 'Mute'}
                                 className="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-white/80 hover:text-white transition-all"
                             >
-                                {isMuted || volume === 0 ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                                {isMuted || volume === 0 ? <VolumeX aria-hidden="true" className="w-4 h-4" /> : <Volume2 aria-hidden="true" className="w-4 h-4" />}
                             </button>
                             <div className="w-0 group-hover:w-20 overflow-hidden transition-all duration-300">
                                 <input
@@ -166,6 +173,7 @@ export function PlayerControls({
                                     step="0.01"
                                     value={isMuted ? 0 : volume}
                                     onChange={(e) => onVolumeChange(parseFloat(e.target.value))}
+                                    aria-label="Volume"
                                     className="w-full h-1 bg-white/20 rounded-full appearance-none cursor-pointer accent-white"
                                 />
                             </div>
@@ -199,8 +207,11 @@ export function PlayerControls({
                         {/* Audio Normalization */}
                         {onToggleNormalization && (
                             <button
+                                type="button"
                                 onClick={onToggleNormalization}
-                                title="Audio Normalization"
+                                title="Audio normalization"
+                                aria-label="Audio normalization"
+                                aria-pressed={Boolean(normalizationActive)}
                                 className={cn(
                                     "w-8 h-8 rounded-full flex items-center justify-center transition-all",
                                     normalizationActive
@@ -208,14 +219,17 @@ export function PlayerControls({
                                         : "hover:bg-white/10 text-white/60 hover:text-white"
                                 )}
                             >
-                                <Ear className="w-4 h-4" />
+                                <Ear aria-hidden="true" className="w-4 h-4" />
                             </button>
                         )}
 
                         {/* Stats */}
                         <button
+                            type="button"
                             onClick={onStatsToggle}
-                            title="Stats"
+                            title="Playback statistics"
+                            aria-label="Playback statistics"
+                            aria-pressed={showStats}
                             className={cn(
                                 "w-8 h-8 rounded-full flex items-center justify-center transition-all",
                                 showStats
@@ -223,13 +237,16 @@ export function PlayerControls({
                                     : "hover:bg-white/10 text-white/60 hover:text-white"
                             )}
                         >
-                            <Activity className="w-4 h-4" />
+                            <Activity aria-hidden="true" className="w-4 h-4" />
                         </button>
 
                         {/* Settings */}
                         <button
+                            type="button"
                             onClick={onSettingsToggle}
-                            title="Quality"
+                            title="Quality and sync settings"
+                            aria-label="Quality and sync settings"
+                            aria-expanded={showSettings}
                             className={cn(
                                 "w-8 h-8 rounded-full flex items-center justify-center transition-all",
                                 showSettings
@@ -237,25 +254,29 @@ export function PlayerControls({
                                     : "hover:bg-white/10 text-white/60 hover:text-white"
                             )}
                         >
-                            <Settings className={cn("w-4 h-4 transition-transform", showSettings && "rotate-90")} />
+                            <Settings aria-hidden="true" className={cn("w-4 h-4 transition-transform", showSettings && "rotate-90")} />
                         </button>
 
                         {/* PiP */}
                         <button
+                            type="button"
                             onClick={onPiPToggle}
-                            title="Picture in Picture"
+                            title="Picture in picture"
+                            aria-label="Picture in picture"
                             className="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-white/60 hover:text-white transition-all"
                         >
-                            <PictureInPicture className="w-4 h-4" />
+                            <PictureInPicture aria-hidden="true" className="w-4 h-4" />
                         </button>
 
                         {/* Fullscreen */}
                         <button
+                            type="button"
                             onClick={onFullscreenToggle}
-                            title="Fullscreen"
+                            title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                            aria-label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
                             className="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-white/60 hover:text-white transition-all"
                         >
-                            {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+                            {isFullscreen ? <Minimize aria-hidden="true" className="w-4 h-4" /> : <Maximize aria-hidden="true" className="w-4 h-4" />}
                         </button>
                     </div>
                 </div>
@@ -263,7 +284,7 @@ export function PlayerControls({
 
             {/* Quality Settings Panel */}
             {showSettings && (
-                <div className="absolute bottom-full right-4 mb-2 w-56 bg-zinc-900/95 backdrop-blur-xl border border-white/10 rounded-xl overflow-hidden shadow-2xl">
+                <div aria-label="Quality and sync settings" className="absolute bottom-full right-4 mb-2 w-56 bg-zinc-900/95 backdrop-blur-xl border border-white/10 rounded-xl overflow-hidden shadow-2xl">
                     <div className="px-4 py-3 border-b border-white/5">
                         <span className="text-xs font-medium text-white">Quality</span>
                     </div>
@@ -285,6 +306,7 @@ export function PlayerControls({
                                     min="0.5"
                                     max="3.0"
                                     step="0.1"
+                                    aria-label="Normalization gain"
                                     value={normalizationGain}
                                     onChange={(e) => onNormalizationGainChange(parseFloat(e.target.value))}
                                     className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-violet-500"
@@ -308,6 +330,7 @@ export function PlayerControls({
                                     min="1"
                                     max="10"
                                     step="0.5"
+                                    aria-label="Sync threshold in seconds"
                                     value={syncThreshold}
                                     onChange={(e) => onSyncThresholdChange(parseFloat(e.target.value))}
                                     className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-emerald-500"
@@ -317,7 +340,9 @@ export function PlayerControls({
 
                         {/* Quality Options */}
                         <button
+                            type="button"
                             onClick={() => onQualityChange(-1)}
+                            aria-pressed={currentQuality === -1}
                             className={cn(
                                 "w-full px-3 py-2 rounded-lg text-left text-xs font-medium transition-all",
                                 currentQuality === -1
@@ -330,7 +355,9 @@ export function PlayerControls({
                         {qualities.map((q) => (
                             <button
                                 key={q.index}
+                                type="button"
                                 onClick={() => onQualityChange(q.index)}
+                                aria-pressed={currentQuality === q.index}
                                 className={cn(
                                     "w-full px-3 py-2 rounded-lg text-left text-xs font-medium transition-all flex items-center justify-between",
                                     currentQuality === q.index
