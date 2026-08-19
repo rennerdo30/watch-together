@@ -1,165 +1,267 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Play, Users, Plus, ArrowRight, Loader2, Tv, Video } from 'lucide-react';
-import { fetchRooms } from '@/lib/api';
+import { AlertTriangle, ArrowRight, Play, Plus, RefreshCw, Tv, Users, Video } from 'lucide-react';
+import { fetchRooms, type RoomSummary } from '@/lib/api';
+import { ColorModeToggle } from '@/components/color-mode-toggle';
+import {
+  APP_NAME,
+  GENERATED_ROOM_ID_LENGTH,
+  REPOSITORY_URL,
+  ROOM_ID_ALLOWED_PATTERN,
+  ROOM_LIST_POLL_INTERVAL_MS,
+} from '@/lib/constants';
 
-interface Room {
-  id: string;
-  active_users: number;
-  current_video?: string;
-  queue_size: number;
+const SKELETON_ROW_COUNT = 4;
+const RANDOM_ID_RADIX = 36;
+
+const numberFormatter = new Intl.NumberFormat();
+
+function generateRoomId(): string {
+  return Math.random()
+    .toString(RANDOM_ID_RADIX)
+    .substring(2, 2 + GENERATED_ROOM_ID_LENGTH);
 }
 
 export default function Home() {
   const router = useRouter();
   const [roomName, setRoomName] = useState('');
-  const [rooms, setRooms] = useState<Room[]>([]);
+  const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [loading, setLoading] = useState(true);
-  const [isHovering, setIsHovering] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const loadRooms = async () => {
-      try {
-        const data = await fetchRooms();
-        setRooms(data);
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadRooms();
-    const interval = setInterval(loadRooms, 10000);
-    return () => clearInterval(interval);
+  const loadRooms = useCallback(async () => {
+    try {
+      const data = await fetchRooms();
+      setRooms(data);
+      setLoadError(null);
+    } catch (error) {
+      console.error('[home] Could not load the room list:', error);
+      setLoadError(
+        error instanceof Error ? error.message : 'The room list could not be loaded.'
+      );
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  const createRoom = (e?: React.FormEvent) => {
-    e?.preventDefault();
-    const sanitized = roomName.trim().replace(/[^a-zA-Z0-9-_]/g, '');
-    const id = sanitized || Math.random().toString(36).substring(2, 8);
-    router.push(`/room/${id}`);
+  useEffect(() => {
+    loadRooms();
+    const interval = setInterval(loadRooms, ROOM_LIST_POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [loadRooms]);
+
+  const createRoom = (event?: React.FormEvent) => {
+    event?.preventDefault();
+    const sanitized = roomName.trim().replace(ROOM_ID_ALLOWED_PATTERN, '');
+    router.push(`/room/${sanitized || generateRoomId()}`);
   };
 
-  const totalUsers = rooms.reduce((sum, r) => sum + r.active_users, 0);
+  const retry = () => {
+    setLoading(true);
+    loadRooms();
+  };
+
+  const totalUsers = rooms.reduce((sum, room) => sum + room.active_users, 0);
 
   return (
-    <main className="min-h-screen bg-[#0a0a0c] text-white flex flex-col">
-      {/* Header */}
-      <header className="h-14 border-b border-white/5 flex items-center justify-between px-6 shrink-0">
+    <div className="app-shell flex min-h-dvh flex-col bg-neutral-950 text-white">
+      <header className="flex h-16 shrink-0 items-center justify-between gap-4 border-b border-white/10 px-4 sm:px-6">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-600 flex items-center justify-center">
-            <Tv className="w-5 h-5 text-white" />
-          </div>
-          <span className="font-bold text-base">Watch Together</span>
+          <span
+            aria-hidden="true"
+            className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-600"
+          >
+            <Tv className="h-5 w-5 on-accent-light" />
+          </span>
+          <span className="text-base font-semibold tracking-tight">{APP_NAME}</span>
         </div>
-        <div className="flex items-center gap-2 text-sm text-zinc-500">
-          <div className="w-2 h-2 rounded-full bg-emerald-500" />
-          <span>{totalUsers} online</span>
+        <div className="flex items-center gap-4">
+          {!loading && !loadError && (
+            <p className="flex items-center gap-2 text-sm text-neutral-400">
+              <span aria-hidden="true" className="h-2 w-2 rounded-full bg-emerald-500" />
+              {totalUsers === 1
+                ? '1 viewer online'
+                : `${numberFormatter.format(totalUsers)} viewers online`}
+            </p>
+          )}
+          <ColorModeToggle />
         </div>
       </header>
 
-      {/* Main */}
-      <div className="flex-1 flex">
-        {/* Left - Create Room */}
-        <div className="flex-1 flex items-center justify-center p-12">
-          <div className="max-w-md w-full space-y-8">
-            <div>
-              <h1 className="text-4xl font-bold tracking-tight">
+      <div className="flex flex-1 flex-col lg:min-h-0 lg:flex-row">
+        <main className="flex flex-1 items-center justify-center px-4 py-12 sm:px-8 sm:py-16">
+          <div className="w-full max-w-md space-y-8">
+            <div className="space-y-3">
+              <h1 className="text-3xl font-semibold tracking-tight text-balance sm:text-4xl">
                 Watch videos together
               </h1>
-              <p className="text-zinc-400 mt-3 text-lg">
+              <p className="text-base text-neutral-400 sm:text-lg">
                 Synchronized playback with friends. YouTube, Twitch, and more.
               </p>
             </div>
 
-            <form onSubmit={createRoom} className="space-y-4">
-              <div className="relative">
-                <Plus className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-600" />
-                <input
-                  value={roomName}
-                  onChange={e => setRoomName(e.target.value)}
-                  placeholder="Room name (optional)"
-                  className="w-full h-14 bg-zinc-900 border border-zinc-800 rounded-xl pl-12 pr-4 text-base placeholder:text-zinc-600 focus:outline-none focus:border-violet-500 transition-colors"
-                />
+            <form onSubmit={createRoom} className="space-y-3">
+              <div>
+                <label htmlFor="room-name" className="sr-only">
+                  Room name
+                </label>
+                <div className="relative">
+                  <Plus
+                    aria-hidden="true"
+                    className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-neutral-500"
+                  />
+                  <input
+                    id="room-name"
+                    name="room-name"
+                    value={roomName}
+                    onChange={(event) => setRoomName(event.target.value)}
+                    placeholder="Room name (optional)"
+                    autoComplete="off"
+                    aria-describedby="room-name-hint"
+                    className="h-14 w-full rounded-xl border border-neutral-700 bg-neutral-900 pl-12 pr-4 text-base placeholder:text-neutral-500 hover:border-neutral-600 focus:border-violet-500"
+                  />
+                </div>
+                <p id="room-name-hint" className="mt-2 text-xs text-neutral-500">
+                  Letters, numbers, hyphens and underscores. Leave empty for a random room.
+                </p>
               </div>
               <button
                 type="submit"
-                className="w-full h-14 bg-violet-600 hover:bg-violet-500 text-white font-semibold rounded-xl text-base transition-colors flex items-center justify-center gap-2"
+                className="flex h-14 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 text-base font-semibold on-accent-light shadow-lg shadow-violet-600/20 hover:bg-violet-500"
               >
-                Create Room
-                <ArrowRight className="w-5 h-5" />
+                Create room
+                <ArrowRight aria-hidden="true" className="h-5 w-5" />
               </button>
             </form>
 
-            <div className="flex items-center gap-6 text-sm text-zinc-500 pt-4">
-              <span>✓ No sign up required</span>
-              <span>✓ Free forever</span>
+            <ul className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-neutral-400">
+              <li>No sign up required</li>
+              <li>Free forever</li>
+              <li>Self-hostable</li>
+            </ul>
+          </div>
+        </main>
+
+        <aside
+          aria-labelledby="active-rooms-heading"
+          className="app-surface flex w-full flex-col border-t border-white/10 bg-neutral-900/50 lg:w-96 lg:border-l lg:border-t-0"
+        >
+          <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-white/10 px-5">
+            <h2 id="active-rooms-heading" className="text-sm font-semibold">
+              Active rooms
+            </h2>
+            <div className="flex items-center gap-2">
+              {!loading && !loadError && (
+                <span className="text-sm text-violet-400">
+                  {numberFormatter.format(rooms.length)}
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={retry}
+                aria-label="Refresh the list of active rooms"
+                className="flex h-7 w-7 items-center justify-center rounded-lg text-neutral-400 hover:bg-white/10 hover:text-white"
+              >
+                <RefreshCw
+                  aria-hidden="true"
+                  className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`}
+                />
+              </button>
             </div>
           </div>
-        </div>
 
-        {/* Right - Room List */}
-        <div className="w-96 border-l border-zinc-800 flex flex-col bg-zinc-900/50">
-          <div className="h-14 px-5 border-b border-zinc-800 flex items-center justify-between shrink-0">
-            <span className="font-semibold">Active Rooms</span>
-            <span className="text-sm text-violet-400">{rooms.length}</span>
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-4 space-y-2">
+          <div className="flex-1 space-y-2 overflow-y-auto p-4 lg:min-h-0">
             {loading ? (
-              <div className="flex items-center justify-center py-12">
-                <Loader2 className="w-6 h-6 animate-spin text-zinc-600" />
+              <ul className="space-y-2" aria-busy="true" aria-label="Loading active rooms">
+                {Array.from({ length: SKELETON_ROW_COUNT }).map((_, index) => (
+                  <li
+                    key={index}
+                    className="flex items-center gap-4 rounded-xl bg-white/5 p-4"
+                  >
+                    <span className="h-10 w-10 shrink-0 animate-pulse rounded-lg bg-white/10" />
+                    <span className="flex-1 space-y-2">
+                      <span className="block h-3 w-2/3 animate-pulse rounded bg-white/10" />
+                      <span className="block h-3 w-1/3 animate-pulse rounded bg-white/5" />
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : loadError ? (
+              <div
+                role="alert"
+                className="flex flex-col items-center gap-3 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-10 text-center"
+              >
+                <AlertTriangle aria-hidden="true" className="h-5 w-5 text-amber-400" />
+                <p className="text-sm text-neutral-300">{loadError}</p>
+                <button
+                  type="button"
+                  onClick={retry}
+                  className="rounded-lg border border-white/10 px-3 py-1.5 text-xs font-medium text-neutral-300 hover:bg-white/10 hover:text-white"
+                >
+                  Try again
+                </button>
               </div>
             ) : rooms.length > 0 ? (
-              rooms.map((room) => (
-                <button
-                  key={room.id}
-                  onClick={() => router.push(`/room/${room.id}`)}
-                  onMouseEnter={() => setIsHovering(room.id)}
-                  onMouseLeave={() => setIsHovering(null)}
-                  className={`w-full text-left p-4 rounded-xl transition-colors ${isHovering === room.id
-                      ? 'bg-zinc-800'
-                      : 'bg-zinc-800/50 hover:bg-zinc-800'
-                    }`}
-                >
-                  <div className="flex items-center gap-4">
-                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${isHovering === room.id ? 'bg-violet-600' : 'bg-zinc-700'
-                      }`}>
-                      <Play className="w-4 h-4 text-white" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium truncate">{room.id}</p>
-                      <p className="text-sm text-zinc-500 truncate">
-                        {room.current_video || 'No video playing'}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-1.5 text-sm text-zinc-400">
-                      <Users className="w-4 h-4" />
-                      <span>{room.active_users}</span>
-                    </div>
-                  </div>
-                </button>
-              ))
+              <ul className="space-y-2">
+                {rooms.map((room) => (
+                  <li key={room.id}>
+                    <Link
+                      href={`/room/${room.id}`}
+                      className="group flex items-center gap-4 rounded-xl bg-white/5 p-4 hover:bg-white/10"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white/10 group-hover:bg-violet-600"
+                      >
+                        <Play className="icon-on-surface h-4 w-4" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium">{room.id}</span>
+                        <span className="block truncate text-sm text-neutral-400">
+                          {room.current_video || 'No video playing'}
+                        </span>
+                      </span>
+                      <span className="flex items-center gap-1.5 text-sm text-neutral-400">
+                        <Users aria-hidden="true" className="h-4 w-4" />
+                        {numberFormatter.format(room.active_users)}
+                        <span className="sr-only">
+                          {room.active_users === 1 ? 'viewer' : 'viewers'}
+                        </span>
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
             ) : (
-              <div className="flex flex-col items-center justify-center py-12 text-center">
-                <div className="w-12 h-12 rounded-xl bg-zinc-800 flex items-center justify-center mb-4">
-                  <Video className="w-5 h-5 text-zinc-600" />
-                </div>
-                <p className="text-zinc-500">No active rooms</p>
-                <p className="text-sm text-zinc-600 mt-1">Create one to get started</p>
+              <div className="flex flex-col items-center justify-center px-4 py-12 text-center">
+                <span
+                  aria-hidden="true"
+                  className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-white/5"
+                >
+                  <Video className="h-5 w-5 text-neutral-400" />
+                </span>
+                <p className="text-sm font-medium text-neutral-300">No active rooms</p>
+                <p className="mt-1 text-sm text-neutral-500">Create one to get started</p>
               </div>
             )}
           </div>
-        </div>
+        </aside>
       </div>
 
-      {/* Footer */}
-      <footer className="h-12 px-6 border-t border-zinc-800 flex items-center justify-between text-sm text-zinc-600 shrink-0">
-        <span>Watch Together</span>
-        <span>v1.1.0</span>
+      <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-white/10 px-4 py-3 text-sm text-neutral-500 sm:px-6">
+        <span>{APP_NAME}</span>
+        <a
+          href={REPOSITORY_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="rounded hover:text-neutral-300"
+        >
+          Source on GitHub
+        </a>
       </footer>
-    </main>
+    </div>
   );
 }

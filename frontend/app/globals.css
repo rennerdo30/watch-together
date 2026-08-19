@@ -1,23 +1,45 @@
 @import "tailwindcss";
 
+/* =============================================================================
+   Design tokens
+   -----------------------------------------------------------------------------
+   The UI is painted almost entirely with Tailwind's `neutral` / `zinc` scales
+   plus `white` / `black`. Tailwind v4 compiles every colour utility down to a
+   `var(--color-*)` lookup, so a colour scheme can be swapped wholesale by
+   re-pointing those variables instead of annotating hundreds of class names.
+
+   - `:root`                    -> dark scheme (the default)
+   - `html[data-theme="light"]` -> light scheme
+   - `.on-dark`                 -> opt back into the dark scheme for a subtree
+                                   (video stage, player chrome, thumbnails —
+                                   surfaces that are dark in every scheme)
+   ========================================================================== */
+
 :root {
-  /* Base Colors */
+  color-scheme: dark;
+
+  /* Surfaces */
   --bg-primary: #09090b;
   --bg-secondary: #0f0f12;
   --bg-tertiary: #18181b;
   --bg-elevated: #1f1f23;
 
-  /* Text Colors */
+  /* Text */
   --text-primary: #fafafa;
   --text-secondary: #a1a1aa;
-  --text-muted: #52525b;
+  --text-muted: #71717a;
 
-  /* Accent Colors */
+  /* Accent */
   --accent-primary: #8b5cf6;
   --accent-secondary: #a78bfa;
   --accent-glow: rgba(139, 92, 246, 0.15);
 
-  /* Border Colors */
+  /* Foreground colours for filled accent surfaces. These never flip with the
+     colour scheme because the surface underneath them never flips either. */
+  --on-accent-light: #ffffff;
+  --on-accent-dark: #0a0a0a;
+
+  /* Borders */
   --border-subtle: rgba(255, 255, 255, 0.06);
   --border-default: rgba(255, 255, 255, 0.1);
   --border-strong: rgba(255, 255, 255, 0.15);
@@ -27,18 +49,201 @@
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
   --shadow-glow: 0 0 40px var(--accent-glow);
+
+  /* Scrollbars */
+  --scrollbar-thumb: rgba(255, 255, 255, 0.08);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.15);
+  --scrollbar-width: 6px;
+  --scrollbar-width-slim: 4px;
+
+  /* Focus ring */
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+  --focus-ring-color: var(--accent-primary);
+
+  /* Toasts (react-hot-toast is styled from JS, so it reads these) */
+  --toast-bg: #171717;
+  --toast-fg: #fafafa;
+  --toast-border: #262626;
+
+  /* Motion */
+  --duration-fast: 0.15s;
+  --duration-base: 0.3s;
+  --duration-slow: 0.4s;
 }
 
-/* CSS Custom Properties for theming */
+/* ---------------------------------------------------------------------------
+   Light scheme
+   Neutral steps are mirrored (950 <-> 50) with the muted mid steps nudged
+   darker so small labels keep a readable contrast ratio on light surfaces.
+   The chromatic `-400` steps double as text colours, so they are darkened too.
+   ------------------------------------------------------------------------ */
+html[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-primary: #ffffff;
+  --bg-secondary: #fafafa;
+  --bg-tertiary: #f4f4f5;
+  --bg-elevated: #ffffff;
+
+  --text-primary: #18181b;
+  --text-secondary: #52525b;
+  --text-muted: #71717a;
+
+  --accent-primary: #7c3aed;
+  --accent-secondary: #6d28d9;
+  --accent-glow: rgba(124, 58, 237, 0.18);
+
+  --border-subtle: rgba(9, 9, 11, 0.08);
+  --border-default: rgba(9, 9, 11, 0.12);
+  --border-strong: rgba(9, 9, 11, 0.18);
+
+  --shadow-sm: 0 1px 2px rgba(9, 9, 11, 0.06);
+  --shadow-md: 0 4px 12px rgba(9, 9, 11, 0.08);
+  --shadow-lg: 0 8px 24px rgba(9, 9, 11, 0.12);
+
+  --scrollbar-thumb: rgba(9, 9, 11, 0.16);
+  --scrollbar-thumb-hover: rgba(9, 9, 11, 0.28);
+
+  --toast-bg: #ffffff;
+  --toast-fg: #18181b;
+  --toast-border: #e4e4e7;
+
+  /* "white" means primary ink, "black" means the page beneath it. Overlay
+     utilities such as `bg-white/5` and `border-white/10` therefore keep
+     working as subtle tints instead of disappearing. */
+  --color-white: #18181b;
+  --color-black: #ffffff;
+
+  --color-neutral-50: #18181b;
+  --color-neutral-100: #1f1f22;
+  --color-neutral-200: #27272a;
+  --color-neutral-300: #3f3f46;
+  --color-neutral-400: #52525b;
+  --color-neutral-500: #63636c;
+  --color-neutral-600: #71717a;
+  --color-neutral-700: #d4d4d8;
+  --color-neutral-800: #e4e4e7;
+  --color-neutral-900: #f4f4f5;
+  --color-neutral-950: #fafafa;
+
+  --color-zinc-50: #18181b;
+  --color-zinc-100: #1f1f22;
+  --color-zinc-200: #27272a;
+  --color-zinc-300: #3f3f46;
+  --color-zinc-400: #52525b;
+  --color-zinc-500: #63636c;
+  --color-zinc-600: #71717a;
+  --color-zinc-700: #d4d4d8;
+  --color-zinc-800: #e4e4e7;
+  --color-zinc-900: #f4f4f5;
+  --color-zinc-950: #fafafa;
+
+  --color-violet-400: #6d28d9;
+  --color-emerald-400: #047857;
+  --color-green-400: #15803d;
+  --color-amber-400: #b45309;
+  --color-yellow-400: #a16207;
+  --color-red-400: #b91c1c;
+  --color-rose-400: #be123c;
+  --color-blue-400: #1d4ed8;
+  --color-purple-400: #7e22ce;
+}
+
+/* Subtrees that stay dark in every colour scheme. */
+.on-dark {
+  color-scheme: dark;
+
+  --color-white: #ffffff;
+  --color-black: #000000;
+
+  --color-neutral-50: #fafafa;
+  --color-neutral-100: #f5f5f5;
+  --color-neutral-200: #e5e5e5;
+  --color-neutral-300: #d4d4d4;
+  --color-neutral-400: #a3a3a3;
+  --color-neutral-500: #737373;
+  --color-neutral-600: #525252;
+  --color-neutral-700: #404040;
+  --color-neutral-800: #262626;
+  --color-neutral-900: #171717;
+  --color-neutral-950: #0a0a0a;
+
+  --color-zinc-50: #fafafa;
+  --color-zinc-100: #f4f4f5;
+  --color-zinc-200: #e4e4e7;
+  --color-zinc-300: #d4d4d8;
+  --color-zinc-400: #a1a1aa;
+  --color-zinc-500: #71717a;
+  --color-zinc-600: #52525b;
+  --color-zinc-700: #3f3f46;
+  --color-zinc-800: #27272a;
+  --color-zinc-900: #18181b;
+  --color-zinc-950: #09090b;
+
+  --color-violet-400: #a78bfa;
+  --color-emerald-400: #34d399;
+  --color-green-400: #4ade80;
+  --color-amber-400: #fbbf24;
+  --color-yellow-400: #facc15;
+  --color-red-400: #f87171;
+  --color-rose-400: #fb7185;
+  --color-blue-400: #60a5fa;
+  --color-purple-400: #c084fc;
+}
+
+/* The colour themes in `lib/themes.ts` pin an explicit dark background. In the
+   light scheme the surface comes from the scheme instead, and the theme only
+   contributes its accent. */
+html[data-theme="light"] .app-shell {
+  background-color: var(--bg-primary);
+}
+
+html[data-theme="light"] .app-surface {
+  background-color: var(--bg-secondary);
+}
+
+html[data-theme="light"] .app-header {
+  background-color: color-mix(in srgb, var(--bg-primary) 92%, transparent);
+}
+
+/* Foregrounds for filled accent surfaces. */
+.on-accent-light {
+  color: var(--on-accent-light);
+}
+
+.on-accent-dark {
+  color: var(--on-accent-dark);
+}
+
+/* Knob of a switch: always reads against the filled accent track. */
+.knob-on-accent {
+  background-color: var(--on-accent-light);
+}
+
+/* Icon that sits on a neutral tile at rest and on a filled accent tile while its
+   `group` is hovered — so it needs a different foreground in each state. */
+.icon-on-surface {
+  color: var(--text-secondary);
+}
+
+.group:hover .icon-on-surface,
+.group:focus-visible .icon-on-surface {
+  color: var(--on-accent-light);
+}
+
+/* =============================================================================
+   Base
+   ========================================================================== */
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.08) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 *::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: var(--scrollbar-width);
+  height: var(--scrollbar-width);
 }
 
 *::-webkit-scrollbar-track {
@@ -46,12 +251,12 @@
 }
 
 *::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 3px;
+  background: var(--scrollbar-thumb);
+  border-radius: 9999px;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--scrollbar-thumb-hover);
 }
 
 html {
@@ -61,36 +266,42 @@ html {
 body {
   background: var(--bg-primary);
   color: var(--text-primary);
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Selection */
 ::selection {
   background: var(--accent-primary);
-  color: white;
+  color: var(--on-accent-light);
 }
 
-/* Focus rings */
-:focus-visible {
-  outline: 2px solid var(--accent-primary);
-  outline-offset: 2px;
+/* Focus rings. Doubled pseudo-class so the ring survives components that opt
+   out of the default outline with Tailwind's `focus:outline-none`. */
+:focus-visible,
+:focus-visible:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
 }
 
-/* Buttons base */
 button {
-  transition: all 0.15s ease;
+  transition: color var(--duration-fast) ease, background-color var(--duration-fast) ease,
+    border-color var(--duration-fast) ease, box-shadow var(--duration-fast) ease,
+    opacity var(--duration-fast) ease, transform var(--duration-fast) ease,
+    filter var(--duration-fast) ease;
 }
 
-button:active {
+button:not(:disabled):active {
   transform: scale(0.98);
 }
 
-/* Input base */
+button:disabled {
+  cursor: not-allowed;
+}
+
 input,
 textarea {
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color var(--duration-fast) ease, box-shadow var(--duration-fast) ease;
 }
 
 input:focus,
@@ -99,7 +310,10 @@ textarea:focus {
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
-/* Animations */
+/* =============================================================================
+   Animations
+   ========================================================================== */
+
 @keyframes fadeIn {
   from {
     opacity: 0;
@@ -159,15 +373,15 @@ textarea:focus {
 }
 
 .animate-fade-in {
-  animation: fadeIn 0.3s ease-out;
+  animation: fadeIn var(--duration-base) ease-out;
 }
 
 .animate-slide-up {
-  animation: slideUp 0.4s ease-out;
+  animation: slideUp var(--duration-slow) ease-out;
 }
 
 .animate-slide-down {
-  animation: slideDown 0.4s ease-out;
+  animation: slideDown var(--duration-slow) ease-out;
 }
 
 .animate-pulse-glow {
@@ -178,22 +392,45 @@ textarea:focus {
   animation: float 3s ease-in-out infinite;
 }
 
-/* Glass effect */
+/* Respect the OS "reduce motion" setting. */
+@media (prefers-reduced-motion: reduce) {
+
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  button:not(:disabled):active {
+    transform: none;
+  }
+}
+
+/* =============================================================================
+   Utilities
+   ========================================================================== */
+
 .glass {
-  background: rgba(255, 255, 255, 0.03);
+  background: color-mix(in srgb, var(--color-white) 3%, transparent);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid var(--border-subtle);
 }
 
 .glass-strong {
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--color-white) 6%, transparent);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--border-default);
 }
 
-/* Gradient text */
 .gradient-text {
   background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary), #f472b6);
   -webkit-background-clip: text;
@@ -201,9 +438,8 @@ textarea:focus {
   background-clip: text;
 }
 
-/* Custom scrollbar class */
 .custom-scrollbar::-webkit-scrollbar {
-  width: 4px;
+  width: var(--scrollbar-width-slim);
 }
 
 .custom-scrollbar::-webkit-scrollbar-track {
@@ -211,10 +447,10 @@ textarea:focus {
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.06);
-  border-radius: 2px;
+  background: var(--scrollbar-thumb);
+  border-radius: 9999px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--scrollbar-thumb-hover);
 }

@@ -65,8 +65,15 @@ export async function resolveUrl(url: string): Promise<ResolveResponse> {
 }
 export async function fetchRooms(): Promise<RoomSummary[]> {
     const res = await fetch(`${API_BASE_URL}/api/rooms`, { cache: 'no-store' });
-    if (!res.ok) return [];
-    return res.json();
+    if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ detail: 'Unknown error' }));
+        throw new Error(errorData.detail || 'Failed to load the room list');
+    }
+    const data = await res.json();
+    if (!Array.isArray(data)) {
+        throw new Error('The room list response was not a list of rooms');
+    }
+    return data as RoomSummary[];
 }
 
 // ============================================================================
