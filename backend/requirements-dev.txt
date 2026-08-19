@@ -1,0 +1,7 @@
+# Test and development dependencies.
+# Runtime dependencies live in requirements.txt.
+-r requirements.txt
+
+pytest==9.1.1
+pytest-asyncio==1.4.0
+pytest-timeout==2.4.0
