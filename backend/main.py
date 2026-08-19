@@ -32,7 +32,11 @@ from core.config import (
     MIN_DISK_FREE_BYTES, MAX_CACHEABLE_FILE_BYTES, FORMAT_CACHE_TTL_SECONDS,
     METRICS_DEFAULT_SAMPLE_LIMIT,
 )
-from core.security import get_user_cookie_path, get_user_from_request
+from core.security import (
+    get_user_cookie_path, get_user_from_request, get_user_from_websocket,
+    log_auth_configuration,
+)
+from core.access_jwt import is_configured as access_is_configured
 from services.cache import (
     parse_range_header, get_bucket_for_position, get_bucket_cache_key,
     check_disk_space, get_current_cache_size,
@@ -65,6 +69,16 @@ ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "").split(",") if os.environ
 # Connection limits
 MAX_CONNECTIONS_PER_ROOM = int(os.environ.get("MAX_CONNECTIONS_PER_ROOM", "50"))
 MAX_CONNECTIONS_PER_USER = int(os.environ.get("MAX_CONNECTIONS_PER_USER", "10"))
+
+# Whether anonymous access to rooms and the proxy is rejected. Defaults to
+# on once Cloudflare Access is configured, so a hardened deployment does
+# not also have to remember to set this.
+_require_auth_setting = os.environ.get("REQUIRE_AUTHENTICATION", "").strip()
+REQUIRE_AUTHENTICATION = (
+    _require_auth_setting.lower() in ("true", "1", "yes")
+    if _require_auth_setting
+    else access_is_configured()
+)
 
 
 # Trusted CDN domains that are safe to proxy (skip SSRF checks for performance)
@@ -175,6 +189,8 @@ async def lifespan(app: FastAPI):
     """Application lifespan - start/stop background tasks."""
     tasks = []
     try:
+        log_auth_configuration()
+
         # Initialize database and run migrations
         init_database()
 
@@ -507,6 +523,12 @@ async def proxy_stream(request: Request, url: str):
     """Proxy HLS manifests and segments to bypass CORS/restrictions."""
     if not url:
         raise HTTPException(status_code=400, detail="Missing URL")
+
+    # The proxy fetches upstream content on the caller's behalf, so it must
+    # know who the caller is before doing any work.
+    user_email = get_user_from_request(request)
+    if REQUIRE_AUTHENTICATION and not user_email:
+        raise HTTPException(status_code=401, detail="User identity required")
 
     # SSRF protection: validate URL before proxying
     validate_proxy_url(url)
@@ -851,10 +873,11 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
         await websocket.close(code=4000, reason="Invalid room ID")
         return
 
-    user_email = websocket.headers.get("cf-access-authenticated-user-email")
+    user_email = get_user_from_websocket(websocket)
     if not user_email:
-        user_email = websocket.query_params.get("user")
-    if not user_email:
+        if REQUIRE_AUTHENTICATION:
+            await websocket.close(code=4003, reason="Authentication required")
+            return
         user_email = "Guest"
 
     # Connection limits are checked atomically inside connect() under _state_lock
