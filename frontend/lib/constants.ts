@@ -26,3 +26,13 @@ export const FONT_SIZE_MAX = 24;
 
 /** How long a "copied to clipboard" confirmation stays visible. */
 export const COPY_FEEDBACK_DURATION_MS = 2000;
+
+/**
+ * Origin the browser should call for API and WebSocket requests.
+ *
+ * Empty by default, which keeps requests relative so the nginx reverse
+ * proxy routes them in production. Set NEXT_PUBLIC_BACKEND_ORIGIN (for
+ * example `http://localhost:8000`) to talk to the backend directly when
+ * running the frontend and backend separately without nginx.
+ */
+export const BACKEND_ORIGIN = process.env.NEXT_PUBLIC_BACKEND_ORIGIN ?? '';

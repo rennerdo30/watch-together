@@ -15,6 +15,7 @@ import { THEMES, DEFAULT_THEME, getThemeById, loadCustomTheme, saveCustomTheme, 
 import { ColorModeToggle } from '@/components/color-mode-toggle';
 import {
     APP_NAME,
+    BACKEND_ORIGIN,
     COPY_FEEDBACK_DURATION_MS,
     EXTENSION_SOURCE_URL,
     FONT_SIZE_DEFAULT,
@@ -32,9 +33,10 @@ import { SortableQueueItem, QueueItemOverlay } from '@/components/sortable-queue
 
 function getWsUrl(roomId: string) {
     if (typeof window === "undefined") return "";
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const host = window.location.host;
-    return `${protocol}//${host}/ws/${roomId}`;
+    // Without a reverse proxy the backend origin is explicit; otherwise the
+    // socket goes to the page's own host and nginx routes it.
+    const origin = BACKEND_ORIGIN || window.location.origin;
+    return `${origin.replace(/^http/, "ws")}/ws/${roomId}`;
 }
 
 interface RoomPlayer {

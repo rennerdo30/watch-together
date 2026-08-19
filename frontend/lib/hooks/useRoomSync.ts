@@ -10,6 +10,7 @@
 
 import { useRef, useEffect, useCallback, useState } from 'react';
 import { ResolveResponse, resolveUrl } from '@/lib/api';
+import { BACKEND_ORIGIN } from '@/lib/constants';
 
 // Message types from server
 export type RoomMessageType =
@@ -89,9 +90,11 @@ interface RoomWsMessage {
 
 function getWsUrl(roomId: string) {
     if (typeof window === 'undefined') return '';
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host;
-    return `${protocol}//${host}/ws/${roomId}`;
+    // Without a reverse proxy the backend origin is explicit; otherwise the
+    // socket goes to the page's own host and nginx routes it.
+    const origin = BACKEND_ORIGIN || window.location.origin;
+    const wsOrigin = origin.replace(/^http/, 'ws');
+    return `${wsOrigin}/ws/${roomId}`;
 }
 
 export function useRoomSync({
