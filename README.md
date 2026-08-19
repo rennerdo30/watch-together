@@ -19,7 +19,7 @@ A real-time video synchronization platform for watching YouTube, Twitch, and 180
 - **Cookie Authentication**: Bypass age-restrictions and regional blocks with your own cookies
 - **Browser Extension**: Automatic cookie sync from your browser (Chrome/Firefox)
 - **Audio Normalization**: "Night mode" audio with configurable gain boost
-- **Modern UI**: Dark theme with TailwindCSS, drag-and-drop queue management
+- **Modern UI**: Light and dark colour schemes (following the OS by default), six accent themes plus a custom one, drag-and-drop queue management
 - **Cloudflare Integration**: Zero Trust authentication and tunnel support
 
 ## Quick Start
@@ -56,7 +56,7 @@ uvicorn main:app --reload --port 8000
 
 # Frontend (Node.js 20+) - in a new terminal
 cd frontend
-npm install --legacy-peer-deps
+npm ci
 npm run dev
 ```
 
@@ -112,7 +112,7 @@ CI runs exactly these, plus manifest/syntax checks on the browser extension.
 │  • yt-dlp video resolution         │  │   • React 19        │
 │  • WebSocket room sync             │  │   • TailwindCSS 4   │
 │  • HLS/DASH proxy                  │  │   • hls.js player   │
-│  • Cookie management               │  │   • Custom hooks    │
+│  • Cookie management               │  │   • Light/dark UI   │
 └────────────────────────────────────┘  └─────────────────────┘
 ```
 
@@ -148,7 +148,8 @@ watch-together/
 │   ├── components/        # React components
 │   │   ├── custom-player.tsx  # Video player
 │   │   └── player/hooks/      # Player hooks
-│   └── lib/               # Utilities, API client
+│   ├── lib/               # Utilities, API client, themes, constants
+│   └── README.md          # Frontend structure, theming and storage keys
 ├── extension/             # Browser extension for cookie sync
 ├── nginx/                 # Nginx configuration
 ├── docker-compose.yml     # Container orchestration
@@ -165,6 +166,7 @@ watch-together/
 - [SPECIFICATION.md](SPECIFICATION.md) - Technical specification
 - [CHANGELOG.md](CHANGELOG.md) - Version history
 - [ISSUES.md](ISSUES.md) - Known issues and roadmap
+- [frontend/README.md](frontend/README.md) - Frontend structure, theming and scripts
 - [SECURITY.md](SECURITY.md) - Responsible vulnerability disclosure
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) - Community standards
 - [SUPPORT.md](SUPPORT.md) - Support channels and expectations

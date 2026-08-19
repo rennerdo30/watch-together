@@ -1,7 +1,8 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { ExtensionMeta } from "@/components/extension-meta";
+import { COLOR_MODE_BOOTSTRAP_SCRIPT } from "@/lib/color-mode";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -22,13 +23,32 @@ export const metadata: Metadata = {
   },
 };
 
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#09090b" },
+  ],
+};
+
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    // `data-theme` is deliberately not rendered here: the inline script below is
+    // its only writer, so React can never clobber it while hydrating. Until the
+    // script runs, the dark tokens in `:root` apply.
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        {/*
+          Applies the stored (or OS) colour scheme before the first paint so the
+          page never flashes the wrong one.
+        */}
+        <script
+          dangerouslySetInnerHTML={{ __html: COLOR_MODE_BOOTSTRAP_SCRIPT }}
+        />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >

@@ -392,7 +392,8 @@ export function CustomPlayer({
         <div
             ref={containerRef}
             className={cn(
-                "relative w-full h-full bg-black flex items-center justify-center overflow-hidden group rounded-xl",
+                // `on-dark`: the video stage and its chrome stay dark in every colour scheme.
+                "on-dark relative w-full h-full bg-black flex items-center justify-center overflow-hidden group rounded-xl",
                 className
             )}
             onDoubleClick={toggleFullscreen}
@@ -420,16 +421,16 @@ export function CustomPlayer({
 
             {/* Loading Overlay */}
             {isLoading && (
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-50">
-                    <Loader2 className="w-12 h-12 text-emerald-500 animate-spin drop-shadow-lg" />
+                <div role="status" aria-label="Loading the stream" className="absolute inset-0 flex items-center justify-center pointer-events-none z-50">
+                    <Loader2 aria-hidden="true" className="w-12 h-12 text-emerald-500 animate-spin drop-shadow-lg" />
                 </div>
             )}
 
             {/* Buffering Overlay */}
             {isBuffering && !isLoading && (
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-40">
+                <div role="status" className="absolute inset-0 flex items-center justify-center pointer-events-none z-40">
                     <div className="flex flex-col items-center gap-2">
-                        <Loader2 className="w-10 h-10 text-white/80 animate-spin" />
+                        <Loader2 aria-hidden="true" className="w-10 h-10 text-white/80 animate-spin" />
                         <span className="text-white/60 text-xs font-medium uppercase tracking-wider">Buffering...</span>
                     </div>
                 </div>
@@ -437,9 +438,9 @@ export function CustomPlayer({
 
             {/* Error Overlay */}
             {error && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-md z-50 p-6 text-center">
+                <div role="alert" className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-md z-50 p-6 text-center">
                     <div className="max-w-xs">
-                        <Info className="w-12 h-12 text-amber-500 mx-auto mb-4" />
+                        <Info aria-hidden="true" className="w-12 h-12 text-amber-400 mx-auto mb-4" />
                         <p className="text-white font-semibold text-lg mb-2">Playback Issue</p>
                         <p className="text-zinc-400 text-sm">{error}</p>
                     </div>
@@ -448,7 +449,7 @@ export function CustomPlayer({
 
             {/* Stats Overlay */}
             {showStats && (
-                <div className="absolute top-4 left-4 p-4 rounded-xl bg-black/80 backdrop-blur-xl border border-white/10 z-50 font-mono text-[10px] text-emerald-400 min-w-[200px] shadow-2xl animate-in fade-in zoom-in-95 duration-300">
+                <div aria-label="Playback statistics" className="absolute top-4 left-4 p-4 rounded-xl bg-black/80 backdrop-blur-xl border border-white/10 z-50 font-mono text-[10px] text-emerald-400 min-w-[200px] shadow-2xl animate-in fade-in zoom-in-95 duration-300">
                     <div className="flex items-center justify-between mb-2 border-b border-white/5 pb-2">
                         <span className="font-bold text-white uppercase tracking-widest flex items-center gap-1.5">
                             <Activity className="w-3 h-3" /> Stats
