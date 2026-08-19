@@ -6,6 +6,66 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Security
+
+- **Verified Identity**: Cloudflare Access assertions (`Cf-Access-Jwt-Assertion`) are now
+  verified against the team JWKS — signature, audience, issuer and expiry — instead of
+  trusting the plain `Cf-Access-Authenticated-User-Email` header, which anyone able to
+  reach the origin directly could forge. Configure with `CF_ACCESS_TEAM_DOMAIN` and
+  `CF_ACCESS_AUD`; without them the previous header behaviour is kept and logged loudly.
+- **Authentication Where There Was None**: `/api/proxy` and the WebSocket handshake
+  accepted anonymous callers. `REQUIRE_AUTHENTICATION` rejects them, defaulting to on
+  once Access is configured.
+- **SSRF Closed**: removed the trusted-CDN allowlist that skipped address validation for
+  any subdomain of an allowlisted domain; redirects are now followed by the proxy with
+  every hop re-validated; the validated IP is pinned for the connection so DNS cannot
+  rebind between check and fetch.
+- **Per-User Cookies**: the single shared cookie jar is gone. Cookies are loaded per user
+  and attached per request, and responses fetched with cookies are cached under a key
+  that includes the user's identity.
+- **Validated Prefetching**: the prefetcher fetched manifest-derived URLs with no
+  validation; it uses the same validated path as the proxy.
+- **Shared Rate Limiting**: `/api/extension/sync` had no limit because the limiter was
+  private to the cookie routes. Both share one limiter under separate scopes.
+- **Cookie File Permissions**: cookie files are written owner-only on every path.
+- **Loopback by Default**: nginx publishes on `127.0.0.1`; the tunnel reaches it over the
+  Docker network. `NGINX_BIND`/`NGINX_PORT` opt into wider exposure.
+
+### Added
+
+- **DASH Manifest Generation**: `GET /api/dash-manifest` describes the adaptive video and
+  audio streams — which yt-dlp returns as separate fragmented-MP4 files with no manifest —
+  by scanning each file's box headers for its initialization and index ranges.
+- **Single-Element Playback**: a Shaka-based engine plays those streams through one media
+  element via MSE, so the browser muxes video and audio against one clock. Selected with
+  `NEXT_PUBLIC_STREAM_ENGINE=mse`; the legacy two-element path remains the default.
+- **Proxy Metrics**: `GET /api/metrics/proxy` reports per-transfer host, status, byte
+  offset, bytes sent against content-length, latency and outcome, classifying short
+  transfers as truncated — the evidence needed for the unresolved streaming errors.
+- **Backend Origin Override**: `NEXT_PUBLIC_BACKEND_ORIGIN` lets the frontend reach the
+  backend without nginx, so `npm run dev` works standalone.
+
+### Testing
+
+- 195 backend tests covering SSRF and upstream pinning, redirect validation, Access JWT
+  verification, connection limits under concurrent bursts, WebSocket sync, cookie
+  isolation, manifest generation and hardening.
+- Playwright end-to-end tests: two-client room synchronization through the real UI, and
+  MSE playback of a generated manifest verified in a real browser.
+- Tests run against a temporary data directory, so they neither depend on nor pollute the
+  real one; CI now runs on the same Python version as production.
+
+### Fixed
+
+- **In-Flight Cache Race**: results were published outside the lock guarding the table.
+- **Multi-Worker Corruption**: extra workers each held their own room state, splitting
+  rooms in a way that looked like a sync bug. Startup now refuses.
+- **Container Publish Workflow**: every run had been failing because the build requested
+  GitHub Actions cache without setting up Buildx.
+
+---
+
+
 ### Added
 - **Browser Extension**: Automatic cookie sync from Chrome/Firefox to server
 - **DASH Player Hooks**: Extracted `useDashPlayer` for initialization/quality management
