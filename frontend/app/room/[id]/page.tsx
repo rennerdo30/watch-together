@@ -575,6 +575,21 @@ export default function RoomPage() {
         return proxiedUrl;
     };
 
+    // Manifest describing the adaptive streams, for the MSE engine. The
+    // backend builds it from the formats it already resolved, so it is
+    // addressed by the original video URL rather than a stream URL.
+    const getManifestUrl = () => {
+        if (!videoData || videoData.stream_type !== 'dash') return undefined;
+        if (!videoData.original_url) return undefined;
+        // Identity travels as a query parameter in development mode, the
+        // same way the other client calls carry it.
+        const mockUser = typeof window === 'undefined'
+            ? null
+            : new URLSearchParams(window.location.search).get('user');
+        const userSuffix = mockUser ? `&user=${encodeURIComponent(mockUser)}` : '';
+        return `${BACKEND_ORIGIN}/api/dash-manifest?url=${encodeURIComponent(videoData.original_url)}${userSuffix}`;
+    };
+
     // Get DASH-specific URLs (proxied if needed)
     const getDashUrls = () => {
         if (!videoData || videoData.stream_type !== 'dash') return null;
@@ -702,6 +717,7 @@ export default function RoomPage() {
                                     initialTime={syncState.timestamp} // Pass initial sync timestamp
                                     // DASH-specific props
                                     streamType={videoData.stream_type}
+                                    manifestUrl={getManifestUrl()}
                                     videoUrl={getDashUrls()?.videoUrl}
                                     audioUrl={getDashUrls()?.audioUrl}
                                     availableQualities={getDashUrls()?.availableQualities}
