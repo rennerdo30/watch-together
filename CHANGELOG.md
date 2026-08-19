@@ -20,6 +20,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Auth Hardening**: Query parameter auth fallback gated behind `DEVELOPMENT_MODE` env var
 - **Cookie Validation**: Added 1MB upload size limit and Netscape format validation
 - **WebSocket Concurrency**: Room state initialization protected with `_state_lock` for atomic creation + role assignment
+- **Atomic Connection Limits**: Per-room and per-user limit checks moved inside `_state_lock` (fixes TOCTOU race)
+- **WebSocket Message Validation**: Message `type` checked for string type and length (50 chars), 100KB frame cap, JSON decode guard
+- **Cookie Validation (All Lines)**: Netscape format validation covers all data lines, not just the first 5
+- **Extension Sync Validation**: `/api/extension/sync` enforces the same 1MB limit and format validation as `/api/cookies`
+- **Cookie Upload Rate Limiting**: `POST /api/cookies` limited to 10 uploads per user per 60s
+- **In-Flight Cache Bounds**: `_in_flight_results` bounded to 100 entries with 30s TTL, synchronous cleanup under lock
+- **Room Lock Cleanup**: Room locks deleted on room cleanup, orphan locks swept every 60s
 - **Heartbeat Locking**: `get_sync_payload` acquires room lock to prevent reading during modification
 - **Cache Robustness**: In-flight request wait has 60s timeout; TOCTOU race in bucket cache fixed
 - **Heartbeat Backoff**: Exponential backoff on consecutive heartbeat errors
