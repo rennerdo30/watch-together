@@ -30,6 +30,7 @@ import yt_dlp
 from core.config import (
     CACHE_DIR, COOKIES_DIR, MAX_CACHE_SIZE_BYTES, CACHE_TTL_SECONDS,
     MIN_DISK_FREE_BYTES, MAX_CACHEABLE_FILE_BYTES, FORMAT_CACHE_TTL_SECONDS,
+    METRICS_DEFAULT_SAMPLE_LIMIT,
 )
 from core.security import get_user_cookie_path, get_user_from_request
 from services.cache import (
@@ -41,6 +42,10 @@ from services.cache import (
 from services.prefetcher import (
     get_or_create_session, notify_segment_for_url,
     prefetch_initial_segments, prefetch_cleanup_task,
+)
+from services.metrics import (
+    proxy_metrics, OUTCOME_OK, OUTCOME_UPSTREAM_ERROR,
+    OUTCOME_CLIENT_ABORTED, OUTCOME_TRUNCATED,
 )
 from services.database import init_database, cache_format
 from services.resolver import refresh_video_url, _extract_stream_url
@@ -265,6 +270,21 @@ async def get_proxy_client():
 def read_root():
     """Health check endpoint."""
     return {"status": "ok", "service": "Watch Together Backend"}
+
+
+@app.get("/api/metrics/proxy")
+async def proxy_metrics_endpoint(
+    request: Request,
+    samples: int = Query(METRICS_DEFAULT_SAMPLE_LIMIT, ge=0, le=500),
+):
+    """Diagnostic view of recent proxy transfers.
+
+    Used to characterise streaming failures (truncated transfers, slow
+    upstreams, aborted clients) that browser captures miss.
+    """
+    if not get_user_from_request(request):
+        raise HTTPException(status_code=401, detail="User identity required")
+    return await proxy_metrics.snapshot(sample_limit=samples)
 
 
 @app.get("/api/resolve")
@@ -651,8 +671,12 @@ async def proxy_stream(request: Request, url: str):
                     logger.warning(f"Bucket cache read error: {e}")
 
             # Fetch from upstream
+            upstream_started = time.monotonic()
             req = segment_client.build_request("GET", url, headers=outgoing_headers)
             r = await segment_client.send(req, stream=True)
+            upstream_ms = (time.monotonic() - upstream_started) * 1000
+            upstream_host = parsed_url.hostname or "unknown"
+            expected_bytes = int(r.headers.get("content-length", 0)) or None
 
             response_headers = {
                 "Access-Control-Allow-Origin": "*",
@@ -697,6 +721,9 @@ async def proxy_stream(request: Request, url: str):
                     total = 0
                     chunks = []  # Collect chunks for memory cache
                     content_type = r.headers.get("content-type", "video/mp4")
+                    transfer_started = time.monotonic()
+                    outcome = OUTCOME_OK
+                    transfer_error = None
                     try:
                         async with aiofiles.open(temp_path, 'wb') as f:
                             async for chunk in r.aiter_bytes():
@@ -732,26 +759,82 @@ async def proxy_stream(request: Request, url: str):
                                 url_hash = segment_cache_key.split('_')[1] if '_' in segment_cache_key else None
                                 if url_hash:
                                     await mark_content_active(url_hash)
+                    except asyncio.CancelledError:
+                        outcome = OUTCOME_CLIENT_ABORTED
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
+                        raise
                     except Exception as e:
+                        outcome = OUTCOME_TRUNCATED
+                        transfer_error = f"{type(e).__name__}: {e}"
                         logger.warning(f"Cache error: {e}")
                         if os.path.exists(temp_path):
                             os.remove(temp_path)
                     finally:
                         await r.aclose()
+                        if outcome == OUTCOME_OK and expected_bytes and total < expected_bytes:
+                            outcome = OUTCOME_TRUNCATED
+                            transfer_error = f"sent {total} of {expected_bytes} bytes"
+                        await proxy_metrics.record(
+                            host=upstream_host,
+                            status=r.status_code,
+                            outcome=outcome,
+                            upstream_ms=upstream_ms,
+                            transfer_ms=(time.monotonic() - transfer_started) * 1000,
+                            bytes_sent=total,
+                            range_start=range_start,
+                            expected_bytes=expected_bytes,
+                            error=transfer_error,
+                        )
 
                 return StreamingResponse(stream_and_cache(), status_code=r.status_code, headers=response_headers)
             else:
                 async def stream_only():
+                    transfer_started = time.monotonic()
+                    total = 0
+                    outcome = OUTCOME_OK
+                    transfer_error = None
                     try:
                         async for chunk in r.aiter_bytes():
+                            total += len(chunk)
                             yield chunk
+                    except asyncio.CancelledError:
+                        outcome = OUTCOME_CLIENT_ABORTED
+                        raise
+                    except Exception as e:
+                        outcome = OUTCOME_TRUNCATED
+                        transfer_error = f"{type(e).__name__}: {e}"
+                        raise
                     finally:
                         await r.aclose()
+                        if outcome == OUTCOME_OK and expected_bytes and total < expected_bytes:
+                            outcome = OUTCOME_TRUNCATED
+                            transfer_error = f"sent {total} of {expected_bytes} bytes"
+                        await proxy_metrics.record(
+                            host=upstream_host,
+                            status=r.status_code,
+                            outcome=outcome,
+                            upstream_ms=upstream_ms,
+                            transfer_ms=(time.monotonic() - transfer_started) * 1000,
+                            bytes_sent=total,
+                            range_start=range_start,
+                            expected_bytes=expected_bytes,
+                            error=transfer_error,
+                        )
 
                 return StreamingResponse(stream_only(), status_code=r.status_code, headers=response_headers)
 
     except Exception as e:
         logger.error(f"Proxy error for {url}: {e}")
+        await proxy_metrics.record(
+            host=parsed_url.hostname or "unknown",
+            status=None,
+            outcome=OUTCOME_UPSTREAM_ERROR,
+            upstream_ms=0.0,
+            transfer_ms=0.0,
+            bytes_sent=0,
+            error=f"{type(e).__name__}: {e}",
+        )
         raise HTTPException(status_code=500, detail=f"Proxy error: {e}")
 
 
