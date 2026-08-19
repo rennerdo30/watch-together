@@ -26,6 +26,15 @@ PREFETCH_SESSION_TTL = 300  # 5 minutes - cleanup inactive prefetch sessions
 # Format cache configuration
 FORMAT_CACHE_TTL_SECONDS = 7200  # 2 hours - YouTube URLs typically valid for 6 hours
 
+# Per-user cookie jar caching for upstream fetches
+COOKIE_JAR_CACHE_TTL_SECONDS = 60  # Re-read a user's cookie file at most this often
+COOKIE_JAR_CACHE_MAX_USERS = 50  # Parsed jars kept in memory
+
+# Upstream fetching (media proxy) limits
+UPSTREAM_MAX_REDIRECTS = 3  # Redirect hops followed, each one re-validated
+UPSTREAM_ALLOWED_SCHEMES = ("http", "https")
+UPSTREAM_ALLOWED_PORTS = (80, 443, 8080, 8443)
+
 # Cloudflare Access authentication
 # Team domain, e.g. "https://example.cloudflareaccess.com", and the
 # Access application's AUD tag. Both are required to verify assertions;

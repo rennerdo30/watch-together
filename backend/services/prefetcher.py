@@ -14,6 +14,7 @@ from urllib.parse import urljoin
 import httpx
 
 from services.cache import memory_cache, get_segment_cache_key, is_audio_url, mark_content_active
+from services.upstream import open_upstream_stream, UnsafeUpstreamError
 from core.config import (
     PREFETCH_VIDEO_COUNT,
     PREFETCH_AUDIO_COUNT,
@@ -114,7 +115,10 @@ class PrefetchSession:
 
         # Create client if needed
         if self._client is None:
+            # Redirects are followed by open_upstream_stream so each hop
+            # is validated; the client must not follow them itself.
             self._client = httpx.AsyncClient(
+                follow_redirects=False,
                 timeout=httpx.Timeout(30.0),
                 limits=httpx.Limits(max_connections=5)
             )
@@ -133,10 +137,16 @@ class PrefetchSession:
 
             try:
                 logger.info(f"PREFETCH: segment {idx} - {url[:60]}...")
-                resp = await self._client.get(url, headers={
+                # Prefetch targets come from manifests, which a user can point
+                # anywhere, so they get the same validation as proxied fetches.
+                resp, _pinned = await open_upstream_stream(self._client, url, {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                     "Referer": "https://www.youtube.com/"
                 })
+                try:
+                    await resp.aread()
+                finally:
+                    await resp.aclose()
 
                 if resp.status_code in (200, 206):
                     content_type = resp.headers.get("content-type", "video/mp4")
@@ -205,11 +215,15 @@ async def prefetch_initial_segments(
     async def prefetch_range(url: str, start: int, length: int, is_audio: bool):
         """Prefetch a specific byte range into cache."""
         try:
-            resp = await client.get(url, headers={
+            resp, _pinned = await open_upstream_stream(client, url, {
                 "Range": f"bytes={start}-{start + length - 1}",
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 "Referer": "https://www.youtube.com/"
             })
+            try:
+                await resp.aread()
+            finally:
+                await resp.aclose()
             if resp.status_code in (200, 206):
                 cache_key = get_segment_cache_key(url, start)
                 content_type = resp.headers.get("content-type", "video/mp4")
