@@ -1,5 +1,11 @@
-// When running server-side (SSG/SSR), use internal docker URL. Client-side use relative path.
-const API_BASE_URL = typeof window === 'undefined' ? (process.env.BACKEND_URL || 'http://backend:8000') : '';
+import { BACKEND_ORIGIN } from '@/lib/constants';
+
+// When running server-side (SSG/SSR), use internal docker URL. Client-side
+// requests stay relative so nginx routes them, unless BACKEND_ORIGIN points
+// at the backend directly (running without a reverse proxy).
+const API_BASE_URL = typeof window === 'undefined'
+    ? (process.env.BACKEND_URL || 'http://backend:8000')
+    : BACKEND_ORIGIN;
 
 export interface QualityOption {
     height: number;
