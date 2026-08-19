@@ -2,9 +2,9 @@
 Tests for cookie upload validation, rate limiting, and the extension
 sync endpoint.
 
-The xfail-marked test documents that /api/extension/sync has no rate
-limiting; it becomes a passing test once the limiter is shared from
-core/ and applied there.
+Both upload paths share one limiter from core/, counted under separate
+scopes: the extension route previously had no limit at all because the
+limiter was private to the cookie routes.
 """
 import pytest
 import sys
@@ -31,10 +31,10 @@ def client():
 @pytest.fixture(autouse=True)
 def reset_rate_limiter():
     """Each test starts with an empty rate-limit window."""
-    from api.routes import cookies as cookies_module
-    cookies_module._rate_limit_store.clear()
+    from core import rate_limit
+    rate_limit.reset()
     yield
-    cookies_module._rate_limit_store.clear()
+    rate_limit.reset()
 
 
 class TestCookieFormatValidation:
@@ -109,17 +109,29 @@ class TestExtensionSync:
     def test_status_requires_bearer_token(self, client):
         assert client.get("/api/extension/status").status_code == 401
 
-    @pytest.mark.xfail(
-        reason="/api/extension/sync has no rate limiting; the limiter is "
-        "module-private to api/routes/cookies.py",
-        strict=False,
-    )
     def test_sync_endpoint_is_rate_limited(self):
-        """The extension sync route must enforce a per-user upload limit."""
-        import inspect
-        from api.routes import extension as extension_module
+        """The extension sync route enforces a per-user upload limit."""
+        from core.rate_limit import check_rate_limit
+        from api.routes.extension import RATE_LIMIT_SCOPE
+        from core.config import RATE_LIMIT_MAX_REQUESTS
+        from fastapi import HTTPException
 
-        source = inspect.getsource(extension_module)
-        assert "rate_limit" in source, (
-            "expected /api/extension/sync to call a shared rate limiter"
-        )
+        for _ in range(RATE_LIMIT_MAX_REQUESTS):
+            check_rate_limit("ext@example.com", scope=RATE_LIMIT_SCOPE)
+
+        with pytest.raises(HTTPException) as exc_info:
+            check_rate_limit("ext@example.com", scope=RATE_LIMIT_SCOPE)
+        assert exc_info.value.status_code == 429
+
+    def test_sync_and_upload_limits_are_independent(self):
+        """Exhausting one endpoint's budget must not block the other."""
+        from core.rate_limit import check_rate_limit
+        from api.routes.extension import RATE_LIMIT_SCOPE as SYNC_SCOPE
+        from api.routes.cookies import RATE_LIMIT_SCOPE as UPLOAD_SCOPE
+        from core.config import RATE_LIMIT_MAX_REQUESTS
+
+        for _ in range(RATE_LIMIT_MAX_REQUESTS):
+            check_rate_limit("both@example.com", scope=SYNC_SCOPE)
+
+        # The upload budget is untouched.
+        check_rate_limit("both@example.com", scope=UPLOAD_SCOPE)

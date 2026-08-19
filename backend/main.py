@@ -86,6 +86,25 @@ REQUIRE_AUTHENTICATION = (
 )
 
 
+def check_single_worker() -> None:
+    """Refuse to start with multiple workers.
+
+    Room state, the caches, the in-flight request table and the rate
+    limiter all live in this process's memory. A second worker gets its
+    own copy of each, so users in one room would be split across workers
+    and never see each other — a failure that looks like a sync bug
+    rather than a deployment mistake. Fail loudly instead.
+    """
+    workers = os.environ.get("WEB_CONCURRENCY") or os.environ.get("UVICORN_WORKERS")
+    if workers and workers.strip().isdigit() and int(workers) > 1:
+        raise RuntimeError(
+            f"This backend must run with a single worker (got {workers}). "
+            "Room state and caches are held in process memory, so extra "
+            "workers would split rooms and silently break synchronization. "
+            "Remove WEB_CONCURRENCY/UVICORN_WORKERS or set it to 1."
+        )
+
+
 async def fetch_upstream_body(client, url: str, headers: dict):
     """Fetch a small upstream resource (a manifest) in full.
 
@@ -163,6 +182,7 @@ async def lifespan(app: FastAPI):
     """Application lifespan - start/stop background tasks."""
     tasks = []
     try:
+        check_single_worker()
         log_auth_configuration()
 
         # Initialize database and run migrations

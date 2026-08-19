@@ -9,8 +9,9 @@ from typing import Dict, Tuple
 from fastapi import APIRouter, Request, HTTPException
 import pydantic
 
-from core.config import COOKIES_DIR
+from core.config import COOKIES_DIR, COOKIE_FILE_MODE
 from core.security import get_user_cookie_path, get_user_from_request
+from core.rate_limit import check_rate_limit
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["cookies"])
@@ -18,33 +19,8 @@ router = APIRouter(prefix="/api", tags=["cookies"])
 
 MAX_COOKIE_SIZE = 1 * 1024 * 1024  # 1MB limit
 
-# Simple in-memory rate limiter: user_email -> (request_count, window_start)
-_rate_limit_store: Dict[str, Tuple[int, float]] = {}
-_RATE_LIMIT_WINDOW = 60.0  # 1 minute
-_RATE_LIMIT_MAX_REQUESTS = 10  # Max uploads per window
-
-
-def _check_rate_limit(user_email: str) -> None:
-    """Check and enforce per-user rate limit. Raises HTTPException if exceeded."""
-    now = time.time()
-
-    # Periodic cleanup of stale entries to prevent unbounded growth
-    if len(_rate_limit_store) > 1000:
-        stale_keys = [k for k, (_, ts) in _rate_limit_store.items() if now - ts > _RATE_LIMIT_WINDOW * 2]
-        for k in stale_keys:
-            del _rate_limit_store[k]
-
-    entry = _rate_limit_store.get(user_email)
-    if entry:
-        count, window_start = entry
-        if now - window_start < _RATE_LIMIT_WINDOW:
-            if count >= _RATE_LIMIT_MAX_REQUESTS:
-                raise HTTPException(status_code=429, detail="Too many cookie upload requests. Try again later.")
-            _rate_limit_store[user_email] = (count + 1, window_start)
-        else:
-            _rate_limit_store[user_email] = (1, now)
-    else:
-        _rate_limit_store[user_email] = (1, now)
+# Scope name so cookie uploads are counted separately from other endpoints.
+RATE_LIMIT_SCOPE = "cookie-upload"
 
 
 class CookieContent(pydantic.BaseModel):
@@ -83,7 +59,7 @@ async def update_cookies(request: Request, cookie_data: CookieContent):
     if not user_email:
         raise HTTPException(status_code=401, detail="User identity required. Please log in.")
 
-    _check_rate_limit(user_email)
+    check_rate_limit(user_email, scope=RATE_LIMIT_SCOPE)
 
     try:
         content = cookie_data.content
@@ -117,6 +93,9 @@ async def update_cookies(request: Request, cookie_data: CookieContent):
             os.makedirs(os.path.dirname(cookie_path), exist_ok=True)
             async with aiofiles.open(cookie_path, 'w') as f:
                 await f.write(content)
+            # Cookie files carry live session credentials, so keep them
+            # readable only by the account running the backend.
+            os.chmod(cookie_path, COOKIE_FILE_MODE)
 
         logger.info(f"Updated cookies for user: {user_email}")
         return {"status": "ok", "message": "Cookies updated successfully"}

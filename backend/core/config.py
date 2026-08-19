@@ -26,6 +26,14 @@ PREFETCH_SESSION_TTL = 300  # 5 minutes - cleanup inactive prefetch sessions
 # Format cache configuration
 FORMAT_CACHE_TTL_SECONDS = 7200  # 2 hours - YouTube URLs typically valid for 6 hours
 
+# Cookie files hold live session credentials: owner read/write only.
+COOKIE_FILE_MODE = 0o600
+
+# Rate limiting for upload endpoints
+RATE_LIMIT_WINDOW_SECONDS = 60.0
+RATE_LIMIT_MAX_REQUESTS = 10  # Uploads allowed per user per window
+RATE_LIMIT_STORE_MAX_KEYS = 1000  # Counters kept before stale ones are pruned
+
 # DASH manifest generation
 MANIFEST_PROBE_BYTES = 64 * 1024  # Prefix read to locate ftyp/moov/sidx
 MANIFEST_INDEX_CACHE_TTL_SECONDS = 7200  # Byte ranges are stable per rendition

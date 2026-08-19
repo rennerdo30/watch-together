@@ -237,7 +237,8 @@ async def get_or_fetch_segment(url: str, fetch_fn) -> bytes:
         except asyncio.TimeoutError:
             logger.warning(f"In-flight request wait timed out: {url[:60]}...")
             raise Exception("Timed out waiting for in-flight request")
-        result = _in_flight_results.get(url)
+        async with _in_flight_lock:
+            result = _in_flight_results.get(url)
         if result is None:
             raise Exception("In-flight request returned no data")
         result_data, result_error, _ = result
@@ -247,13 +248,16 @@ async def get_or_fetch_segment(url: str, fetch_fn) -> bytes:
             raise Exception("In-flight request returned no data")
         return result_data
 
-    # We're the fetcher
+    # We're the fetcher. The result is published under the lock so a
+    # waiter reading it cannot race with the cleanup that evicts it.
     try:
         data = await fetch_fn()
-        _in_flight_results[url] = (data, None, time.time())
+        async with _in_flight_lock:
+            _in_flight_results[url] = (data, None, time.time())
         return data
     except Exception as e:
-        _in_flight_results[url] = (None, e, time.time())
+        async with _in_flight_lock:
+            _in_flight_results[url] = (None, e, time.time())
         raise
     finally:
         # Signal waiters and cleanup
