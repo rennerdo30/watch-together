@@ -7,11 +7,16 @@ from typing import List, Optional
 from fastapi import APIRouter, Request, HTTPException, Header
 import pydantic
 
-from core.config import COOKIES_DIR
+from core.config import COOKIES_DIR, COOKIE_FILE_MODE
 from core.security import get_user_cookie_path
+from core.rate_limit import check_rate_limit
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/extension", tags=["extension"])
+
+# Counted separately from browser cookie uploads so a busy extension
+# cannot lock a user out of the web UI, or the other way round.
+RATE_LIMIT_SCOPE = "extension-sync"
 
 
 class CookieSyncRequest(pydantic.BaseModel):
@@ -49,6 +54,7 @@ async def sync_cookies(
     """
     # Validate token
     user_email = await validate_bearer_token(authorization)
+    check_rate_limit(user_email, scope=RATE_LIMIT_SCOPE)
 
     # Extract token ID for updating sync stats
     token_id = authorization[7:]
@@ -85,6 +91,7 @@ async def sync_cookies(
             import aiofiles
             async with aiofiles.open(cookie_path, 'w') as f:
                 await f.write(content)
+            os.chmod(cookie_path, COOKIE_FILE_MODE)
 
         # 3. Update token sync stats
         await update_token_sync(token_id)

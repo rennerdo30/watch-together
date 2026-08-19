@@ -8,7 +8,7 @@ import aiofiles
 from typing import Optional
 import yt_dlp
 
-from core.config import COOKIES_DIR
+from core.config import COOKIES_DIR, COOKIE_FILE_MODE
 from core.security import get_user_cookie_path
 from services.database import cache_format, get_cached_format, get_user_cookies
 
@@ -36,6 +36,7 @@ async def _ensure_cookie_file(user_email: str) -> Optional[str]:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             async with aiofiles.open(path, 'w') as f:
                 await f.write(content)
+            os.chmod(path, COOKIE_FILE_MODE)
             logger.info(f"Restored cookie file from DB for: {user_email}")
             return path
         except Exception as e:
