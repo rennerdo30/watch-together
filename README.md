@@ -14,6 +14,7 @@ A real-time video synchronization platform for watching YouTube, Twitch, and 180
 - **Universal Video Support**: Uses `yt-dlp` to resolve streams from YouTube, Twitch, Vimeo, Dailymotion, and 1800+ other sites
 - **Real-time Synchronization**: Sub-second accurate sync via WebSockets with intelligent drift correction
 - **DASH/HLS Streaming**: Separate video/audio streams with quality selection up to 4K
+- **Segment Caching & Prefetch**: Position-aware bucket cache on disk plus an in-memory LRU for hot segments, with look-ahead prefetching of upcoming video/audio segments
 - **Room System**: Create custom rooms with persistent queue and playback state
 - **Cookie Authentication**: Bypass age-restrictions and regional blocks with your own cookies
 - **Browser Extension**: Automatic cookie sync from your browser (Chrome/Firefox)
@@ -63,6 +64,30 @@ npm run dev
 - Backend API: http://localhost:8000
 - API Docs: http://localhost:8000/docs
 
+### Configuration
+
+The only variable in `.env.example` is `TUNNEL_TOKEN`, used by the optional
+Cloudflare Tunnel container. Leave it unset to run without a tunnel.
+
+Backend tunables (cache sizes, TTLs, prefetch depth) are constants in
+`backend/core/config.py` rather than environment variables — cache is capped at
+200 MB on disk with a 100 MB in-memory LRU by default.
+
+### Tests
+
+```bash
+# Backend (from the repo root)
+pip install -r backend/requirements.txt
+pip install pytest pytest-asyncio httpx
+python -m pytest -v backend/tests
+
+# Frontend
+npm run --prefix frontend lint
+npm run --prefix frontend build
+```
+
+CI runs exactly these, plus manifest/syntax checks on the browser extension.
+
 ## Architecture
 
 ```
@@ -111,10 +136,13 @@ To watch age-restricted or region-locked content:
 
 ```
 watch-together/
-├── backend/                 # FastAPI Python backend
-│   ├── main.py             # API endpoints, proxy, app init
-│   ├── connection_manager.py # WebSocket room management
-│   └── services/           # Resolver, cache, database
+├── backend/                    # FastAPI Python backend
+│   ├── main.py                # App init, streaming proxy, WebSocket entrypoint
+│   ├── connection_manager.py  # WebSocket room management
+│   ├── api/routes/            # rooms, cookies, tokens, extension routers
+│   ├── core/                  # config constants, security helpers
+│   ├── services/              # resolver, cache, prefetcher, database
+│   └── tests/                 # pytest suite
 ├── frontend/               # Next.js React frontend
 │   ├── app/               # App router pages
 │   ├── components/        # React components
