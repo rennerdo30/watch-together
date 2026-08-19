@@ -41,7 +41,9 @@ docker compose logs -f
 ```
 
 The application runs on:
-- **Port 80**: Nginx proxy (main entry point, only externally exposed port)
+- **Port 80**: Nginx proxy (main entry point). Published on `127.0.0.1` only by
+  default — the Cloudflare tunnel reaches it over the Docker network. Set
+  `NGINX_BIND=0.0.0.0` (and optionally `NGINX_PORT`) to publish it to the LAN.
 
 Internal services (not exposed to host by default):
 - **Port 3000**: Next.js frontend (Docker-internal only)
@@ -82,7 +84,7 @@ In the Cloudflare Dashboard, add a public hostname:
 
 > **Note**: Only one hostname entry is needed. Nginx handles routing internally.
 
-#### 4. Enable Authentication (Optional but Recommended)
+#### 4. Enable Authentication (Strongly Recommended)
 
 1. Go to **Access** → **Applications**
 2. Create a **Self-hosted** application
@@ -92,8 +94,29 @@ In the Cloudflare Dashboard, add a public hostname:
 4. Add an access policy:
    - Allow specific emails or email domains
    - Example: `*@yourdomain.com`
+5. Copy the application's **Audience (AUD) tag** from its Overview page.
 
-The application reads `Cf-Access-Authenticated-User-Email` header for user identity.
+Then set both values in `.env` so the backend *verifies* identities:
+
+```bash
+CF_ACCESS_TEAM_DOMAIN=https://yourteam.cloudflareaccess.com
+CF_ACCESS_AUD=your_application_audience_tag
+```
+
+With these set, the backend validates the signed `Cf-Access-Jwt-Assertion`
+token on every request — checking the signature against your team's public
+keys, the audience, the issuer, and the expiry — and takes the user's email
+from the verified claims.
+
+> **Why this matters**: without these variables the backend falls back to
+> trusting the plain `Cf-Access-Authenticated-User-Email` header. That header
+> is set by Cloudflare, but anyone who can reach the origin directly can also
+> send it, and identity selects which user's stored cookies are used. Set both
+> variables, and keep the origin unreachable except through the tunnel.
+
+Setting them also turns on `REQUIRE_AUTHENTICATION`, so anonymous WebSocket
+and proxy requests are rejected instead of falling back to a guest identity.
+Override it explicitly if you want different behaviour.
 
 #### 5. Deploy
 
@@ -105,16 +128,26 @@ docker compose up -d --build
 
 For use with your own reverse proxy (Nginx, Traefik, Caddy).
 
-#### 1. Modify docker-compose.yml
+#### 1. Configure the published port
 
-Remove or comment out the `tunnel` service and expose the proxy port:
+Remove or comment out the `cloudflared` service, then choose where nginx is
+published. For a reverse proxy on the same host, the loopback default already
+works — just pick the port:
 
-```yaml
-services:
-  proxy:
-    ports:
-      - "8080:80"  # Expose on host port 8080
+```bash
+NGINX_PORT=8080          # reachable at 127.0.0.1:8080
 ```
+
+For a reverse proxy on another host, publish it on all interfaces:
+
+```bash
+NGINX_BIND=0.0.0.0
+NGINX_PORT=8080
+```
+
+> Without Cloudflare Access in front, set up authentication in your own proxy.
+> The backend cannot verify Access assertions that are never issued, so it
+> falls back to trusting the identity header.
 
 #### 2. Configure External Reverse Proxy
 

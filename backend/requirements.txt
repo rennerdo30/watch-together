@@ -5,6 +5,7 @@ fastapi==0.141.1
 h11==0.16.0
 idna==3.19
 pydantic==2.13.4
+pyjwt[crypto]==2.13.0
 starlette==1.6.0
 typing_extensions==4.16.0
 uvicorn[standard]==0.52.4

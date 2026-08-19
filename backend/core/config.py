@@ -26,6 +26,17 @@ PREFETCH_SESSION_TTL = 300  # 5 minutes - cleanup inactive prefetch sessions
 # Format cache configuration
 FORMAT_CACHE_TTL_SECONDS = 7200  # 2 hours - YouTube URLs typically valid for 6 hours
 
+# Cloudflare Access authentication
+# Team domain, e.g. "https://example.cloudflareaccess.com", and the
+# Access application's AUD tag. Both are required to verify assertions;
+# when unset the backend falls back to trusting the identity header and
+# logs a warning at startup.
+CF_ACCESS_TEAM_DOMAIN = os.environ.get("CF_ACCESS_TEAM_DOMAIN", "")
+CF_ACCESS_AUD = os.environ.get("CF_ACCESS_AUD", "")
+CF_ACCESS_JWKS_CACHE_SECONDS = 3600  # Refresh signing keys hourly
+CF_ACCESS_JWKS_TIMEOUT_SECONDS = 5  # Network timeout fetching signing keys
+CF_ACCESS_ALGORITHMS = ("RS256",)  # Algorithms Cloudflare Access signs with
+
 # Proxy metrics configuration
 METRICS_SAMPLE_CAPACITY = 500  # Recent proxy transfers kept in the ring buffer
 METRICS_SLOW_UPSTREAM_MS = 5000  # Upstream fetches slower than this are counted
