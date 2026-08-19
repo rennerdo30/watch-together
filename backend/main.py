@@ -29,6 +29,7 @@ from core.config import (
     CACHE_DIR, COOKIES_DIR, MAX_CACHE_SIZE_BYTES, CACHE_TTL_SECONDS,
     MIN_DISK_FREE_BYTES, MAX_CACHEABLE_FILE_BYTES, FORMAT_CACHE_TTL_SECONDS,
     METRICS_DEFAULT_SAMPLE_LIMIT,
+    MANIFEST_MAX_VIDEO_REPRESENTATIONS, MANIFEST_MAX_AUDIO_REPRESENTATIONS,
 )
 from core.security import (
     get_user_cookie_path, get_user_from_request, get_user_from_websocket,
@@ -50,11 +51,12 @@ from services.upstream import (
     open_upstream_stream, resolve_upstream,
 )
 from services.user_cookies import get_cookie_header
+from services.manifest import build_manifest_for_formats, ManifestError
 from services.metrics import (
     proxy_metrics, OUTCOME_OK, OUTCOME_UPSTREAM_ERROR,
     OUTCOME_CLIENT_ABORTED, OUTCOME_TRUNCATED,
 )
-from services.database import init_database, cache_format
+from services.database import init_database, cache_format, get_cached_format
 from services.resolver import refresh_video_url, _extract_stream_url
 from api.routes.cookies import router as cookies_router
 from api.routes.rooms import router as rooms_router
@@ -342,6 +344,7 @@ def resolve_stream(
                     "is_live": info.get('is_live', False),
                     "thumbnail": info.get('thumbnail'),
                     "backend_engine": "yt-dlp",
+                    "duration": info.get('duration'),
                     "quality": f"{stream_info.get('height', '?')}p" if stream_info.get('height') else "auto",
                     "has_audio": stream_info.get('has_audio', True),
                     "stream_type": stream_info.get('type', 'unknown')
@@ -383,6 +386,7 @@ def resolve_stream(
                     "is_live": info.get('is_live', False),
                     "thumbnail": info.get('thumbnail'),
                     "backend_engine": "yt-dlp",
+                    "duration": info.get('duration'),
                     "quality": f"{stream_info.get('height', '?')}p" if stream_info.get('height') else "auto",
                     "has_audio": stream_info.get('has_audio', True),
                     "stream_type": stream_info.get('type', 'unknown')
@@ -469,6 +473,96 @@ def rewrite_hls_manifest(content: str, base_url: str, proxy_base: str) -> str:
         result.append(f"{proxy_base}{quote(full_url, safe='')}")
 
     return '\n'.join(result)
+
+
+@app.get("/api/dash-manifest")
+async def dash_manifest(request: Request, url: str):
+    """Build a DASH manifest for an already-resolved video.
+
+    Lets one media element play the adaptive video and audio streams
+    through MSE, instead of a <video> and an <audio> element being kept
+    in step by hand.
+    """
+    user_email = get_user_from_request(request)
+    if REQUIRE_AUTHENTICATION and not user_email:
+        raise HTTPException(status_code=401, detail="User identity required")
+
+    cached = await get_cached_format(url)
+    if not cached:
+        raise HTTPException(
+            status_code=404,
+            detail="Video has not been resolved yet. Call /api/resolve first.",
+        )
+
+    duration = cached.get("duration")
+    if not duration:
+        raise HTTPException(status_code=422, detail="Video duration is unknown")
+
+    video_formats = [
+        {
+            "id": quality.get("format_id") or f"v{position}",
+            "url": quality.get("video_url"),
+            "width": quality.get("width"),
+            "height": quality.get("height"),
+            "vcodec": quality.get("vcodec"),
+            "tbr": quality.get("tbr"),
+            "fps": quality.get("fps"),
+        }
+        for position, quality in enumerate(
+            cached.get("available_qualities", [])[:MANIFEST_MAX_VIDEO_REPRESENTATIONS]
+        )
+    ]
+    audio_formats = [
+        {
+            "id": option.get("format_id") or f"a{position}",
+            "url": option.get("audio_url"),
+            "acodec": option.get("acodec"),
+            "abr": option.get("abr"),
+            "asr": option.get("asr"),
+            "audio_channels": option.get("audio_channels"),
+        }
+        for position, option in enumerate(
+            cached.get("audio_options", [])[:MANIFEST_MAX_AUDIO_REPRESENTATIONS]
+        )
+    ]
+
+    if not video_formats or not audio_formats:
+        raise HTTPException(status_code=422, detail="Video has no adaptive streams")
+
+    host = request.headers.get("host")
+    proto = "https" if request.headers.get("x-forwarded-proto") == "https" else "http"
+    proxy_base = f"{proto}://{host}/api/proxy?url="
+
+    outgoing_headers = {
+        "User-Agent": request.headers.get("user-agent", "Mozilla/5.0"),
+        "Referer": "https://www.youtube.com/",
+    }
+    cookie_header = get_cookie_header(user_email, video_formats[0]["url"]) if user_email else None
+    if cookie_header:
+        outgoing_headers["Cookie"] = cookie_header
+
+    try:
+        manifest = await build_manifest_for_formats(
+            await get_proxy_client(),
+            duration_seconds=float(duration),
+            video_formats=video_formats,
+            audio_formats=audio_formats,
+            proxy_base=proxy_base,
+            headers=outgoing_headers,
+        )
+    except UnsafeUpstreamError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ManifestError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return Response(
+        content=manifest,
+        media_type="application/dash+xml",
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "no-cache",
+        },
+    )
 
 
 @app.options("/api/proxy")

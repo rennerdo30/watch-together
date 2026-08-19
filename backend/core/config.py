@@ -26,6 +26,14 @@ PREFETCH_SESSION_TTL = 300  # 5 minutes - cleanup inactive prefetch sessions
 # Format cache configuration
 FORMAT_CACHE_TTL_SECONDS = 7200  # 2 hours - YouTube URLs typically valid for 6 hours
 
+# DASH manifest generation
+MANIFEST_PROBE_BYTES = 64 * 1024  # Prefix read to locate ftyp/moov/sidx
+MANIFEST_INDEX_CACHE_TTL_SECONDS = 7200  # Byte ranges are stable per rendition
+MANIFEST_INDEX_CACHE_MAX_ENTRIES = 500
+MANIFEST_MIN_BANDWIDTH = 1000  # Floor so a manifest never declares 0 bps
+MANIFEST_MAX_VIDEO_REPRESENTATIONS = 6  # Renditions offered for adaptive switching
+MANIFEST_MAX_AUDIO_REPRESENTATIONS = 2
+
 # Per-user cookie jar caching for upstream fetches
 COOKIE_JAR_CACHE_TTL_SECONDS = 60  # Re-read a user's cookie file at most this often
 COOKIE_JAR_CACHE_MAX_USERS = 50  # Parsed jars kept in memory
