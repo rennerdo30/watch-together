@@ -142,13 +142,18 @@ class MemoryCache:
 memory_cache = MemoryCache()
 
 
-def get_segment_cache_key(url: str, range_start: int = 0) -> str:
+def get_segment_cache_key(url: str, range_start: int = 0, identity: str = None) -> str:
     """
     Generate a cache key for a segment.
 
-    Uses SHA-256 hash of URL with range start position.
+    Uses SHA-256 hash of URL with range start position. `identity` is set
+    when the fetch carried a specific user's cookies, which keeps
+    authenticated content out of the shared, anonymous cache entries.
     """
     url_hash = hashlib.sha256(url.encode()).hexdigest()[:24]
+    if identity:
+        identity_hash = hashlib.sha256(identity.encode()).hexdigest()[:16]
+        return f"seg_{url_hash}_{range_start}_u{identity_hash}"
     return f"seg_{url_hash}_{range_start}"
 
 
@@ -296,15 +301,21 @@ def get_bucket_for_position(byte_pos: int) -> int:
     return byte_pos // BUCKET_SIZE_BYTES
 
 
-def get_bucket_cache_key(url: str, bucket_num: int) -> Tuple[str, str]:
+def get_bucket_cache_key(url: str, bucket_num: int, identity: str = None) -> Tuple[str, str]:
     """Get cache key and path for a bucket.
 
     Uses SHA-256 for better collision resistance and includes full URL in hash.
     DASH video and audio URLs have different itag parameters so they won't collide.
+    `identity` separates entries fetched with a specific user's cookies
+    from the shared anonymous ones.
     """
     # Use SHA-256 with 24 char prefix for better collision resistance
     url_hash = hashlib.sha256(url.encode()).hexdigest()[:24]
-    cache_key = f"bucket_{url_hash}_{bucket_num}"
+    if identity:
+        identity_hash = hashlib.sha256(identity.encode()).hexdigest()[:16]
+        cache_key = f"bucket_{url_hash}_{bucket_num}_u{identity_hash}"
+    else:
+        cache_key = f"bucket_{url_hash}_{bucket_num}"
     cache_path = os.path.join(CACHE_DIR, cache_key)
     return cache_key, cache_path
 

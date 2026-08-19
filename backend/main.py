@@ -13,7 +13,6 @@ import asyncio
 import time
 import json
 import logging
-import http.cookiejar
 from urllib.parse import urljoin, quote
 import re
 
@@ -22,7 +21,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import StreamingResponse, Response
 from contextlib import asynccontextmanager
 import httpx
-import ipaddress
 import aiofiles
 import yt_dlp
 
@@ -47,6 +45,11 @@ from services.prefetcher import (
     get_or_create_session, notify_segment_for_url,
     prefetch_initial_segments, prefetch_cleanup_task,
 )
+from services.upstream import (
+    UnsafeUpstreamError, pin_url, request_kwargs,
+    open_upstream_stream, resolve_upstream,
+)
+from services.user_cookies import get_cookie_header
 from services.metrics import (
     proxy_metrics, OUTCOME_OK, OUTCOME_UPSTREAM_ERROR,
     OUTCOME_CLIENT_ABORTED, OUTCOME_TRUNCATED,
@@ -81,62 +84,31 @@ REQUIRE_AUTHENTICATION = (
 )
 
 
-# Trusted CDN domains that are safe to proxy (skip SSRF checks for performance)
-_TRUSTED_CDN_SUFFIXES = (
-    ".googlevideo.com", ".ytimg.com", ".youtube.com", ".ggpht.com",
-    ".twitch.tv", ".ttvnw.net", ".jtvnw.net",
-    ".akamaized.net", ".akamaihd.net",
-    ".cloudfront.net", ".fastly.net",
-    ".vimeocdn.com", ".vimeo.com",
-    ".dailymotion.com", ".dm-event.net", ".dmcdn.net",
-)
+async def fetch_upstream_body(client, url: str, headers: dict):
+    """Fetch a small upstream resource (a manifest) in full.
 
-
-def _is_trusted_cdn(hostname: str) -> bool:
-    """Check if hostname belongs to a trusted video CDN."""
-    hostname_lower = hostname.lower()
-    return any(hostname_lower.endswith(suffix) for suffix in _TRUSTED_CDN_SUFFIXES)
-
-
-def _is_private_ip(hostname: str) -> bool:
-    """Check if a hostname resolves to a private/reserved IP address."""
-    import socket
+    Uses the same validation and IP pinning as segment streaming, then
+    reads the body so callers can rewrite it.
+    """
+    response, _pinned = await open_upstream_stream(client, url, headers)
     try:
-        addr = ipaddress.ip_address(hostname)
-        return addr.is_private or addr.is_reserved or addr.is_loopback or addr.is_link_local
-    except ValueError:
-        # Not an IP literal - resolve hostname and check ALL resolved IPs
-        try:
-            resolved = socket.getaddrinfo(hostname, None)
-            for family, _type, _proto, _canonname, sockaddr in resolved:
-                ip_str = sockaddr[0]
-                addr = ipaddress.ip_address(ip_str)
-                if addr.is_private or addr.is_reserved or addr.is_loopback or addr.is_link_local:
-                    return True
-        except socket.gaierror:
-            return True  # Can't resolve = block
-    return False
+        await response.aread()
+        return response
+    finally:
+        await response.aclose()
 
 
 def validate_proxy_url(url: str) -> None:
-    """Validate that a proxy URL is safe (no SSRF). Raises HTTPException on failure."""
-    from urllib.parse import urlparse
-    parsed = urlparse(url)
+    """Validate that a proxy URL is safe to fetch.
 
-    # Must be http or https
-    if parsed.scheme not in ("http", "https"):
-        raise HTTPException(status_code=400, detail="Only http/https URLs are allowed")
-
-    if not parsed.hostname:
-        raise HTTPException(status_code=400, detail="Invalid URL: no hostname")
-
-    # Skip SSRF check for trusted video CDN domains (immune to DNS rebinding)
-    if _is_trusted_cdn(parsed.hostname):
-        return
-
-    # Block private/internal IPs
-    if _is_private_ip(parsed.hostname):
-        raise HTTPException(status_code=400, detail="Access to internal networks is not allowed")
+    Every host is checked, including well-known CDNs: hostname suffixes
+    prove nothing when an attacker can own a subdomain of an allowlisted
+    domain. Raises HTTPException on failure.
+    """
+    try:
+        pin_url(url)
+    except UnsafeUpstreamError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ============================================================================
@@ -256,22 +228,17 @@ app.include_router(extension_router)
 _proxy_client = None
 
 async def get_proxy_client():
-    """Get or create the HTTP client for proxying."""
+    """Get or create the HTTP client for proxying.
+
+    The client deliberately holds no cookie jar and does not follow
+    redirects. Cookies belong to individual users and are attached per
+    request; redirects are followed by the upstream helper so every hop
+    is validated.
+    """
     global _proxy_client
     if _proxy_client is None:
-        jar = http.cookiejar.MozillaCookieJar()
-        cookie_path = os.path.join("data", "cookies.txt")
-        if os.path.exists(cookie_path):
-            try:
-                jar.load(cookie_path, ignore_discard=True, ignore_expires=True)
-                logger.info("Proxy client loaded cookies from data/cookies.txt")
-            except Exception as e:
-                logger.error(f"Failed to load cookies for proxy: {e}")
-        
         _proxy_client = httpx.AsyncClient(
-            cookies=jar,
-            follow_redirects=True,
-            max_redirects=3,  # Limit redirects to prevent YouTube CDN redirect loops
+            follow_redirects=False,
             timeout=httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=None),
             limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)
         )
@@ -565,12 +532,20 @@ async def proxy_stream(request: Request, url: str):
     if not outgoing_headers["Range"]:
         del outgoing_headers["Range"]
 
+    # Attach the caller's own cookies, never another user's. Fetches that
+    # carry cookies are cached separately so authenticated content is not
+    # served to a different user from a shared cache entry.
+    cookie_header = get_cookie_header(user_email, url) if user_email else None
+    if cookie_header:
+        outgoing_headers["Cookie"] = cookie_header
+    cache_identity = user_email if cookie_header else None
+
     segment_client = await get_proxy_client()
 
     try:
         if is_hls_manifest:
             logger.info(f"Proxying HLS manifest for {url[:100]}...")
-            response = await segment_client.get(url, headers=outgoing_headers)
+            response = await fetch_upstream_body(segment_client, url, outgoing_headers)
             if response.status_code >= 400:
                 return Response(content=response.text, status_code=response.status_code)
 
@@ -591,7 +566,7 @@ async def proxy_stream(request: Request, url: str):
             )
         elif is_dash_manifest:
             logger.info(f"Proxying DASH manifest for {url[:100]}...")
-            response = await segment_client.get(url, headers=outgoing_headers)
+            response = await fetch_upstream_body(segment_client, url, outgoing_headers)
             if response.status_code >= 400:
                 return Response(content=response.text, status_code=response.status_code)
 
@@ -613,7 +588,7 @@ async def proxy_stream(request: Request, url: str):
             await notify_segment_for_url(url)
 
             # Check memory cache first (fastest)
-            segment_cache_key = get_segment_cache_key(url, range_start)
+            segment_cache_key = get_segment_cache_key(url, range_start, identity=cache_identity)
             is_audio = is_audio_url(url)
             mem_result = await memory_cache.get(segment_cache_key)
             if mem_result:
@@ -637,7 +612,7 @@ async def proxy_stream(request: Request, url: str):
 
             # Check disk bucket cache
             start_bucket = get_bucket_for_position(range_start)
-            _, bucket_cache_path = get_bucket_cache_key(url, start_bucket)
+            _, bucket_cache_path = get_bucket_cache_key(url, start_bucket, identity=cache_identity)
             bucket_meta_path = bucket_cache_path + ".meta"
 
             # Check bucket cache (with race condition protection)
@@ -694,10 +669,9 @@ async def proxy_stream(request: Request, url: str):
 
             # Fetch from upstream
             upstream_started = time.monotonic()
-            req = segment_client.build_request("GET", url, headers=outgoing_headers)
-            r = await segment_client.send(req, stream=True)
+            r, pinned = await open_upstream_stream(segment_client, url, outgoing_headers)
             upstream_ms = (time.monotonic() - upstream_started) * 1000
-            upstream_host = parsed_url.hostname or "unknown"
+            upstream_host = pinned.hostname
             expected_bytes = int(r.headers.get("content-length", 0)) or None
 
             response_headers = {
@@ -735,7 +709,7 @@ async def proxy_stream(request: Request, url: str):
                 return Response(content=rewritten, media_type="application/dash+xml")
 
             if should_cache:
-                _, cache_path = get_bucket_cache_key(url, start_bucket)
+                _, cache_path = get_bucket_cache_key(url, start_bucket, identity=cache_identity)
                 cache_meta_path = cache_path + ".meta"
 
                 async def stream_and_cache():
