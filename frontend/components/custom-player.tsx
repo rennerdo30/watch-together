@@ -5,7 +5,8 @@ import { cn } from '@/lib/utils';
 import { Loader2, Info, Activity } from 'lucide-react';
 import { PlayerControls } from './player-controls';
 import { QualityOption } from '@/lib/api';
-import { useDashSync, useDashPlayer, useAudioNormalization, useHlsPlayer, HlsQualityLevel } from './player/hooks';
+import { useDashSync, useDashPlayer, useAudioNormalization, useHlsPlayer, useShakaPlayer, HlsQualityLevel } from './player/hooks';
+import { STREAM_ENGINE } from '@/lib/constants';
 
 interface CustomPlayerProps {
     url: string | { src: string; type: string };
@@ -27,6 +28,8 @@ interface CustomPlayerProps {
     streamType?: 'hls' | 'dash' | 'combined' | 'video_only' | 'default' | 'unknown';
     videoUrl?: string;
     audioUrl?: string;
+    /** Manifest describing the adaptive streams, used by the MSE engine. */
+    manifestUrl?: string;
     availableQualities?: QualityOption[];
     // Callback for quality change notification (for prefetch optimization)
     onQualityChangeNotify?: (oldVideoUrl: string, newVideoUrl: string, audioUrl: string | undefined) => void;
@@ -67,6 +70,7 @@ export function CustomPlayer({
     streamType,
     videoUrl,
     audioUrl,
+    manifestUrl,
     availableQualities,
     onQualityChangeNotify,
 }: CustomPlayerProps) {
@@ -76,8 +80,13 @@ export function CustomPlayer({
     const containerRef = useRef<HTMLDivElement>(null);
     const isAutoPlayingRef = useRef(false);
 
-    // Determine playback mode
-    const isDashMode = streamType === 'dash' && !!videoUrl && !!audioUrl;
+    // Determine playback mode.
+    // MSE plays adaptive streams through one media element via a manifest;
+    // the legacy path drives separate video and audio elements and corrects
+    // the drift between them, so only one of the two can be active.
+    const isAdaptive = streamType === 'dash' && !!videoUrl && !!audioUrl;
+    const isMseMode = isAdaptive && STREAM_ENGINE === 'mse' && !!manifestUrl;
+    const isDashMode = isAdaptive && !isMseMode;
     const src = typeof url === 'string' ? url : url.src;
 
     // === UI STATE ===
@@ -172,8 +181,9 @@ export function CustomPlayer({
 
     const hlsPlayer = useHlsPlayer({
         videoRef,
-        src: isDashMode ? '' : src, // Only use HLS if not in DASH mode
-        enabled: !isDashMode,
+        // HLS only handles sources the other two engines do not.
+        src: isDashMode || isMseMode ? '' : src,
+        enabled: !isDashMode && !isMseMode,
         autoPlay,
         initialTime,
         isLive,
@@ -186,20 +196,40 @@ export function CustomPlayer({
         onLoadingChange: setHlsLoading,
     });
 
-    // Derive loading/qualities/currentQuality from appropriate hook
-    const isLoading = isDashMode ? dashPlayer.isLoading : hlsLoading;
-    const qualities = isDashMode ? dashPlayer.qualities : hlsQualities;
-    const currentQuality = isDashMode ? dashPlayer.currentQuality : hlsCurrentQuality;
+    // === MSE PLAYER HOOK (single element, manifest-driven) ===
+    const shakaPlayer = useShakaPlayer({
+        videoRef,
+        manifestUrl: manifestUrl ?? '',
+        enabled: isMseMode,
+        autoPlay,
+        initialTime,
+        onError: setError,
+    });
+
+    // Derive loading/qualities/currentQuality from the active engine
+    const isLoading = isDashMode
+        ? dashPlayer.isLoading
+        : isMseMode ? shakaPlayer.isLoading : hlsLoading;
+    const qualities = isDashMode
+        ? dashPlayer.qualities
+        : isMseMode ? shakaPlayer.qualities : hlsQualities;
+    const currentQuality = isDashMode
+        ? dashPlayer.currentQuality
+        : isMseMode ? shakaPlayer.currentQuality : hlsCurrentQuality;
 
     // === AUDIO NORMALIZATION HOOK ===
+    // Only the legacy path has a separate audio element to tap; MSE and HLS
+    // both carry audio on the video element.
     const normalization = useAudioNormalization({
         sourceElement: isDashMode ? audioRef.current : videoRef.current,
         enabled: isNormalizationEnabled,
         gain: normalizationGain,
     });
 
-    // Derive buffering state from appropriate hook
-    const isBuffering = isDashMode ? dashSync.isBuffering : hlsPlayer.isBuffering;
+    // Derive buffering state from the active engine
+    const isBuffering = isDashMode
+        ? dashSync.isBuffering
+        : isMseMode ? shakaPlayer.isBuffering : hlsPlayer.isBuffering;
     const isPlaying = isDashMode ? dashSync.isPlaying : !videoRef.current?.paused;
 
     // === APPLY INITIAL VOLUME (non-DASH mode) ===
@@ -371,10 +401,12 @@ export function CustomPlayer({
     const handleQualityChange = useCallback((index: number) => {
         if (isDashMode) {
             dashPlayer.setQuality(index);
+        } else if (isMseMode) {
+            shakaPlayer.setQuality(index);
         } else {
             hlsPlayer.setLevel(index);
         }
-    }, [isDashMode, dashPlayer, hlsPlayer]);
+    }, [isDashMode, isMseMode, dashPlayer, shakaPlayer, hlsPlayer]);
 
     const toggleNormalization = useCallback(() => {
         const newVal = !isNormalizationEnabled;
@@ -404,20 +436,23 @@ export function CustomPlayer({
                 poster={poster}
                 className="w-full h-full object-contain"
                 playsInline
-                data-stream-type={isDashMode ? 'dash' : 'hls'}
+                data-stream-type={isDashMode ? 'dash' : isMseMode ? 'mse' : 'hls'}
                 onClick={() => {
                     if (isLive) return;
                     handlePlayToggle();
                 }}
             />
 
-            {/* Audio Element (DASH mode) */}
-            <audio
-                ref={audioRef}
-                className="absolute w-1 h-1 opacity-0 pointer-events-none"
-                preload="auto"
-                playsInline
-            />
+            {/* Audio element, only used by the legacy two-element path.
+                MSE and HLS carry audio on the video element itself. */}
+            {isDashMode && (
+                <audio
+                    ref={audioRef}
+                    className="absolute w-1 h-1 opacity-0 pointer-events-none"
+                    preload="auto"
+                    playsInline
+                />
+            )}
 
             {/* Loading Overlay */}
             {isLoading && (
