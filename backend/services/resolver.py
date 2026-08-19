@@ -197,7 +197,7 @@ async def refresh_video_url(video_data: dict, user_agent: str = None, user_email
         # Map 'url' to 'stream_url' for frontend compatibility
         if 'url' in cached:
             video_data['stream_url'] = cached['url']
-        for key in ["video_url", "audio_url", "available_qualities", "audio_options", "stream_type", "quality", "type", "height", "has_audio"]:
+        for key in ["video_url", "audio_url", "available_qualities", "audio_options", "stream_type", "quality", "type", "height", "has_audio", "duration"]:
             if key in cached:
                 video_data[key] = cached[key]
         return video_data
