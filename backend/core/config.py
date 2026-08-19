@@ -26,6 +26,11 @@ PREFETCH_SESSION_TTL = 300  # 5 minutes - cleanup inactive prefetch sessions
 # Format cache configuration
 FORMAT_CACHE_TTL_SECONDS = 7200  # 2 hours - YouTube URLs typically valid for 6 hours
 
+# Proxy metrics configuration
+METRICS_SAMPLE_CAPACITY = 500  # Recent proxy transfers kept in the ring buffer
+METRICS_SLOW_UPSTREAM_MS = 5000  # Upstream fetches slower than this are counted
+METRICS_DEFAULT_SAMPLE_LIMIT = 50  # Samples returned by the metrics endpoint
+
 # Ensure directories exist
 for directory in [CACHE_DIR, COOKIES_DIR, "data", "data/yt_dlp_cache"]:
     if not os.path.exists(directory):
