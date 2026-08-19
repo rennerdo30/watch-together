@@ -1,79 +1,95 @@
 # Known Issues & Roadmap
 
+Last verified against the codebase: 2026-08-19.
+
 ## Known Issues
 
 ### High Priority
 
-#### Connection Limit Race Condition
+#### SSRF in the Proxy Endpoint
 - **Status**: Open
-- **Description**: Per-room and per-user connection limit checks are performed outside any lock, creating a TOCTOU race. Concurrent WebSocket connections can bypass limits.
-- **Impact**: Room could exceed `MAX_CONNECTIONS_PER_ROOM` (50) under concurrent connection bursts
-- **Fix**: Move limit checks inside `manager.connect()` protected by `_state_lock`
+- **Description**: `validate_proxy_url()` in `backend/main.py` has three independent bypass paths:
+  1. **Trusted-CDN suffix bypass**: `_is_trusted_cdn()` returns early *before* any IP validation and
+     matches by hostname suffix only. An attacker-controlled subdomain of an allowlisted CDN domain
+     (e.g. `*.fastly.net`, `*.akamaized.net`) skips SSRF validation entirely.
+  2. **Unvalidated redirects**: the proxy client uses `follow_redirects=True` (max 3). Redirect
+     targets are never re-validated, so a validated public URL can redirect to a private IP.
+  3. **DNS rebinding**: validation resolves DNS once via `socket.getaddrinfo`, then the actual
+     httpx request resolves again. An attacker's domain can resolve public during validation and
+     rebind to a private IP for the request.
+- **Impact**: Access to internal services via the proxy endpoint
+- **Fix**: Validate the IP (not just the hostname suffix) for all hosts including trusted CDNs; pin
+  the resolved IP for the actual request (custom transport/resolver); re-validate every redirect hop
+  (`follow_redirects=False` + manual loop)
 
-#### SSRF DNS Rebinding
+#### Proxy Cookie Isolation / Cross-User Credential Bleed
 - **Status**: Open
-- **Description**: `validate_proxy_url()` resolves DNS at validation time, but the actual HTTP request resolves DNS again. An attacker's domain could resolve to a public IP during validation, then rebind to a private IP before the request.
-- **Impact**: Potential access to internal services via proxy endpoint
-- **Fix**: Pin resolved IP and use it directly, or validate IP after DNS resolution in the HTTP transport layer
+- **Description**: `get_proxy_client()` creates one global httpx client with a shared cookie jar
+  loaded from `data/cookies.txt`. `/api/proxy` does not authenticate the requester at all, so:
+  - One user's cookies are sent upstream for every user's segment fetches.
+  - The segment cache is keyed only by URL + range, so content fetched with one user's cookies can
+    be served from cache to any other requester.
+  - Region-locked segments may still fail for users whose own (valid) cookies are never used.
+- **Impact**: Cross-user credential sharing and cache-based content leakage, not just availability
+- **Fix**: Resolve the requesting user in `/api/proxy`, use their cookie file for upstream fetches,
+  and include a user/cookie dimension in the segment cache key (or restrict cached entries to
+  cookie-less fetches)
 
 #### HTTP/2 Protocol Errors on Video Streaming
-- **Status**: Partially Fixed
-- **Description**: Video proxy occasionally returns `ERR_HTTP2_PROTOCOL_ERROR` with 206 Partial Content responses
-- **Cause**: HTTP/2 connection reuse issues when streaming large video files through Cloudflare
-- **Workaround**:
-  - Added `Connection: close` header to proxy responses
-  - Disabled chunked encoding for video proxy
+- **Status**: Open (worked around, root cause not found)
+- **Description**: Video proxy occasionally returns `ERR_HTTP2_PROTOCOL_ERROR` with 206 Partial
+  Content responses
+- **Cause (suspected)**: HTTP/2 connection reuse issues when streaming large video files through
+  Cloudflare
+- **Workarounds in place**:
+  - `Connection: close` header on proxy responses
+  - Chunked encoding disabled for the video proxy
   - If still occurring, disable "HTTP/2 to Origin" in Cloudflare settings
-
-#### DASH Loading State Stuck
-- **Status**: Fixed
-- **Description**: Loading spinner stays visible while audio plays
-- **Cause**: Effect re-running due to dependency changes after `{ once: true }` event listeners already fired
-- **Fix**: Added readyState check and reduced effect dependencies
 
 ### Medium Priority
 
-#### Unbounded In-Flight Request Cache
+#### Extension Sync Missing Rate Limiting
 - **Status**: Open
-- **Description**: `_in_flight_results` dictionary stores request results with fire-and-forget cleanup tasks. Under heavy load, cleanup may not run promptly, causing memory growth.
-- **Impact**: Memory exhaustion under sustained high request volume
-- **Fix**: Add maximum size limit with LRU eviction or periodic background cleanup
+- **Description**: `/api/extension/sync` validates cookie format and size (1MB) but has no rate
+  limiting. The upload limiter is module-private to `backend/api/routes/cookies.py` and only guards
+  `POST /api/cookies`.
+- **Fix**: Share the rate limiter (or an equivalent) with the extension sync endpoint
 
-#### Room Lock Dictionary Memory Leak
+#### Rate Limiter Is Process-Local
 - **Status**: Open
-- **Description**: `_get_room_lock()` creates locks on-demand for any room ID. Locks for non-existent or deleted rooms persist forever.
-- **Impact**: Slow memory leak proportional to unique room IDs seen
-- **Fix**: Only create locks during room creation; validate room existence before lock creation
+- **Description**: The cookie-upload rate limiter is an in-memory, per-process dictionary. It resets
+  on restart and does not coordinate across multiple workers or replicas.
+- **Impact**: Limits are ineffective when running more than one backend process
+- **Fix**: Back the limiter with shared storage if multi-worker deployment becomes a goal
 
-#### Incomplete Cookie Format Validation
-- **Status**: Open
-- **Description**: Netscape cookie validation only checks first 5 data lines. Malformed data after line 5 passes validation.
-- **Fix**: Validate all data lines, not just `lines[:5]`
+#### In-Flight Cache Writes Outside Lock
+- **Status**: Open (minor)
+- **Description**: `_in_flight_results` is now bounded (max 100 entries, 30s TTL) and cleaned under
+  `_in_flight_lock`, but the result writes happen outside the lock, so a waiter's read can race
+  with eviction. Not an unbounded-growth issue.
+- **Fix**: Move the result writes under `_in_flight_lock`
 
-#### WebSocket Message Type Not Validated
-- **Status**: Open
-- **Description**: WebSocket message `type` field is not validated for type or length. Extremely long type strings consume memory.
-- **Fix**: Add `isinstance(msg_type, str)` check and length limit (50 chars)
+## Fixed Issues
 
-#### Extension Sync Missing Format Validation
-- **Status**: Open
-- **Description**: `/api/extension/sync` endpoint accepts cookie content without Netscape format or size validation, unlike the regular `/api/cookies` endpoint.
-- **Fix**: Apply same validation as `/api/cookies` (format check + size limit)
+Previously listed as open; verified fixed in the current code (2026-08-19):
 
-#### Proxy Cookie Isolation
-- **Status**: Open
-- **Description**: HLS segment proxy doesn't use user-specific cookies when available
-- **Impact**: Some region-locked segments may fail even with valid user cookies
-
-#### Sidebar Resize setInterval Race
-- **Status**: Open
-- **Description**: Sidebar resize refs are reassigned on every render. Cleanup effect may use stale ref functions.
-- **Fix**: Use stable `useCallback` references for event handlers
-
-#### useDashSync setInterval Collision
-- **Status**: Open
-- **Description**: When `syncIntervalMs` changes, new interval is created before old one is cleared in the effect body.
-- **Fix**: Clear existing interval before creating new one
+- **Connection Limit Race Condition** — per-room and per-user limit checks now run inside
+  `_state_lock` in `manager.connect()`, including the connection append
+- **Unbounded In-Flight Request Cache** — bounded to 100 entries with a 30s TTL; cleanup runs
+  synchronously under the lock instead of fire-and-forget
+- **Room Lock Dictionary Memory Leak** — locks are deleted when rooms are cleaned up, and an orphan
+  sweep removes locks for rooms that no longer exist (runs every 60s)
+- **Incomplete Cookie Format Validation** — all data lines are validated, not just the first 5
+- **WebSocket Message Type Not Validated** — `isinstance(str)` check, 50-char type limit, 100KB
+  frame cap, and a JSON decode guard
+- **Extension Sync Missing Format Validation** — `/api/extension/sync` now enforces the 1MB limit
+  and full Netscape format validation (rate limiting still missing, see above)
+- **Cookie Upload Rate Limiting** — `POST /api/cookies` limited to 10 uploads per user per 60s
+- **Sidebar Resize setInterval Race** — resize handlers are stable `useCallback` references; cleanup
+  removes the same function identities that were added
+- **useDashSync setInterval Collision** — the existing interval is cleared at the top of the effect
+  body before a new one is created
+- **DASH Loading State Stuck** — readyState check added and effect dependencies reduced
 
 ## Tech Debt
 
@@ -86,21 +102,24 @@
 - [x] **Cache Request Deduplication**: Prevent concurrent downloads of same segment
 - [x] **DASH Player Hook**: Extract DASH initialization to `useDashPlayer`
 - [x] **Callback Refs Pattern**: Applied to `useDashSync` to prevent stale closures
-- [x] **Security Hardening**: SSRF protection, CORS config, connection limits, auth gating, cookie validation
+- [x] **Security Hardening**: SSRF validation (see open bypass paths above), CORS config, connection
+  limits, auth gating, cookie validation
 - [x] **Infrastructure Hardening**: Docker image pinning, resource limits, nginx security headers
 - [x] **Extension Security**: Scoped permissions, local token storage
 - [x] **Frontend Stability**: Fixed interval leaks, stale closures, AudioContext leaks, hydration mismatches
+- [x] **Atomic Connection Limits**: Limit checks moved inside `_state_lock`
+- [x] **In-Flight Cache Bounds**: Size limit + TTL on `_in_flight_results`
+- [x] **Cookie Validation (All Lines)**: All data lines validated
+- [x] **WebSocket Message Validation**: Type check, length limit, and frame size cap
+- [x] **Extension Sync Validation**: Cookie format + size validation on extension sync endpoint
+- [x] **Rate Limiting (Cookie Upload)**: Per-user limiter on `POST /api/cookies`
 
 ### Pending
-- [ ] **Atomic Connection Limits**: Move limit checks inside `_state_lock`
-- [ ] **DNS Rebinding Protection**: Pin resolved IPs for proxy requests
-- [ ] **In-Flight Cache Bounds**: Add size limits to `_in_flight_results`
-- [ ] **Cookie Validation (All Lines)**: Validate all lines, not just first 5
-- [ ] **WebSocket Message Validation**: Type check and length limit on message types
-- [ ] **Extension Sync Validation**: Apply cookie format validation to extension sync endpoint
-- [ ] **Rate Limiting**: Add rate limiting to cookie upload endpoint
-- [ ] **Proxy Cookie Isolation**: Use user-specific cookies in segment proxy
-- [ ] **Unit Tests**: Add test coverage for critical paths
+- [ ] **SSRF Hardening**: Close the trusted-CDN suffix bypass, re-validate redirects, pin resolved IPs
+- [ ] **Proxy Cookie Isolation**: Per-user cookies in the segment proxy + user-aware cache keying
+- [ ] **Extension Sync Rate Limiting**: Apply the upload rate limiter to `/api/extension/sync`
+- [ ] **HTTP/2 Streaming Root Cause**: Find and fix the underlying cause of `ERR_HTTP2_PROTOCOL_ERROR`
+- [ ] **Unit Tests**: Add test coverage for critical paths (currently only auth tests exist)
 - [ ] **E2E Tests**: Add Playwright tests for user flows
 
 ## Reporting Issues
