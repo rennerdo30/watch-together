@@ -44,6 +44,10 @@ services:
       # saw, which is what distinguishes a player's range request from an
       # intermediary fetching the whole object.
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Segment cache budget, in GB. Once it is reached nothing new is cached
+      # until the janitor evicts, so a budget smaller than a viewing session
+      # turns caching off partway through. Raise it on a host with room.
+      MAX_CACHE_SIZE_GB: ${MAX_CACHE_SIZE_GB:-4}
     volumes:
       # SQLite database, per-user cookie files, and the segment cache.
       - backend_data:/app/data

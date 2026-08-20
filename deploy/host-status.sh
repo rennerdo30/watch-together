@@ -16,6 +16,8 @@
 #   ./deploy/host-status.sh --cookies             # per-user cookie state (never values)
 #   ./deploy/host-status.sh --manifest=<video-url> # inspect the generated DASH manifest
 #   ./deploy/host-status.sh --ranges=<video-url>   # re-fetch each declared range upstream
+#   ./deploy/host-status.sh --perf [--tail=N]      # media transfer summary: cache hit rate,
+#                                                 # service-time percentiles, slowest paths
 #   ./deploy/host-status.sh --host=10.0.0.5 --user=admin
 
 set -euo pipefail
@@ -40,6 +42,7 @@ SHOW_LEGACY=0
 SHOW_COOKIES=0
 MANIFEST_URL=""
 RANGES_URL=""
+RUN_PERF=0
 
 for arg in "$@"; do
 	case "$arg" in
@@ -56,6 +59,7 @@ for arg in "$@"; do
 		--cookies) SHOW_COOKIES=1 ;;
 		--manifest=*) MANIFEST_URL="${arg#--manifest=}" ;;
 		--ranges=*) RANGES_URL="${arg#--ranges=}" ;;
+		--perf) RUN_PERF=1 ;;
 	esac
 done
 
@@ -78,6 +82,7 @@ ssh -o BatchMode=yes -o ConnectTimeout=15 "${SSH_USER}@${SSH_HOST}" \
 	 WT_COOKIES=$(printf '%q' "$SHOW_COOKIES") \
 	 WT_MANIFEST_URL=$(printf '%q' "$MANIFEST_URL") \
 	 WT_RANGES_URL=$(printf '%q' "$RANGES_URL") \
+	 WT_PERF=$(printf '%q' "$RUN_PERF") \
 	 bash -s" <<'REMOTE_SCRIPT'
 set -u
 REMOTE="$WT_REMOTE"
@@ -91,6 +96,7 @@ SHOW_LEGACY="${WT_LEGACY:-0}"
 SHOW_COOKIES="${WT_COOKIES:-0}"
 MANIFEST_URL="${WT_MANIFEST_URL:-}"
 RANGES_URL="${WT_RANGES_URL:-}"
+RUN_PERF="${WT_PERF:-0}"
 COMPOSE="docker compose -f deploy/docker-compose.yml --env-file ${REMOTE}/.env"
 
 if [ -n "$LOGS_SERVICE" ]; then
@@ -107,6 +113,86 @@ if [ -n "$PROBE_PATH" ]; then
 	cd "$REMOTE" || exit 1
 	echo "── GET http://backend:8000${PROBE_PATH} ──────────"
 	$COMPOSE exec -T nginx sh -c "wget -q -T 120 -O - 'http://backend:8000${PROBE_PATH}' 2>&1 || echo '(request failed)'"
+	exit 0
+fi
+
+# What the media path actually cost. nginx logs every /api/proxy transfer
+# with its service time and range, and the backend logs which tier served
+# it — together that says whether the cache is working and where the time
+# goes. No URLs are printed, only shapes and numbers.
+if [ "$RUN_PERF" = "1" ]; then
+	cd "$REMOTE" || exit 1
+	echo "── media transfers (nginx access log) ───────────"
+	# nginx's access.log is a symlink to /dev/stdout in the official image,
+	# so the transfers are in the container log, not in a readable file.
+	# Counts come from awk; percentiles from `sort -n` rather than an in-awk
+	# sort, which is quadratic and stalls on a real log.
+	$COMPOSE logs --no-log-prefix --tail "${TAIL_LINES}" nginx 2>/dev/null > /tmp/wt-perf.log
+	awk '
+	/^[0-9][0-9][0-9] [0-9]+ bytes/ {
+		n++; status[$1]++; bytes += $2
+		split($4, r, "="); t = r[2] + 0
+		if (t > 1.0) slow++
+		if ($0 ~ /range="bytes/) {
+			ranged++
+			if ($1 == "206" && $0 ~ /cr=""/) malformed++
+		}
+	}
+	END {
+		if (n == 0) { print "(no media transfers in the last " ENVIRON["WT_TAIL"] " log lines - play something, or raise --tail)"; exit }
+		printf "transfers      %d  (%.1f MB served)\n", n, bytes / 1000000
+		line = ""
+		for (s in status) line = line sprintf("%s=%d  ", s, status[s])
+		printf "statuses       %s\n", line
+		printf "ranged         %d of %d\n", ranged, n
+		if (malformed) printf "!! %d partial responses had no Content-Range\n", malformed
+		printf "over 1s        %d (%.0f%%)\n", slow, 100 * slow / n
+	}' /tmp/wt-perf.log
+	grep -oE 'request=[0-9.]+' /tmp/wt-perf.log | cut -d= -f2 | sort -n > /tmp/wt-times
+	awk 'END {
+		if (NR == 0) exit
+		printf "service time   p50 %s  p90 %s  p99 %s  max %s\n",
+			t[int(NR * 0.5) < 1 ? 1 : int(NR * 0.5)],
+			t[int(NR * 0.9) < 1 ? 1 : int(NR * 0.9)],
+			t[int(NR * 0.99) < 1 ? 1 : int(NR * 0.99)], t[NR]
+	} { t[NR] = $1 }' /tmp/wt-times
+	rm -f /tmp/wt-perf.log /tmp/wt-times
+	echo
+	echo "── cache tier that served each segment (backend log) ───────────"
+	$COMPOSE logs --tail 4000 backend 2>&1 \
+		| grep -oE '(MEMORY HIT|DISK HIT|Added to memory cache|Disk cache (read error|entry vanished))' \
+		| sort | uniq -c | sort -rn
+	echo
+	echo "── cache on disk ───────────"
+	$COMPOSE exec -T backend python - <<'PYEOF'
+import os, time
+from core.config import CACHE_DIR, MAX_CACHE_SIZE_BYTES
+from services.cache import check_disk_space
+
+entries = 0
+meta = 0
+size = 0
+oldest = None
+for name in os.listdir(CACHE_DIR):
+    path = os.path.join(CACHE_DIR, name)
+    if not os.path.isfile(path):
+        continue
+    stat = os.stat(path)
+    size += stat.st_size
+    if name.endswith(".meta"):
+        meta += 1
+    else:
+        entries += 1
+        oldest = stat.st_mtime if oldest is None else min(oldest, stat.st_mtime)
+print("segments       %d  (%d metadata files)" % (entries, meta))
+print("size           %.1f MB of %.0f MB budget" % (
+    size / 1e6, MAX_CACHE_SIZE_BYTES / 1e6))
+ok, free = check_disk_space()
+print("host disk      %.1f GB free%s" % (
+    free / 1e9, "" if ok else "  -- BELOW THE FLOOR, caching is disabled"))
+if oldest:
+    print("oldest entry   %.1f hours" % ((time.time() - oldest) / 3600))
+PYEOF
 	exit 0
 fi
 

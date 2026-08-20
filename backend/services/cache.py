@@ -9,6 +9,7 @@ import asyncio
 import logging
 import json
 from typing import Dict, Tuple, Optional
+from urllib.parse import urlparse, parse_qs
 import aiofiles
 
 from collections import OrderedDict
@@ -19,7 +20,7 @@ from core.config import (
     CACHE_TTL_SECONDS,
     MIN_DISK_FREE_BYTES,
     MAX_CACHEABLE_FILE_BYTES,
-    BUCKET_SIZE_BYTES,
+    CACHE_SIZE_MEASURE_TTL_SECONDS,
     FORMAT_CACHE_TTL_SECONDS,
     MEMORY_CACHE_SIZE_BYTES,
     MEMORY_CACHE_MAX_ITEM_PERCENT,
@@ -155,6 +156,41 @@ class MemoryCache:
 memory_cache = MemoryCache()
 
 
+# Query parameters that identify *which* rendition a URL addresses, as
+# opposed to the signing parameters that rotate on every resolution.
+_STREAM_IDENTITY_PARAMS = ("itag", "clen", "lmt", "mime")
+
+
+def stream_identity(url: str) -> str:
+    """Identity of the bytes a URL addresses, ignoring the parts that rotate.
+
+    Signed CDN URLs carry expiry and token parameters that change on every
+    resolution while addressing exactly the same bytes. Keying a cache on
+    the raw URL therefore throws the whole cache away each time a room
+    refreshes its stream URLs — which is every few minutes for YouTube — so
+    nothing is ever served twice however long it is kept.
+
+    The path alone is not enough either: every YouTube rendition lives at
+    /videoplayback and is told apart only by its query. `itag` names the
+    format, and `clen` + `lmt` (exact length and transcode timestamp in
+    microseconds) pin it to one specific file.
+
+    The host is deliberately excluded: the same rendition served from a
+    different edge is byte-identical.
+    """
+    parsed = urlparse(url)
+    params = parse_qs(parsed.query)
+    identity = [
+        f"{name}={params[name][0]}"
+        for name in _STREAM_IDENTITY_PARAMS
+        if params.get(name)
+    ]
+    if not identity:
+        # Nothing stable to key on. Correctness beats cache hits.
+        return url
+    return f"{parsed.path}?{'&'.join(identity)}"
+
+
 def get_segment_cache_key(url: str, range_start: int = 0, range_end: int = None,
                           identity: str = None) -> str:
     """
@@ -168,7 +204,7 @@ def get_segment_cache_key(url: str, range_start: int = 0, range_end: int = None,
     `identity` is set when the fetch carried a specific user's cookies,
     which keeps authenticated content out of the shared, anonymous entries.
     """
-    url_hash = hashlib.sha256(url.encode()).hexdigest()[:24]
+    url_hash = hashlib.sha256(stream_identity(url).encode()).hexdigest()[:24]
     span = f"{range_start}-{'' if range_end is None else range_end}"
     key = f"seg_{url_hash}_{span}"
     if identity:
@@ -320,11 +356,6 @@ def parse_range_header(range_header: str) -> Tuple[int, int | None]:
     return (0, None)
 
 
-def get_bucket_for_position(byte_pos: int) -> int:
-    """Get the bucket number for a byte position."""
-    return byte_pos // BUCKET_SIZE_BYTES
-
-
 def get_segment_disk_key(url: str, range_start: int = 0, range_end: int = None,
                          identity: str = None) -> Tuple[str, str]:
     """Cache key and path for one exact byte range on disk.
@@ -339,7 +370,7 @@ def get_segment_disk_key(url: str, range_start: int = 0, range_end: int = None,
     `identity` separates content fetched with a specific user's cookies from
     the shared anonymous entries.
     """
-    url_hash = hashlib.sha256(url.encode()).hexdigest()[:24]
+    url_hash = hashlib.sha256(stream_identity(url).encode()).hexdigest()[:24]
     span = f"{range_start}-{'' if range_end is None else range_end}"
     cache_key = f"seg_{url_hash}_{span}"
     if identity:
@@ -364,8 +395,12 @@ def check_disk_space() -> tuple[bool, int]:
         return False, 0
 
 
-def get_current_cache_size() -> int:
-    """Get total size of cached files in bytes."""
+# Last measured cache size, as (bytes, measured_at).
+_cache_size_measurement: Tuple[int, float] = (0, 0.0)
+
+
+def measure_cache_size() -> int:
+    """Total size of cached bodies in bytes, by scanning the directory."""
     total = 0
     try:
         if os.path.exists(CACHE_DIR):
@@ -376,6 +411,25 @@ def get_current_cache_size() -> int:
     except Exception as e:
         logger.error(f"Failed to get cache size: {e}")
     return total
+
+
+def get_current_cache_size(max_age_seconds: float = CACHE_SIZE_MEASURE_TTL_SECONDS) -> int:
+    """Cache size, re-measured at most every `max_age_seconds`.
+
+    This is consulted on every proxied request, and measuring means
+    stat-ing every file in the cache directory — thousands of them once the
+    cache is warm. The only writers are the proxy and the janitor, so a
+    slightly stale figure just means the budget is enforced a few seconds
+    late. Pass 0 to force a fresh measurement.
+    """
+    global _cache_size_measurement
+    size, measured_at = _cache_size_measurement
+    now = time.time()
+    if max_age_seconds > 0 and now - measured_at < max_age_seconds:
+        return size
+    size = measure_cache_size()
+    _cache_size_measurement = (size, now)
+    return size
 
 
 async def cache_cleanup_task():
@@ -451,7 +505,15 @@ async def cache_cleanup_task():
                         pass
                 
                 logger.info(f"Cache cleanup freed {freed / 1024 / 1024:.2f} MB")
-            
+                total_size -= freed
+
+            # This scan is authoritative and just finished, so publish it
+            # rather than leaving the proxy to re-measure. Getting it wrong
+            # in the pessimistic direction stops caching entirely until the
+            # next sweep.
+            global _cache_size_measurement
+            _cache_size_measurement = (total_size, time.time())
+
             # Clean expired format cache entries in DB
             cleaned = await cleanup_expired_format_cache()
             if cleaned:
