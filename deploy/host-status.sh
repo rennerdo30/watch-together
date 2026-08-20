@@ -9,8 +9,11 @@
 #   ./deploy/host-status.sh --logs=backend --tail=200
 #   ./deploy/host-status.sh --probe=/api/rooms   # ask the backend from inside
 #   ./deploy/host-status.sh --diag               # yt-dlp / PO provider diagnostics
-#   ./deploy/host-status.sh --clients=<video-url> # which player clients resolve
+#   ./deploy/host-status.sh --clients=<video-url> [--as=<email>]
+#                                                 # which clients resolve, optionally
+#                                                 # using that user's cookies
 #   ./deploy/host-status.sh --legacy-data         # what the pre-volume deploy left behind
+#   ./deploy/host-status.sh --cookies             # per-user cookie state (never values)
 #   ./deploy/host-status.sh --manifest=<video-url> # inspect the generated DASH manifest
 #   ./deploy/host-status.sh --ranges=<video-url>   # re-fetch each declared range upstream
 #   ./deploy/host-status.sh --host=10.0.0.5 --user=admin
@@ -32,7 +35,9 @@ TAIL_LINES=40
 PROBE_PATH=""
 RUN_DIAG=0
 CLIENTS_URL=""
+AS_USER=""
 SHOW_LEGACY=0
+SHOW_COOKIES=0
 MANIFEST_URL=""
 RANGES_URL=""
 
@@ -46,7 +51,9 @@ for arg in "$@"; do
 		--probe=*)  PROBE_PATH="${arg#--probe=}" ;;
 		--diag)     RUN_DIAG=1 ;;
 		--clients=*) CLIENTS_URL="${arg#--clients=}" ;;
+		--as=*) AS_USER="${arg#--as=}" ;;
 		--legacy-data) SHOW_LEGACY=1 ;;
+		--cookies) SHOW_COOKIES=1 ;;
 		--manifest=*) MANIFEST_URL="${arg#--manifest=}" ;;
 		--ranges=*) RANGES_URL="${arg#--ranges=}" ;;
 	esac
@@ -66,7 +73,9 @@ ssh -o BatchMode=yes -o ConnectTimeout=15 "${SSH_USER}@${SSH_HOST}" \
 	 WT_PROBE=$(printf '%q' "$PROBE_PATH") \
 	 WT_DIAG=$(printf '%q' "$RUN_DIAG") \
 	 WT_CLIENTS_URL=$(printf '%q' "$CLIENTS_URL") \
+	 WT_AS_USER=$(printf '%q' "$AS_USER") \
 	 WT_LEGACY=$(printf '%q' "$SHOW_LEGACY") \
+	 WT_COOKIES=$(printf '%q' "$SHOW_COOKIES") \
 	 WT_MANIFEST_URL=$(printf '%q' "$MANIFEST_URL") \
 	 WT_RANGES_URL=$(printf '%q' "$RANGES_URL") \
 	 bash -s" <<'REMOTE_SCRIPT'
@@ -77,7 +86,9 @@ TAIL_LINES="${WT_TAIL:-40}"
 PROBE_PATH="${WT_PROBE:-}"
 RUN_DIAG="${WT_DIAG:-0}"
 CLIENTS_URL="${WT_CLIENTS_URL:-}"
+AS_USER="${WT_AS_USER:-}"
 SHOW_LEGACY="${WT_LEGACY:-0}"
+SHOW_COOKIES="${WT_COOKIES:-0}"
 MANIFEST_URL="${WT_MANIFEST_URL:-}"
 RANGES_URL="${WT_RANGES_URL:-}"
 COMPOSE="docker compose -f deploy/docker-compose.yml --env-file ${REMOTE}/.env"
@@ -96,6 +107,48 @@ if [ -n "$PROBE_PATH" ]; then
 	cd "$REMOTE" || exit 1
 	echo "── GET http://backend:8000${PROBE_PATH} ──────────"
 	$COMPOSE exec -T nginx sh -c "wget -q -T 120 -O - 'http://backend:8000${PROBE_PATH}' 2>&1 || echo '(request failed)'"
+	exit 0
+fi
+
+# Whether a video resolves at all depends on the requesting user having
+# usable cookies, since the server's address is bot-blocked by YouTube.
+# Values are never printed, only presence, size and age.
+if [ "$SHOW_COOKIES" = "1" ]; then
+	cd "$REMOTE" || exit 1
+	echo "-- cookie files in the data volume --"
+	$COMPOSE exec -T backend python - <<'PYEOF'
+import os, time, glob
+from core.config import COOKIES_DIR
+
+paths = sorted(glob.glob(os.path.join(COOKIES_DIR, "*.txt")))
+if not paths:
+    print("(none) - no user has synced cookies, so YouTube sees an")
+    print("        anonymous datacenter address and refuses most videos")
+for path in paths:
+    stat = os.stat(path)
+    with open(path, "r", errors="replace") as handle:
+        lines = [l for l in handle if l.strip() and not l.startswith("#")]
+    hosts = sorted({l.split("\t")[0] for l in lines if "\t" in l})
+    age_hours = (time.time() - stat.st_mtime) / 3600
+    print("%-34s %6d cookies  %5.1fh old  mode %o" % (
+        os.path.basename(path), len(lines), age_hours, stat.st_mode & 0o777))
+    print("     domains: %s" % ", ".join(hosts[:8]))
+    # Expiry is the usual reason a working setup stops working.
+    now = time.time()
+    expired = 0
+    soonest = None
+    for l in lines:
+        parts = l.split("\t")
+        if len(parts) == 7 and parts[4].isdigit():
+            exp = int(parts[4])
+            if exp and exp < now:
+                expired += 1
+            elif exp:
+                soonest = exp if soonest is None else min(soonest, exp)
+    print("     expired: %d   next expiry: %s" % (
+        expired,
+        time.strftime("%Y-%m-%d", time.localtime(soonest)) if soonest else "n/a"))
+PYEOF
 	exit 0
 fi
 
@@ -231,14 +284,28 @@ fi
 if [ -n "$CLIENTS_URL" ]; then
 	cd "$REMOTE" || exit 1
 	echo "-- player client matrix --"
-	$COMPOSE exec -T -e WT_URL="$CLIENTS_URL" backend python - <<'PYEOF'
+	$COMPOSE exec -T -e WT_URL="$CLIENTS_URL" -e WT_AS="$AS_USER" backend python - <<'PYEOF'
 import os, logging
 logging.disable(logging.WARNING)
 import yt_dlp
 from core.config import POT_PROVIDER_EXTRACTOR_ARGS
 from services.resolver import _extract_stream_url
+from core.security import get_user_cookie_path
 
 URL = os.environ["WT_URL"]
+# The server's address is bot-blocked by YouTube, so whether a video
+# resolves usually comes down to the requesting user's cookies.
+COOKIEFILE = None
+as_user = os.environ.get("WT_AS") or ""
+if as_user:
+    path = get_user_cookie_path(as_user)
+    if path and os.path.exists(path):
+        COOKIEFILE = path
+        print("using cookies for %s" % as_user)
+    else:
+        print("no cookie file for %s" % as_user)
+else:
+    print("no user given: resolving anonymously")
 cases = {
     "yt-dlp defaults": None,
     "web": ["web"],
@@ -256,6 +323,8 @@ for label, clients in cases.items():
     opts = {"quiet": True, "no_warnings": True, "skip_download": True,
             "nocheckcertificate": True, "socket_timeout": 30,
             "ignore_no_formats_error": True, "extractor_args": args}
+    if COOKIEFILE:
+        opts["cookiefile"] = COOKIEFILE
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(URL, download=False, process=False)
