@@ -374,8 +374,15 @@ async def resolve_stream(
     # yt-dlp keeps its own client selection current, so the choice is left
     # to it; the only variation worth trying is where the challenge script
     # comes from.
+    # First attempt uses the Deno runtime in the image to solve the
+    # JavaScript challenge; the second lets yt-dlp fetch the challenge
+    # script from GitHub in case the local runtime cannot run it.
+    #
+    # The value must be the string 'ejs:github'. Passing {'ejs': 'github'}
+    # makes yt-dlp log "Ignoring unsupported remote component(s): ejs" and
+    # carry on without it.
     attempts = [
-        ("local challenge runtime", {**base_opts, 'remote_components': {'ejs': 'github'}}),
+        ("local challenge runtime", dict(base_opts)),
         ("remote challenge components", {**base_opts, 'remote_components': 'ejs:github'}),
     ]
 
