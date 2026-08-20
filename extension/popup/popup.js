@@ -99,18 +99,30 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         const pattern = `${origin}/*`;
-        if (await chrome.permissions.contains({ origins: [pattern] })) {
-            return; // Already granted, detection runs on its own.
+        const alreadyGranted = await chrome.permissions.contains({ origins: [pattern] });
+
+        // The offer stays visible while the site is granted but unusable.
+        // Granting permission is only half the job — the token still has to
+        // be fetched — and hiding the button after the grant left no way to
+        // finish or retry.
+        const state = await chrome.runtime.sendMessage({ type: 'GET_INSTANCE_STATE' });
+        const host = new URL(origin).host;
+        const connectedHere = state?.backendUrl === origin && state?.hasToken;
+        if (alreadyGranted && connectedHere) {
+            return;
         }
 
         connectBtn.hidden = false;
-        connectBtn.textContent = `Connect ${new URL(origin).host}`;
+        connectBtn.textContent = alreadyGranted ? `Sync ${host}` : `Connect ${host}`;
         connectBtn.onclick = async () => {
             connectBtn.disabled = true;
+            connectStatus.className = 'send-status';
+            connectStatus.textContent = 'Connecting…';
             try {
-                const granted = await chrome.permissions.request({ origins: [pattern] });
+                const granted = alreadyGranted || await chrome.permissions.request({ origins: [pattern] });
                 if (!granted) {
                     connectStatus.textContent = 'Permission declined';
+                    connectStatus.className = 'send-status error';
                     return;
                 }
                 const result = await chrome.runtime.sendMessage({
@@ -118,11 +130,15 @@ document.addEventListener('DOMContentLoaded', async () => {
                     instanceUrl: origin,
                 });
                 if (result?.success) {
-                    connectStatus.textContent = 'Connected — reload the page to sync';
+                    const synced = result.syncResult?.success;
+                    connectStatus.textContent = synced
+                        ? `Connected as ${result.userEmail} — cookies synced`
+                        : `Connected as ${result.userEmail}`;
                     connectBtn.hidden = true;
                     await loadStatus();
                 } else {
                     connectStatus.textContent = result?.error || 'Could not connect';
+                    connectStatus.className = 'send-status error';
                 }
             } finally {
                 connectBtn.disabled = false;
