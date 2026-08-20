@@ -16,6 +16,9 @@ from services.metrics import (
 )
 from core.config import METRICS_SLOW_UPSTREAM_MS
 
+import pathlib
+BACKEND_MAIN = pathlib.Path(__file__).resolve().parent.parent / "main.py"
+
 
 @pytest.fixture
 def metrics():
@@ -264,3 +267,39 @@ class TestRangedResponsesAreWellFormed:
         assert response.status_code == 206
         assert response.content == self.PAYLOAD[500:600]
         assert response.headers["content-range"] == f"bytes 500-599/{len(self.PAYLOAD)}"
+
+
+class TestAbortClassification:
+    """A cancellation after full delivery is not an abort.
+
+    Streamed responses have their generator cancelled when the client closes
+    the connection, which happens routinely once the last byte is delivered.
+    Counting those as aborts filled the log with warnings and buried the
+    errors worth reading.
+    """
+
+    async def test_full_delivery_then_cancel_is_not_a_failure(self, metrics):
+        await metrics.record(
+            host="cdn.example.com", status=206, outcome=OUTCOME_OK,
+            upstream_ms=10.0, transfer_ms=20.0,
+            bytes_sent=1000, expected_bytes=1000,
+        )
+        snapshot = await metrics.snapshot()
+        assert snapshot["totals"].get("failures", 0) == 0
+
+    async def test_short_delivery_is_still_reported(self, metrics):
+        from services.metrics import OUTCOME_CLIENT_ABORTED
+
+        await metrics.record(
+            host="cdn.example.com", status=206, outcome=OUTCOME_CLIENT_ABORTED,
+            upstream_ms=10.0, transfer_ms=20.0,
+            bytes_sent=400, expected_bytes=1000,
+        )
+        snapshot = await metrics.snapshot()
+        assert snapshot["totals"]["failures"] == 1
+        assert snapshot["recent_failures"][0]["bytes_sent"] == 400
+
+    def test_source_only_aborts_on_short_bodies(self):
+        """Guard the condition itself: it is easy to drop in a refactor."""
+        source = (BACKEND_MAIN).read_text()
+        assert source.count("if not expected_bytes or total < expected_bytes:") == 2

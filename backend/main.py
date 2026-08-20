@@ -900,7 +900,11 @@ async def proxy_stream(request: Request, url: str):
                                 if url_hash:
                                     await mark_content_active(url_hash)
                     except asyncio.CancelledError:
-                        outcome = OUTCOME_CLIENT_ABORTED
+                        # Only an abort if the client left mid-body. A
+                        # cancellation after full delivery is the normal end
+                        # of a streamed response.
+                        if not expected_bytes or total < expected_bytes:
+                            outcome = OUTCOME_CLIENT_ABORTED
                         if os.path.exists(temp_path):
                             os.remove(temp_path)
                         raise
@@ -939,7 +943,10 @@ async def proxy_stream(request: Request, url: str):
                             total += len(chunk)
                             yield chunk
                     except asyncio.CancelledError:
-                        outcome = OUTCOME_CLIENT_ABORTED
+                        # See above: a cancellation after the last byte is a
+                        # completed response, not a failed one.
+                        if not expected_bytes or total < expected_bytes:
+                            outcome = OUTCOME_CLIENT_ABORTED
                         raise
                     except Exception as e:
                         outcome = OUTCOME_TRUNCATED
