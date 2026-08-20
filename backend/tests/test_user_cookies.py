@@ -14,7 +14,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.user_cookies import get_cookie_header, clear_cache, invalidate
-from services.cache import get_segment_cache_key, get_bucket_cache_key
+from services.cache import get_segment_cache_key, get_segment_disk_key
 from core.security import get_user_cookie_path
 
 
@@ -139,11 +139,19 @@ class TestCacheKeyIsolation:
         bob = get_segment_cache_key("https://cdn/x.ts", 0, identity="bob@example.com")
         assert alice != bob
 
-    def test_two_users_do_not_share_a_bucket_entry(self):
-        alice, alice_path = get_bucket_cache_key("https://cdn/x.ts", 0, identity="alice@example.com")
-        bob, bob_path = get_bucket_cache_key("https://cdn/x.ts", 0, identity="bob@example.com")
+    def test_two_users_do_not_share_a_disk_entry(self):
+        alice, alice_path = get_segment_disk_key(
+            "https://cdn/x.ts", 0, 99, identity="alice@example.com")
+        bob, bob_path = get_segment_disk_key(
+            "https://cdn/x.ts", 0, 99, identity="bob@example.com")
         assert alice != bob
         assert alice_path != bob_path
+
+    def test_disk_entries_are_keyed_on_the_exact_range(self):
+        """A body cached for one range must not answer another."""
+        narrow, _ = get_segment_disk_key("https://cdn/x.ts", 0, 9)
+        wide, _ = get_segment_disk_key("https://cdn/x.ts", 0, 999)
+        assert narrow != wide
 
     def test_range_still_separates_entries(self):
         first = get_segment_cache_key("https://cdn/x.ts", 0, identity="alice@example.com")
