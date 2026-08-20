@@ -98,6 +98,12 @@ export default function RoomPage() {
     const [actualPlayerTime, setActualPlayerTime] = useState(0); // Real player time for badge display
     const [isPermanent, setIsPermanent] = useState(false); // Room permanent status
 
+    // A link is being resolved, either pasted directly or picked from the
+    // queue. The empty state is hidden while this is true: both used to
+    // render at once, and the spinner's translucent backdrop let the
+    // "Nothing playing yet" text show through it.
+    const isResolving = loading || loadingQueueIndex !== null;
+
     // Layout resizing
     const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
     const isResizing = useRef(false);
@@ -700,8 +706,8 @@ export default function RoomPage() {
                 <div className="flex-1 flex flex-col p-3 min-w-0 min-h-0 overflow-hidden gap-2.5">
                     {/* Video Player */}
                     <div className="on-dark flex-1 min-h-0 relative rounded-xl overflow-hidden bg-black border border-neutral-800 shadow-2xl">
-                        {(loading || loadingQueueIndex !== null) && (
-                            <div className="absolute inset-0 z-10 bg-black/40 flex flex-col items-center justify-center gap-2 animate-in fade-in duration-300">
+                        {isResolving && (
+                            <div className="absolute inset-0 z-10 bg-black/70 flex flex-col items-center justify-center gap-2 animate-in fade-in duration-300">
                                 <Loader2 className="w-5 h-5 text-white animate-spin opacity-80" />
                                 <span className="text-[10px] font-black text-white/80 uppercase tracking-widest">Resolving...</span>
                             </div>
@@ -760,7 +766,7 @@ export default function RoomPage() {
                                     onSyncThresholdChange={setSyncThreshold}
                                 />
                             </ErrorBoundary>
-                        ) : (
+                        ) : isResolving ? null : (
                             <div className="h-full w-full flex flex-col items-center justify-center gap-3 px-6 text-center">
                                 <div className="w-12 h-12 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center">
                                     <Play aria-hidden="true" className="w-5 h-5 text-neutral-400" />
