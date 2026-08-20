@@ -16,6 +16,7 @@
 #   ./deploy/make-env.sh                          # build, keep existing values
 #   ./deploy/make-env.sh --wt-host=w2g.renner.dev
 #   ./deploy/make-env.sh --cf-team=https://TEAM.cloudflareaccess.com --cf-aud=AUDTAG
+#   ./deploy/make-env.sh --set=LOG_LEVEL=DEBUG    # set or replace any key
 #   ./deploy/make-env.sh --show                   # report current state only
 
 set -euo pipefail
@@ -32,6 +33,7 @@ REMOTE="${DEPLOY_REMOTE:-/opt/watch-together}"
 WT_HOST_ARG=""
 CF_TEAM_ARG=""
 CF_AUD_ARG=""
+EXTRA_SETS=""
 SHOW_ONLY=0
 
 for arg in "$@"; do
@@ -42,6 +44,7 @@ for arg in "$@"; do
 		--wt-host=*) WT_HOST_ARG="${arg#--wt-host=}" ;;
 		--cf-team=*) CF_TEAM_ARG="${arg#--cf-team=}" ;;
 		--cf-aud=*)  CF_AUD_ARG="${arg#--cf-aud=}" ;;
+		--set=*)     EXTRA_SETS="${EXTRA_SETS}${arg#--set=}"$'\n' ;;
 		--show)      SHOW_ONLY=1 ;;
 		-h|--help)
 			grep -E '^# ' "$0" | sed 's/^# \?//'
@@ -64,6 +67,7 @@ ssh -o BatchMode=yes -o ConnectTimeout=15 "${SSH_USER}@${SSH_HOST}" \
 	 WT_HOST_ARG=$(printf '%q' "$WT_HOST_ARG") \
 	 CF_TEAM_ARG=$(printf '%q' "$CF_TEAM_ARG") \
 	 CF_AUD_ARG=$(printf '%q' "$CF_AUD_ARG") \
+	 WT_EXTRA_SETS=$(printf '%q' "$EXTRA_SETS") \
 	 WT_SHOW_ONLY=$(printf '%q' "$SHOW_ONLY") \
 	 bash -s" <<'REMOTE_SCRIPT'
 set -eu
@@ -71,6 +75,7 @@ REMOTE="$WT_REMOTE"
 WT_HOST_ARG="${WT_HOST_ARG:-}"
 CF_TEAM_ARG="${CF_TEAM_ARG:-}"
 CF_AUD_ARG="${CF_AUD_ARG:-}"
+EXTRA_SETS="${WT_EXTRA_SETS:-}"
 SHOW_ONLY="${WT_SHOW_ONLY:-0}"
 
 ENV_FILE="${REMOTE}/.env"
@@ -178,6 +183,29 @@ REQUIRE_AUTHENTICATION=${require_auth}
 
 ALLOWED_ORIGINS=${allowed_origins}
 ENVEOF
+
+# Carry over keys the template does not know about (operational toggles such
+# as LOG_LEVEL), then apply --set so an explicit value always wins.
+if [ -f "${ENV_FILE}.bak" ]; then
+	known="WT_HOST CLOUDFLARED_TOKEN CF_ACCESS_TEAM_DOMAIN CF_ACCESS_AUD REQUIRE_AUTHENTICATION ALLOWED_ORIGINS"
+	while IFS= read -r line; do
+		key="${line%%=*}"
+		case " $known " in *" $key "*) continue ;; esac
+		printf '%s\n' "$line" >> "$ENV_FILE"
+	done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "${ENV_FILE}.bak")
+fi
+
+if [ -n "$EXTRA_SETS" ]; then
+	while IFS= read -r assignment; do
+		[ -z "$assignment" ] && continue
+		key="${assignment%%=*}"
+		# Drop any previous value for this key, then append the new one.
+		grep -vE "^${key}=" "$ENV_FILE" > "${ENV_FILE}.tmp" && mv "${ENV_FILE}.tmp" "$ENV_FILE"
+		printf '%s\n' "$assignment" >> "$ENV_FILE"
+		echo "  set ${key}"
+	done <<< "$EXTRA_SETS"
+	chmod 600 "$ENV_FILE"
+fi
 chmod 600 "$ENV_FILE"
 
 echo
