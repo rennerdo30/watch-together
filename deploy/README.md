@@ -77,19 +77,6 @@ used**:
 Because nothing is published on the host, the origin is only reachable through
 the tunnel — but the verified path is still the one to run.
 
-## Playback engine
-
-`STREAM_ENGINE` in `.env` chooses how adaptive streams play:
-
-- `legacy` (default) — separate `<video>` and `<audio>` elements with
-  JavaScript drift correction.
-- `mse` — a generated DASH manifest played through one element, so the
-  browser keeps audio and video in step itself.
-
-Next.js inlines this value when the frontend compiles, so it is a **build-time**
-choice. `deploy.sh` always rebuilds, so changing it in `.env` and re-running is
-enough.
-
 ## Notes
 
 - **Single worker only.** Room state, caches and the rate limiter live in

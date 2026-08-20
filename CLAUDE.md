@@ -4,6 +4,21 @@
 
 Watch Together is a real-time collaborative video synchronization platform that enables multiple users to watch YouTube, Twitch, and 1800+ other sites simultaneously. It uses WebSocket-based synchronization with sub-second accuracy.
 
+## Project Policy: latest only, no legacy paths
+
+**Never add or keep a backwards-compatibility path in this project.** There is
+no legacy support to maintain: no second code path "kept as a fallback", no
+feature flag selecting between an old and a new implementation, no deprecated
+helper left in place for callers that no longer exist.
+
+When something is replaced, the old version is **deleted in the same change** —
+along with its flag, its config key, its docs, and its tests. Dead code that is
+exported but never imported is a bug, not history.
+
+Dependencies follow the same rule: always the latest stable version. If the
+latest genuinely does not work, pin the older one and record why in the commit
+message.
+
 ## Tech Stack
 
 ### Backend (Python 3.11+)
@@ -48,12 +63,12 @@ backend/
 frontend/
 ├── app/                      # Next.js app router pages
 ├── components/
-│   ├── custom-player.tsx     # Main video player (MSE / legacy DASH / HLS)
+│   ├── custom-player.tsx     # Main video player (MSE for DASH, hls.js for HLS)
 │   ├── player-controls.tsx   # Playback controls UI
 │   └── room/                 # Room-specific components
 └── lib/
     ├── api.ts               # Backend API client
-    └── hooks/               # Custom React hooks (useRoomSync, etc.)
+    └── hooks/               # Custom React hooks (useRoomSettings, etc.)
 ```
 
 ## Key Files to Know
@@ -64,7 +79,7 @@ frontend/
 | `backend/connection_manager.py` | All WebSocket/room state logic |
 | `backend/services/resolver.py` | yt-dlp integration, format selection |
 | `frontend/components/custom-player.tsx` | Video player wrapper |
-| `frontend/lib/hooks/useRoomSync.ts` | Client-side sync logic |
+| `frontend/app/room/[id]/page.tsx` | Room UI and client-side sync logic |
 
 ## Development Commands
 
@@ -93,14 +108,16 @@ docker compose up -d --build
 3. Returns HLS/DASH manifest URL or direct stream
 4. Manifests are rewritten to proxy all segments through `/api/proxy`
 
-### Playback Engines
-yt-dlp returns adaptive streams as **separate** fragmented-MP4 files with no manifest.
-Two engines consume them, chosen by `NEXT_PUBLIC_STREAM_ENGINE`:
-- `mse` — `/api/dash-manifest` generates a real DASH manifest (byte ranges found by
-  scanning each file's box headers) and Shaka plays it through **one** `<video>`, so the
-  browser muxes A/V against a single clock.
-- `legacy` (default) — separate `<video>` + `<audio>` kept in step by `useDashSync`.
-  Being retired: two media elements cannot be kept frame-accurate.
+### Playback
+yt-dlp returns adaptive streams as **separate** fragmented-MP4 files with no manifest,
+so `/api/dash-manifest` generates a real DASH manifest — byte ranges come from scanning
+each file's box headers — and Shaka plays it through **one** `<video>` via MSE, letting
+the browser mux A/V against a single clock. HLS sources go through hls.js, also on one
+element.
+
+There is no second playback path. The former two-element approach (`<video>` +
+`<audio>` with JavaScript drift correction) is deleted: two media elements cannot be
+kept frame-accurate, which is a platform property, not a tuning problem.
 
 ### Security Model
 - Identity comes from the **verified** `Cf-Access-Jwt-Assertion` JWT
@@ -143,11 +160,11 @@ Two engines consume them, chosen by `NEXT_PUBLIC_STREAM_ENGINE`:
 ### Adding a New WebSocket Message Type
 1. Define handler in `backend/connection_manager.py`
 2. Add message type to switch/case in `handle_message()`
-3. Update `frontend/lib/hooks/useRoomSync.ts` to send/receive
+3. Update the room page (`frontend/app/room/[id]/page.tsx`) to send/receive
 
 ### Modifying Video Player Behavior
 1. Main logic is in `frontend/components/custom-player.tsx`
-2. Sync logic is in `frontend/lib/hooks/useRoomSync.ts`
+2. Sync logic lives in the room page (`frontend/app/room/[id]/page.tsx`)
 3. UI controls are in `frontend/components/player-controls.tsx`
 
 ## Git Commit Policy

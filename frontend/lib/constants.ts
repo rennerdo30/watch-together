@@ -37,18 +37,6 @@ export const COPY_FEEDBACK_DURATION_MS = 2000;
  */
 export const BACKEND_ORIGIN = process.env.NEXT_PUBLIC_BACKEND_ORIGIN ?? '';
 
-/**
- * Streaming engine for adaptive (DASH) playback.
- *
- * `mse` plays video and audio through one media element via a generated
- * manifest, which is what keeps them in sync. `legacy` drives separate
- * <video> and <audio> elements with the older JavaScript drift
- * correction, kept as a fallback while the new path proves itself.
- */
-export type StreamEngine = 'mse' | 'legacy';
-export const STREAM_ENGINE: StreamEngine =
-    (process.env.NEXT_PUBLIC_STREAM_ENGINE as StreamEngine) ?? 'legacy';
-
 /** Seconds of media Shaka buffers ahead of, and keeps behind, the playhead. */
 export const SHAKA_BUFFER_GOAL_SECONDS = 60;
 export const SHAKA_BUFFER_BEHIND_SECONDS = 60;
