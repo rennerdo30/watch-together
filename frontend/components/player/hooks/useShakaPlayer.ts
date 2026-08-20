@@ -139,13 +139,7 @@ interface ShakaPlayerInstance {
 }
 
 export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerReturn {
-    const {
-        videoRef,
-        manifestUrl,
-        enabled,
-        autoPlay = false,
-        initialTime = 0,
-    } = options;
+    const { videoRef, manifestUrl, enabled } = options;
 
     const playerRef = useRef<ShakaPlayerInstance | null>(null);
     const [isLoading, setIsLoading] = useState(false);
@@ -275,12 +269,17 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
 
             setLoading(true);
             try {
-                await instance.load(manifestUrl, initialTime > 0 ? initialTime : undefined);
+                // Read at load time rather than as dependencies: these
+                // describe where to *start*, and re-running this effect
+                // means destroying the player and refetching the manifest.
+                const startAt = callbackRefs.current.initialTime ?? 0;
+                const shouldAutoPlay = callbackRefs.current.autoPlay ?? false;
+                await instance.load(manifestUrl, startAt > 0 ? startAt : undefined);
                 if (cancelled) return;
                 onTracksChanged();
                 setLoading(false);
 
-                if (autoPlay) {
+                if (shouldAutoPlay) {
                     video.muted = localStorage.getItem('w2g-player-muted') === 'true';
                     video.play().catch(() => {
                         console.log('[ShakaPlayer] Autoplay blocked');
@@ -311,7 +310,12 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
                 });
             }
         };
-    }, [enabled, manifestUrl, videoRef, autoPlay, initialTime]);
+        // Deliberately keyed on the stream alone. `autoPlay` follows the
+        // room's play/pause state and `initialTime` follows the sync
+        // position, so including either tore the player down and reloaded
+        // the manifest on every pause, resume and seek — which both
+        // rebuffered from zero and let a reload resume a paused room.
+    }, [enabled, manifestUrl, videoRef]);
 
     const setQuality = useCallback((index: number) => {
         const player = playerRef.current;

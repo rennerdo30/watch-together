@@ -139,6 +139,44 @@ class TestPlayerToleratesHighLatency:
         assert "SHAKA_REQUEST_TIMEOUT_MS" in text
 
 
+class TestPlaybackEngineIsNotKeyedOnRoomState:
+    """The engine is built once per stream, not once per state change.
+
+    `autoPlay` follows the room's play/pause state and `initialTime`
+    follows the sync position, which every heartbeat rewrites. Both were
+    dependencies of the setup effect, so the player was destroyed and the
+    manifest reloaded on every pause, resume, seek and heartbeat. That
+    rebuffered from zero, and detaching the media element fired a `pause`
+    the room broadcast as real while the following reload autoplayed and
+    broadcast a real `play` — so a paused room resumed itself.
+
+    The behaviour is covered end to end in
+    `frontend/e2e/playback-stability.spec.ts`; this pins the cause.
+    """
+
+    HOOK = REPO_ROOT / "frontend" / "components" / "player" / "hooks" / "useShakaPlayer.ts"
+
+    def test_setup_effect_depends_only_on_the_stream(self):
+        import re
+
+        text = self.HOOK.read_text()
+        deps = re.findall(r"\}, \[([^\]]*)\]\);", text)
+        setup_deps = [d for d in deps if "manifestUrl" in d]
+        assert setup_deps, "the setup effect's dependency list is no longer recognisable"
+        for dep_list in setup_deps:
+            assert "autoPlay" not in dep_list, (
+                "keying the engine on the play state reloads the stream on every pause"
+            )
+            assert "initialTime" not in dep_list, (
+                "keying the engine on the sync position reloads the stream on every heartbeat"
+            )
+
+    def test_start_position_and_autoplay_are_read_at_load_time(self):
+        text = self.HOOK.read_text()
+        assert "callbackRefs.current.initialTime" in text
+        assert "callbackRefs.current.autoPlay" in text
+
+
 class TestPlayerIsNotRemountedOnReResolve:
     """Re-resolving the same video must not restart playback.
 
