@@ -12,6 +12,7 @@
 #   ./deploy/host-status.sh --clients=<video-url> # which player clients resolve
 #   ./deploy/host-status.sh --legacy-data         # what the pre-volume deploy left behind
 #   ./deploy/host-status.sh --manifest=<video-url> # inspect the generated DASH manifest
+#   ./deploy/host-status.sh --ranges=<video-url>   # re-fetch each declared range upstream
 #   ./deploy/host-status.sh --host=10.0.0.5 --user=admin
 
 set -euo pipefail
@@ -33,6 +34,7 @@ RUN_DIAG=0
 CLIENTS_URL=""
 SHOW_LEGACY=0
 MANIFEST_URL=""
+RANGES_URL=""
 
 for arg in "$@"; do
 	case "$arg" in
@@ -46,6 +48,7 @@ for arg in "$@"; do
 		--clients=*) CLIENTS_URL="${arg#--clients=}" ;;
 		--legacy-data) SHOW_LEGACY=1 ;;
 		--manifest=*) MANIFEST_URL="${arg#--manifest=}" ;;
+		--ranges=*) RANGES_URL="${arg#--ranges=}" ;;
 	esac
 done
 
@@ -65,6 +68,7 @@ ssh -o BatchMode=yes -o ConnectTimeout=15 "${SSH_USER}@${SSH_HOST}" \
 	 WT_CLIENTS_URL=$(printf '%q' "$CLIENTS_URL") \
 	 WT_LEGACY=$(printf '%q' "$SHOW_LEGACY") \
 	 WT_MANIFEST_URL=$(printf '%q' "$MANIFEST_URL") \
+	 WT_RANGES_URL=$(printf '%q' "$RANGES_URL") \
 	 bash -s" <<'REMOTE_SCRIPT'
 set -u
 REMOTE="$WT_REMOTE"
@@ -75,6 +79,7 @@ RUN_DIAG="${WT_DIAG:-0}"
 CLIENTS_URL="${WT_CLIENTS_URL:-}"
 SHOW_LEGACY="${WT_LEGACY:-0}"
 MANIFEST_URL="${WT_MANIFEST_URL:-}"
+RANGES_URL="${WT_RANGES_URL:-}"
 COMPOSE="docker compose -f deploy/docker-compose.yml --env-file ${REMOTE}/.env"
 
 if [ -n "$LOGS_SERVICE" ]; then
@@ -91,6 +96,57 @@ if [ -n "$PROBE_PATH" ]; then
 	cd "$REMOTE" || exit 1
 	echo "── GET http://backend:8000${PROBE_PATH} ──────────"
 	$COMPOSE exec -T nginx sh -c "wget -q -T 120 -O - 'http://backend:8000${PROBE_PATH}' 2>&1 || echo '(request failed)'"
+	exit 0
+fi
+
+# Ask the upstream for exactly the byte ranges the manifest declares. A
+# manifest can be structurally perfect and still unplayable if the CDN
+# refuses those ranges, and only the origin can answer that.
+if [ -n "$RANGES_URL" ]; then
+	cd "$REMOTE" || exit 1
+	echo "-- declared ranges, re-fetched upstream --"
+	$COMPOSE exec -T -e WT_URL="$RANGES_URL" backend python - <<'PYEOF'
+import asyncio, os, logging
+logging.disable(logging.WARNING)
+import httpx
+from services.database import get_cached_format
+from services.manifest import probe_index, clear_index_cache
+from services.upstream import open_upstream_stream
+
+URL = os.environ["WT_URL"]
+HEADERS = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.youtube.com/"}
+
+async def check(client, label, url):
+    clear_index_cache()
+    index = await probe_index(client, url, HEADERS)
+    if index is None:
+        print("%-8s no fMP4 index found (not a fragmented MP4?)" % label)
+        return
+    for what, rng in (("init", index.init_range), ("index", index.index_range)):
+        try:
+            resp, _ = await open_upstream_stream(
+                client, url, {**HEADERS, "Range": f"bytes={rng}"})
+            body = await resp.aread()
+            await resp.aclose()
+            print("%-8s %-6s bytes=%-14s -> %s  got %d bytes  content-range=%s"
+                  % (label, what, rng, resp.status_code, len(body),
+                     resp.headers.get("content-range")))
+        except Exception as exc:
+            print("%-8s %-6s bytes=%-14s -> ERROR %s" % (label, what, rng, exc))
+
+async def main():
+    cached = await get_cached_format(URL)
+    if not cached:
+        print("not resolved yet")
+        return
+    async with httpx.AsyncClient(follow_redirects=False, timeout=30) as c:
+        for q in (cached.get("available_qualities") or [])[:3]:
+            await check(c, "v:%s" % q.get("format_id"), q.get("video_url"))
+        for a in (cached.get("audio_options") or [])[:3]:
+            await check(c, "a:%s" % a.get("format_id"), a.get("audio_url"))
+
+asyncio.run(main())
+PYEOF
 	exit 0
 fi
 
@@ -128,6 +184,12 @@ async def main():
         mpd = await build_manifest_for_formats(
             c, float(cached["duration"]), vids, auds, "/api/proxy?url=",
             {"User-Agent": "Mozilla/5.0", "Referer": "https://www.youtube.com/"})
+    # AdaptationSet grouping matters: representations inside one set must
+    # share a codec, or the player appends one codec into the other's buffer.
+    for m in re.finditer(r'<AdaptationSet ([^>]*)>|<Representation ([^>]*)>', mpd):
+        if m.group(1):
+            ct = re.search(r'contentType="(\w+)"', m.group(1))
+            print("  [set] contentType=%s" % (ct.group(1) if ct else "?"))
     for m in re.finditer(r'<Representation ([^>]*)>', mpd):
         attrs = dict(re.findall(r'(\w+)="([^"]*)"', m.group(1)))
         print("  rep id=%s h=%s codecs=%s bw=%s" % (attrs.get("id"), attrs.get("height"),
