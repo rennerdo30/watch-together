@@ -111,9 +111,11 @@ services:
     restart: unless-stopped
     depends_on:
       - nginx
-    # http2 rather than the default QUIC (UDP/443), which many networks
-    # block. Drop the flag if the host has clean UDP egress.
-    command: tunnel --no-autoupdate --protocol http2 run
+    # Transport for the tunnel. QUIC recovers from loss far better than
+    # HTTP/2 over a long-haul path, which matters when the viewer is a
+    # continent away from the origin; http2 is the fallback for hosts whose
+    # UDP egress is blocked. `auto` lets cloudflared try QUIC and fall back.
+    command: tunnel --no-autoupdate --protocol ${TUNNEL_PROTOCOL:-auto} run
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARED_TOKEN:?required}
     networks: [ watch_net ]
