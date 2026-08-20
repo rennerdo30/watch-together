@@ -34,6 +34,109 @@ const MIN_SYNC_INTERVAL_MS = 5000; // 5 seconds between syncs
 // Stream cleanup interval (1 hour max age)
 const STREAM_MAX_AGE_MS = 60 * 60 * 1000;
 
+
+/**
+ * Identifier for the dynamically registered detection script.
+ *
+ * A Watch Together instance is self-hosted, so its origin is not known when
+ * the extension is packaged and cannot be listed in the manifest. The
+ * detection script is therefore registered at runtime for exactly the
+ * origins the user has granted, instead of asking for access to every site.
+ */
+const INSTANCE_SCRIPT_ID = 'wt-instance-detector';
+
+/** Turn any instance URL into a match pattern for its origin. */
+function originPattern(instanceUrl) {
+    const { origin } = new URL(instanceUrl);
+    return `${origin}/*`;
+}
+
+/**
+ * Register the detection content script for every granted instance origin.
+ *
+ * Dynamic registrations do not survive a browser restart or an update, so
+ * this runs on startup and after each grant.
+ */
+async function refreshInstanceScript() {
+    const { instanceOrigins = [] } = await chrome.storage.local.get(['instanceOrigins']);
+
+    // Keep only origins the user has actually granted; a permission can be
+    // revoked from the browser's own settings without telling the extension.
+    const granted = [];
+    for (const origin of instanceOrigins) {
+        if (await chrome.permissions.contains({ origins: [origin] })) {
+            granted.push(origin);
+        }
+    }
+    if (granted.length !== instanceOrigins.length) {
+        await chrome.storage.local.set({ instanceOrigins: granted });
+    }
+
+    try {
+        const existing = await chrome.scripting.getRegisteredContentScripts({
+            ids: [INSTANCE_SCRIPT_ID],
+        });
+        if (existing.length > 0) {
+            await chrome.scripting.unregisterContentScripts({ ids: [INSTANCE_SCRIPT_ID] });
+        }
+    } catch {
+        // Nothing registered yet.
+    }
+
+    if (granted.length === 0) return;
+
+    await chrome.scripting.registerContentScripts([{
+        id: INSTANCE_SCRIPT_ID,
+        matches: granted,
+        js: ['content.js'],
+        runAt: 'document_end',
+        persistAcrossSessions: true,
+    }]);
+    console.log('[WT Sync] Detection script registered for:', granted.join(', '));
+}
+
+/**
+ * Grant access to an instance and start detecting tokens on it.
+ *
+ * Called from the popup ("Connect this site") and the options page. The
+ * permission prompt must be triggered from a user gesture, so the caller
+ * requests it and this only records the result.
+ */
+async function connectInstance(instanceUrl) {
+    let pattern;
+    try {
+        pattern = originPattern(instanceUrl);
+    } catch {
+        return { success: false, error: 'That does not look like a valid URL' };
+    }
+
+    if (!await chrome.permissions.contains({ origins: [pattern] })) {
+        return { success: false, error: 'Permission for this site was not granted' };
+    }
+
+    const { instanceOrigins = [] } = await chrome.storage.local.get(['instanceOrigins']);
+    if (!instanceOrigins.includes(pattern)) {
+        instanceOrigins.push(pattern);
+        await chrome.storage.local.set({ instanceOrigins });
+    }
+    await chrome.storage.local.set({ backendUrl: new URL(instanceUrl).origin });
+
+    await refreshInstanceScript();
+
+    // The page is already open, so pick the token up now rather than waiting
+    // for the next navigation.
+    try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (tab?.id && tab.url && tab.url.startsWith(new URL(instanceUrl).origin)) {
+            await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+        }
+    } catch (err) {
+        console.warn('[WT Sync] Could not inject into the open tab:', err);
+    }
+
+    return { success: true, backendUrl: new URL(instanceUrl).origin };
+}
+
 /**
  * Initialize extension on install
  */
@@ -51,6 +154,15 @@ chrome.runtime.onInstalled.addListener(async () => {
 
     // Set up auto-sync alarm
     setupAutoSync();
+
+    // Dynamic registrations are dropped on update, so restore them.
+    refreshInstanceScript().catch(err =>
+        console.warn('[WT Sync] Could not register detection script:', err));
+});
+
+chrome.runtime.onStartup.addListener(() => {
+    refreshInstanceScript().catch(err =>
+        console.warn('[WT Sync] Could not register detection script:', err));
 });
 
 /**
@@ -123,6 +235,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 .then(result => sendResponse(result));
             return true;
 
+        case 'CONNECT_INSTANCE':
+            connectInstance(message.instanceUrl).then(result => sendResponse(result));
+            return true;
+
+        case 'GET_INSTANCE_STATE':
+            getInstanceState().then(state => sendResponse(state));
+            return true;
+
         case 'UPDATE_SETTINGS':
             updateSettings(message.settings).then(() => sendResponse({ success: true }));
             return true;
@@ -140,6 +260,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return false;
     }
 });
+
+/**
+ * Report which instances are connected, for the popup and options page.
+ */
+async function getInstanceState() {
+    const { instanceOrigins = [], backendUrl = null } = await chrome.storage.local.get(
+        ['instanceOrigins', 'backendUrl']);
+    return { instanceOrigins, backendUrl };
+}
 
 /**
  * Handle token detected from content script

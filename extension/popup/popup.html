@@ -24,6 +24,13 @@
                 <span id="statusText">Checking...</span>
             </div>
             <div class="user-email" id="userEmail"></div>
+            <!-- Shown when the open tab looks like a Watch Together instance
+                 that has not been granted access yet. A self-hosted instance
+                 has its own domain, so permission is asked for per site. -->
+            <button class="btn btn-primary" id="connectBtn" hidden>
+                Connect this site
+            </button>
+            <div class="send-status" id="connectStatus"></div>
         </div>
 
         <div class="sync-section">

@@ -28,7 +28,7 @@ import yt_dlp
 from core.config import (
     CACHE_DIR, COOKIES_DIR, MAX_CACHE_SIZE_BYTES, CACHE_TTL_SECONDS,
     MIN_DISK_FREE_BYTES, MAX_CACHEABLE_FILE_BYTES, FORMAT_CACHE_TTL_SECONDS,
-    METRICS_DEFAULT_SAMPLE_LIMIT,
+    METRICS_DEFAULT_SAMPLE_LIMIT, POT_PROVIDER_EXTRACTOR_ARGS,
     MANIFEST_MAX_VIDEO_REPRESENTATIONS, MANIFEST_MAX_AUDIO_REPRESENTATIONS,
 )
 from core.security import (
@@ -292,8 +292,42 @@ async def proxy_metrics_endpoint(
     return await proxy_metrics.snapshot(sample_limit=samples)
 
 
+def _build_resolve_response(url: str, info: dict, stream_info: dict) -> dict:
+    """Shape a resolved video for the client."""
+    response = {
+        "original_url": url,
+        "stream_url": stream_info["url"],
+        "title": info.get("title", "Unknown Title"),
+        "is_live": info.get("is_live", False),
+        "thumbnail": info.get("thumbnail"),
+        "backend_engine": "yt-dlp",
+        "duration": info.get("duration"),
+        "quality": f"{stream_info.get('height', '?')}p" if stream_info.get("height") else "auto",
+        "has_audio": stream_info.get("has_audio", True),
+        "stream_type": stream_info.get("type", "unknown"),
+    }
+
+    if stream_info.get("type") == "dash":
+        response["video_url"] = stream_info.get("video_url")
+        response["audio_url"] = stream_info.get("audio_url")
+        response["available_qualities"] = stream_info.get("available_qualities", [])
+        response["audio_options"] = stream_info.get("audio_options", [])
+
+    return response
+
+
+def _extract_with_options(url: str, ydl_opts: dict) -> dict:
+    """Run yt-dlp for one option set. Blocking; call in a worker thread."""
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False, process=False)
+        # A playlist or shortened link resolves to another URL first.
+        if info.get("_type") == "url":
+            info = ydl.extract_info(info["url"], download=False, process=False)
+        return info
+
+
 @app.get("/api/resolve")
-def resolve_stream(
+async def resolve_stream(
     request: Request,
     url: str = Query(..., description="The URL of the video/stream to resolve"),
     user_agent: str = Query(None, description="User agent from the client browser")
@@ -323,108 +357,55 @@ def resolve_stream(
         'skip_download': True,
         'ignore_no_formats_error': True,
         'cache_dir': cache_dir,
-    }
-
-    # Use mweb client which often bypasses GVS token requirements for HD
-    # remote_components enables bgutil to fetch script from GitHub for PO token generation
-    ydl_opts = {
-        **base_opts,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['mweb', 'web'],
-            }
-        },
-        'remote_components': {'ejs': 'github'},
-        # Configure GetPOT to use the remote bgutil-provider service
-        'ytdl_hook': {
-            'GetPOT': {
-                'provider': 'bgutil',
-                'provider_args': {'bgutil': {'url': 'http://bgutil-provider:4416'}}
-            }
-        },
+        # The PO token provider address must be passed explicitly: the bgutil
+        # plugin otherwise looks for it on localhost, gets no token, and
+        # YouTube answers "Sign in to confirm you're not a bot" with no
+        # playable formats.
+        'extractor_args': dict(POT_PROVIDER_EXTRACTOR_ARGS),
     }
 
     if has_cookies:
         logger.info(f"Using cookies for user: {user_email}")
-        ydl_opts['cookiefile'] = cookie_path
+        base_opts['cookiefile'] = cookie_path
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False, process=False)
-            if info.get('_type') == 'url':
-                info = ydl.extract_info(info['url'], download=False, process=False)
+    # The player client is deliberately not pinned. Lists such as
+    # ['mweb', 'web'] or ['tv'] now return storyboard images and no media,
+    # because YouTube expects per-client tokens a fixed list does not carry.
+    # yt-dlp keeps its own client selection current, so the choice is left
+    # to it; the only variation worth trying is where the challenge script
+    # comes from.
+    attempts = [
+        ("local challenge runtime", {**base_opts, 'remote_components': {'ejs': 'github'}}),
+        ("remote challenge components", {**base_opts, 'remote_components': 'ejs:github'}),
+    ]
 
+    last_error = None
+    for label, ydl_opts in attempts:
+        try:
+            info = await asyncio.to_thread(_extract_with_options, url, ydl_opts)
             stream_info = _extract_stream_url(info)
 
             if stream_info and stream_info.get('url'):
-                response = {
-                    "original_url": url,
-                    "stream_url": stream_info['url'],
-                    "title": info.get('title', 'Unknown Title'),
-                    "is_live": info.get('is_live', False),
-                    "thumbnail": info.get('thumbnail'),
-                    "backend_engine": "yt-dlp",
-                    "duration": info.get('duration'),
-                    "quality": f"{stream_info.get('height', '?')}p" if stream_info.get('height') else "auto",
-                    "has_audio": stream_info.get('has_audio', True),
-                    "stream_type": stream_info.get('type', 'unknown')
-                }
-
-                if stream_info.get('type') == 'dash':
-                    response["video_url"] = stream_info.get('video_url')
-                    response["audio_url"] = stream_info.get('audio_url')
-                    response["available_qualities"] = stream_info.get('available_qualities', [])
-                    response["audio_options"] = stream_info.get('audio_options', [])
-
+                response = _build_resolve_response(url, info, stream_info)
+                # Cache it so /api/dash-manifest can build a manifest for
+                # this video without resolving it again. Without this the
+                # manifest endpoint 404s on a freshly pasted link.
+                try:
+                    await cache_format(url, response)
+                except Exception as exc:
+                    logger.warning(f"Could not cache resolved format: {exc}")
                 return response
 
-    except Exception as e:
-        error_msg = str(e)
-        logger.info(f"Primary method error: {error_msg[:100]}")
+            logger.info(f"{label}: no playable formats")
+        except Exception as e:
+            last_error = str(e)
+            logger.info(f"{label} failed: {last_error[:150]}")
 
-    # Fallback: Try with web client and remote components for PO token
-    logger.info("Fallback: Trying web client with remote components")
-    ydl_opts_fallback = {
-        **base_opts,
-        'extractor_args': {'youtube': {'player_client': ['web']}},
-        'remote_components': 'ejs:github',
-    }
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts_fallback) as ydl:
-            info = ydl.extract_info(url, download=False, process=False)
-            if info.get('_type') == 'url':
-                info = ydl.extract_info(info['url'], download=False, process=False)
-
-            stream_info = _extract_stream_url(info)
-
-            if stream_info and stream_info.get('url'):
-                response = {
-                    "original_url": url,
-                    "stream_url": stream_info['url'],
-                    "title": info.get('title', 'Unknown Title'),
-                    "is_live": info.get('is_live', False),
-                    "thumbnail": info.get('thumbnail'),
-                    "backend_engine": "yt-dlp",
-                    "duration": info.get('duration'),
-                    "quality": f"{stream_info.get('height', '?')}p" if stream_info.get('height') else "auto",
-                    "has_audio": stream_info.get('has_audio', True),
-                    "stream_type": stream_info.get('type', 'unknown')
-                }
-
-                if stream_info.get('type') == 'dash':
-                    response["video_url"] = stream_info.get('video_url')
-                    response["audio_url"] = stream_info.get('audio_url')
-                    response["available_qualities"] = stream_info.get('available_qualities', [])
-                    response["audio_options"] = stream_info.get('audio_options', [])
-
-                return response
-
-    except Exception as e:
-        error_msg = str(e)
-        logger.error(f"Fallback error: {error_msg}")
-        if "Sign in to confirm your age" in error_msg:
-            raise HTTPException(status_code=403, detail="Age-restricted video. Please upload valid YouTube cookies.")
+    if last_error and "Sign in to confirm your age" in last_error:
+        raise HTTPException(
+            status_code=403,
+            detail="Age-restricted video. Please upload valid YouTube cookies.",
+        )
 
     raise HTTPException(status_code=400, detail="Could not resolve a playable stream URL.")
 

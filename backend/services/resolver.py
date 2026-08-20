@@ -8,7 +8,7 @@ import aiofiles
 from typing import Optional
 import yt_dlp
 
-from core.config import COOKIES_DIR, COOKIE_FILE_MODE
+from core.config import COOKIES_DIR, COOKIE_FILE_MODE, POT_PROVIDER_EXTRACTOR_ARGS
 from core.security import get_user_cookie_path
 from services.database import cache_format, get_cached_format, get_user_cookies
 
@@ -213,56 +213,30 @@ async def refresh_video_url(video_data: dict, user_agent: str = None, user_email
     if not cookie_path and added_by and added_by != user_email:
         cookie_path = await _ensure_cookie_file(added_by)
 
-    # 3. Define Strategies (The Secret Sauce)
+    # 3. Define strategies.
+    #
+    # These vary only the cookie source. They used to pin YouTube player
+    # clients (web, mweb, tv_embedded, ios, tv) and try them in turn, but
+    # every one of those lists now returns storyboard images and no media:
+    # YouTube requires per-client tokens that a pinned list does not carry.
+    # yt-dlp keeps its own default client selection current, which resolves
+    # the same videos at full quality, so the choice is left to it.
     strategies = [
         {
-            "name": "bgutil_plugin",
-            "desc": "Primary: Uses local PO Token server (Best for 1080p)",
-            "opts": {
-                'extractor_args': {'youtube': {'player_client': ['web', 'mweb', 'tv_embedded']}},
-                'ytdl_hook': {
-                    'GetPOT': {
-                        'provider': 'bgutil',
-                        'provider_args': {'bgutil': {'url': 'http://bgutil-provider:4416'}}
-                    }
-                }
-            }
+            "name": "requester_cookies" if cookie_path else "anonymous",
+            "desc": "Default clients, with whatever cookies were found",
+            "cookiefile": cookie_path,
         },
-        {
-            "name": "bgutil_ios",
-            "desc": "Secondary: BGUtil with iOS client (Good for limited 1080p)",
-             "opts": {
-                'extractor_args': {'youtube': {'player_client': ['ios']}},
-                'ytdl_hook': {
-                    'GetPOT': {
-                        'provider': 'bgutil',
-                        'provider_args': {'bgutil': {'url': 'http://bgutil-provider:4416'}}
-                    }
-                }
-            }
-        },
-        {
-            "name": "mweb_client",
-            "desc": "Fallback 1: Mobile Web Client (Often bypasses GVS check)",
-            "opts": {
-                "extractor_args": {"youtube": {"player_client": ["mweb"]}}
-            }
-        },
-        {
-            "name": "ios_client",
-            "desc": "Fallback 2: iOS Client (Reliable with cookies, lower res)",
-            "opts": {
-                "extractor_args": {"youtube": {"player_client": ["ios"]}}
-            }
-        },
-        {
-            "name": "tv_client", 
-            "desc": "Fallback 3: TV Client (Nuclear option, ignore errors)",
-            "opts": {
-                "extractor_args": {"youtube": {"player_client": ["tv"]}}
-            }
-        }
     ]
+
+    # Retrying without cookies is worth it: an expired or wrong-account
+    # cookie file makes YouTube refuse a video that plays fine anonymously.
+    if cookie_path:
+        strategies.append({
+            "name": "anonymous",
+            "desc": "Default clients, no cookies",
+            "cookiefile": None,
+        })
 
     info = None
     last_error = None
@@ -287,13 +261,12 @@ async def refresh_video_url(video_data: dict, user_agent: str = None, user_email
             },
         }
 
-        # Apply strategy-specific options
-        if strat.get("opts"):
-            ydl_opts.update(strat["opts"])
+        # The PO token provider is required for YouTube to serve media
+        # formats at all; without it the extractor gets storyboards only.
+        ydl_opts['extractor_args'] = dict(POT_PROVIDER_EXTRACTOR_ARGS)
 
-        # Apply cookies if we have them
-        if cookie_path:
-            ydl_opts['cookiefile'] = cookie_path
+        if strat.get("cookiefile"):
+            ydl_opts['cookiefile'] = strat["cookiefile"]
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
