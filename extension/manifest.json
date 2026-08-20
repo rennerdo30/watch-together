@@ -8,8 +8,7 @@
     "storage",
     "alarms",
     "tabs",
-    "webRequest",
-    "scripting"
+    "webRequest"
   ],
   "host_permissions": [
     "https://*.youtube.com/*",
@@ -25,21 +24,6 @@
   "background": {
     "service_worker": "background.js"
   },
-  "content_scripts": [
-    {
-      "matches": [
-        "https://*.youtube.com/*",
-        "https://*.twitch.tv/*",
-        "https://*.vimeo.com/*",
-        "https://*.dailymotion.com/*",
-        "https://*.crunchyroll.com/*"
-      ],
-      "js": [
-        "content.js"
-      ],
-      "run_at": "document_end"
-    }
-  ],
   "action": {
     "default_popup": "popup/popup.html",
     "default_icon": {

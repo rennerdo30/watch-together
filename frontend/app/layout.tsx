@@ -1,7 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import { ExtensionMeta } from "@/components/extension-meta";
 import { COLOR_MODE_BOOTSTRAP_SCRIPT } from "@/lib/color-mode";
 
 const geistSans = Geist({
@@ -52,7 +51,6 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <ExtensionMeta />
         {children}
       </body>
     </html>
