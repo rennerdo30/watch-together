@@ -17,6 +17,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const sendBtn = document.getElementById('sendBtn');
     const sendStatus = document.getElementById('sendStatus');
     const sendSection = document.getElementById('sendSection');
+    const connectBtn = document.getElementById('connectBtn');
+    const connectStatus = document.getElementById('connectStatus');
 
     let currentStream = null;
     let currentTabUrl = null;
@@ -44,6 +46,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Load status
     await loadStatus();
 
+    // Offer to connect the open site if it is not granted yet
+    await updateConnectOffer();
+
     // Check for detected streams
     await checkForStreams();
 
@@ -70,6 +75,62 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     /**
+     * Offer to connect the site in the open tab.
+     *
+     * A Watch Together instance is self-hosted, so its address cannot be
+     * listed in the manifest. Access is requested for the specific site the
+     * user is looking at, which also has to come from a click: the browser
+     * only shows a permission prompt in response to a user gesture.
+     */
+    async function updateConnectOffer() {
+        connectBtn.hidden = true;
+        connectStatus.textContent = '';
+
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.url) return;
+
+        let origin;
+        try {
+            const parsed = new URL(tab.url);
+            if (!['http:', 'https:'].includes(parsed.protocol)) return;
+            origin = parsed.origin;
+        } catch {
+            return;
+        }
+
+        const pattern = `${origin}/*`;
+        if (await chrome.permissions.contains({ origins: [pattern] })) {
+            return; // Already granted, detection runs on its own.
+        }
+
+        connectBtn.hidden = false;
+        connectBtn.textContent = `Connect ${new URL(origin).host}`;
+        connectBtn.onclick = async () => {
+            connectBtn.disabled = true;
+            try {
+                const granted = await chrome.permissions.request({ origins: [pattern] });
+                if (!granted) {
+                    connectStatus.textContent = 'Permission declined';
+                    return;
+                }
+                const result = await chrome.runtime.sendMessage({
+                    type: 'CONNECT_INSTANCE',
+                    instanceUrl: origin,
+                });
+                if (result?.success) {
+                    connectStatus.textContent = 'Connected — reload the page to sync';
+                    connectBtn.hidden = true;
+                    await loadStatus();
+                } else {
+                    connectStatus.textContent = result?.error || 'Could not connect';
+                }
+            } finally {
+                connectBtn.disabled = false;
+            }
+        };
+    }
+
+    /**
      * Load and display current status
      */
     async function loadStatus() {
@@ -87,7 +148,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             } else {
                 statusDot.classList.remove('connected');
                 statusText.textContent = 'Not Connected';
-                userEmail.textContent = 'Visit Watch Together to connect';
+                userEmail.textContent = 'Open your Watch Together site, then connect it';
             }
 
             // Last sync

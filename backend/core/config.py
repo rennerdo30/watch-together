@@ -26,6 +26,20 @@ PREFETCH_SESSION_TTL = 300  # 5 minutes - cleanup inactive prefetch sessions
 # Format cache configuration
 FORMAT_CACHE_TTL_SECONDS = 7200  # 2 hours - YouTube URLs typically valid for 6 hours
 
+# PO token provider (bgutil) for YouTube.
+#
+# The bgutil yt-dlp plugin reads its address from the
+# `youtubepot-bgutilhttp:base_url` extractor arg and otherwise defaults to
+# 127.0.0.1:4416 — which is nothing inside the backend container, where the
+# provider is a separate service. It must be passed explicitly.
+POT_PROVIDER_URL = os.environ.get(
+    "BGUTIL_YTDLP_POT_PROVIDER_URL", "http://127.0.0.1:4416")
+
+# Extractor args every YouTube extraction needs so the provider is reachable.
+POT_PROVIDER_EXTRACTOR_ARGS = {
+    "youtubepot-bgutilhttp": {"base_url": [POT_PROVIDER_URL]},
+}
+
 # Cookie files hold live session credentials: owner read/write only.
 COOKIE_FILE_MODE = 0o600
 

@@ -6,6 +6,8 @@
 # Usage:
 #   ./deploy/host-status.sh
 #   ./deploy/host-status.sh --logs=backend      # tail one service's log
+#   ./deploy/host-status.sh --logs=backend --tail=200
+#   ./deploy/host-status.sh --probe=/api/rooms   # ask the backend from inside
 #   ./deploy/host-status.sh --host=10.0.0.5 --user=admin
 
 set -euo pipefail
@@ -21,6 +23,8 @@ SSH_HOST="${DEPLOY_HOST:-}"
 REMOTE="${DEPLOY_REMOTE:-/opt/watch-together}"
 
 LOGS_SERVICE=""
+TAIL_LINES=40
+PROBE_PATH=""
 
 for arg in "$@"; do
 	case "$arg" in
@@ -28,6 +32,8 @@ for arg in "$@"; do
 		--host=*)   SSH_HOST="${arg#--host=}" ;;
 		--remote=*) REMOTE="${arg#--remote=}" ;;
 		--logs=*)   LOGS_SERVICE="${arg#--logs=}" ;;
+		--tail=*)   TAIL_LINES="${arg#--tail=}" ;;
+		--probe=*)  PROBE_PATH="${arg#--probe=}" ;;
 	esac
 done
 
@@ -41,16 +47,30 @@ fi
 ssh -o BatchMode=yes -o ConnectTimeout=15 "${SSH_USER}@${SSH_HOST}" \
 	"WT_REMOTE=$(printf '%q' "$REMOTE") \
 	 WT_LOGS=$(printf '%q' "$LOGS_SERVICE") \
+	 WT_TAIL=$(printf '%q' "$TAIL_LINES") \
+	 WT_PROBE=$(printf '%q' "$PROBE_PATH") \
 	 bash -s" <<'REMOTE_SCRIPT'
 set -u
 REMOTE="$WT_REMOTE"
 LOGS_SERVICE="${WT_LOGS:-}"
+TAIL_LINES="${WT_TAIL:-40}"
+PROBE_PATH="${WT_PROBE:-}"
 COMPOSE="docker compose -f deploy/docker-compose.yml --env-file ${REMOTE}/.env"
 
 if [ -n "$LOGS_SERVICE" ]; then
 	cd "$REMOTE" || exit 1
-	echo "── ${LOGS_SERVICE} log (last 40 lines) ───────────"
-	$COMPOSE logs --tail 40 "$LOGS_SERVICE" 2>&1
+	echo "── ${LOGS_SERVICE} log (last ${TAIL_LINES} lines) ───────────"
+	$COMPOSE logs --tail "$TAIL_LINES" "$LOGS_SERVICE" 2>&1
+	exit 0
+fi
+
+# Ask the backend directly, from inside the network. This bypasses
+# Cloudflare Access, which otherwise makes the API untestable without a
+# browser session.
+if [ -n "$PROBE_PATH" ]; then
+	cd "$REMOTE" || exit 1
+	echo "── GET http://backend:8000${PROBE_PATH} ──────────"
+	$COMPOSE exec -T nginx sh -c "wget -q -T 120 -O - 'http://backend:8000${PROBE_PATH}' 2>&1 || echo '(request failed)'"
 	exit 0
 fi
 
