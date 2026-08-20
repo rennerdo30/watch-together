@@ -275,3 +275,72 @@ class TestIndexCacheKey:
 
         manifest_module.open_upstream_stream = real_open
         manifest_module.clear_index_cache()
+
+
+class TestCodecGrouping:
+    """Representations in one AdaptationSet must be interchangeable.
+
+    A player backs an AdaptationSet with a single MSE SourceBuffer created
+    for a single codec. H.264 and AV1 in the same set makes it append one
+    codec's segments into the other's buffer: playback runs for a fraction
+    of a second and freezes on a stale frame.
+    """
+
+    IDX = Mp4Index(0, 700, 701, 13000)
+
+    def video(self, rep_id, codec, height, tbr):
+        return {"id": rep_id, "url": f"https://cdn/{rep_id}.mp4", "height": height,
+                "width": height * 16 // 9, "vcodec": codec, "tbr": tbr, "index": self.IDX}
+
+    def audio(self, rep_id, codec, abr):
+        return {"id": rep_id, "url": f"https://cdn/{rep_id}.m4a", "acodec": codec,
+                "abr": abr, "asr": 44100, "audio_channels": 2, "index": self.IDX}
+
+    def sets_for(self, root, content_type):
+        return root.findall(
+            f".//mpd:AdaptationSet[@contentType='{content_type}']", MPD_NS)
+
+    def codecs_in(self, adaptation_set):
+        return [r.get("codecs")
+                for r in adaptation_set.findall("mpd:Representation", MPD_NS)]
+
+    def test_h264_and_av1_are_separated(self):
+        reps = [self.video("137", "avc1.640028", 1080, 4500),
+                self.video("399", "av01.0.08M.08", 1080, 2000),
+                self.video("136", "avc1.4d401f", 720, 2500)]
+        root = ET.fromstring(build_mpd(100.0, reps, [AUDIO_REP], PROXY_BASE))
+
+        video_sets = self.sets_for(root, "video")
+        assert len(video_sets) == 2
+        for adaptation_set in video_sets:
+            families = {c.split(".")[0] for c in self.codecs_in(adaptation_set)}
+            assert len(families) == 1, f"mixed codecs in one set: {families}"
+
+    def test_same_codec_family_stays_together(self):
+        """Different profiles of one codec are interchangeable."""
+        reps = [self.video("137", "avc1.640028", 1080, 4500),
+                self.video("136", "avc1.4d401f", 720, 2500)]
+        root = ET.fromstring(build_mpd(100.0, reps, [AUDIO_REP], PROXY_BASE))
+
+        video_sets = self.sets_for(root, "video")
+        assert len(video_sets) == 1
+        assert len(self.codecs_in(video_sets[0])) == 2
+
+    def test_aac_and_opus_are_separated(self):
+        reps = [self.audio("140", "mp4a.40.2", 128), self.audio("251", "opus", 160)]
+        root = ET.fromstring(build_mpd(100.0, [VIDEO_REP], reps, PROXY_BASE))
+
+        audio_sets = self.sets_for(root, "audio")
+        assert len(audio_sets) == 2
+
+    def test_quality_order_is_preserved_within_a_set(self):
+        """Grouping must not reshuffle the caller's ordering."""
+        reps = [self.video("137", "avc1.640028", 1080, 4500),
+                self.video("399", "av01.0.08M.08", 1080, 2000),
+                self.video("136", "avc1.4d401f", 720, 2500)]
+        root = ET.fromstring(build_mpd(100.0, reps, [AUDIO_REP], PROXY_BASE))
+
+        h264 = next(s for s in self.sets_for(root, "video")
+                    if self.codecs_in(s)[0].startswith("avc1"))
+        ids = [r.get("id") for r in h264.findall("mpd:Representation", MPD_NS)]
+        assert ids == ["137", "136"]
