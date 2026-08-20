@@ -30,18 +30,25 @@ Watch Together is a real-time collaborative video synchronization platform that 
 ```
 backend/
 ├── main.py                    # FastAPI app, core endpoints, proxy
-├── connection_manager.py      # WebSocket room management (1000+ lines)
+├── connection_manager.py      # WebSocket room management
 ├── services/
 │   ├── resolver.py           # yt-dlp video resolution
 │   ├── database.py           # SQLite persistence
-│   └── cache.py              # Caching & disk management
+│   ├── cache.py              # Caching & disk management
+│   ├── upstream.py           # SSRF-safe fetching: validation, IP pinning, redirects
+│   ├── user_cookies.py       # Per-user cookie lookup for upstream requests
+│   ├── manifest.py           # DASH manifest generation for adaptive streams
+│   ├── mp4_index.py          # Fragmented-MP4 box scanning (init/index ranges)
+│   ├── metrics.py            # Per-transfer proxy metrics
+│   └── prefetcher.py         # Segment prefetching
 ├── api/routes/               # REST endpoints
-└── core/                     # Config & security
+├── core/                     # Config, security, Access JWT, rate limiting
+└── tests/                    # pytest suite (200+ tests)
 
 frontend/
 ├── app/                      # Next.js app router pages
 ├── components/
-│   ├── custom-player.tsx     # Main video player (1000+ lines)
+│   ├── custom-player.tsx     # Main video player (MSE / legacy DASH / HLS)
 │   ├── player-controls.tsx   # Playback controls UI
 │   └── room/                 # Room-specific components
 └── lib/
@@ -85,6 +92,26 @@ docker compose up -d --build
 2. Backend tries cookie sources: user's cookies → shared user's cookies → no cookies
 3. Returns HLS/DASH manifest URL or direct stream
 4. Manifests are rewritten to proxy all segments through `/api/proxy`
+
+### Playback Engines
+yt-dlp returns adaptive streams as **separate** fragmented-MP4 files with no manifest.
+Two engines consume them, chosen by `NEXT_PUBLIC_STREAM_ENGINE`:
+- `mse` — `/api/dash-manifest` generates a real DASH manifest (byte ranges found by
+  scanning each file's box headers) and Shaka plays it through **one** `<video>`, so the
+  browser muxes A/V against a single clock.
+- `legacy` (default) — separate `<video>` + `<audio>` kept in step by `useDashSync`.
+  Being retired: two media elements cannot be kept frame-accurate.
+
+### Security Model
+- Identity comes from the **verified** `Cf-Access-Jwt-Assertion` JWT
+  (`CF_ACCESS_TEAM_DOMAIN` + `CF_ACCESS_AUD`). The plain email header is only trusted
+  when Access is unconfigured — it is forgeable by anyone reaching the origin directly.
+- All upstream fetches go through `services/upstream.py`: every host validated, the
+  validated IP pinned for the connection, every redirect hop re-validated.
+- Cookies are per user and per request; any response fetched with cookies is cached
+  under a key including the user's identity.
+- **Single worker only.** Room state, caches and the rate limiter are in process memory;
+  startup refuses `WEB_CONCURRENCY > 1`.
 
 ### Caching Strategy
 - **Manifests:** 30-min in-memory LRU cache
@@ -161,17 +188,24 @@ docker compose up -d --build
 ## Testing
 
 ```bash
-# Backend tests
+# Backend tests (200+; use a temporary data dir, safe to run anytime)
 cd backend && pytest
 
-# Frontend type checking
-cd frontend && npm run build
+# End-to-end: two-client room sync, plus MSE playback in a real browser.
+# Starts both servers itself.
+cd frontend && npm run test:e2e
+
+# Frontend type checking and lint
+cd frontend && npm run build && npm run lint
 ```
+
+Tests run against a temporary database and cookie directory (see
+`backend/tests/conftest.py`), so they neither depend on nor pollute `backend/data/`.
 
 ## Important Notes
 
 - Room state persists for 5 minutes after last user leaves
-- User cookies are stored in `data/cookies/{email}.txt` (Netscape format)
+- User cookies are stored in `data/cookies/{email}.txt` (Netscape format, mode 0600)
 - Room IDs are sanitized to alphanumeric + hyphen/underscore only
 - The proxy rewrites manifest URLs to avoid CORS issues
 - yt-dlp requires Node.js runtime for JavaScript challenge execution
