@@ -48,12 +48,18 @@ RATE_LIMIT_WINDOW_SECONDS = 60.0
 RATE_LIMIT_MAX_REQUESTS = 10  # Uploads allowed per user per window
 RATE_LIMIT_STORE_MAX_KEYS = 1000  # Counters kept before stale ones are pruned
 
+# Renditions offered to the player, spanning the quality range. Each one
+# costs a small range request to probe once per video, so the cap trades
+# choice against startup work. It has to be generous enough to include the
+# low rungs: a viewer on a slow link needs 360p more than a fourth 1080p.
+QUALITY_LADDER_SIZE = 10
+
 # DASH manifest generation
 MANIFEST_PROBE_BYTES = 64 * 1024  # Prefix read to locate ftyp/moov/sidx
 MANIFEST_INDEX_CACHE_TTL_SECONDS = 7200  # Byte ranges are stable per rendition
 MANIFEST_INDEX_CACHE_MAX_ENTRIES = 500
 MANIFEST_MIN_BANDWIDTH = 1000  # Floor so a manifest never declares 0 bps
-MANIFEST_MAX_VIDEO_REPRESENTATIONS = 6  # Renditions offered for adaptive switching
+MANIFEST_MAX_VIDEO_REPRESENTATIONS = 10  # Renditions offered for adaptive switching
 MANIFEST_MAX_AUDIO_REPRESENTATIONS = 2
 
 # Per-user cookie jar caching for upstream fetches

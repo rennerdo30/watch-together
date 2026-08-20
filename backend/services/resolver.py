@@ -8,7 +8,10 @@ import aiofiles
 from typing import Optional
 import yt_dlp
 
-from core.config import COOKIES_DIR, COOKIE_FILE_MODE, POT_PROVIDER_EXTRACTOR_ARGS
+from core.config import (
+    COOKIES_DIR, COOKIE_FILE_MODE, POT_PROVIDER_EXTRACTOR_ARGS,
+    QUALITY_LADDER_SIZE,
+)
 from core.security import get_user_cookie_path
 from services.database import cache_format, get_cached_format, get_user_cookies
 
@@ -44,6 +47,42 @@ async def _ensure_cookie_file(user_email: str) -> Optional[str]:
             return None
 
     return None
+
+
+def _select_quality_ladder(video_only_formats, limit: int):
+    """Pick renditions spanning the quality range, not just the top of it.
+
+    The list arrives sorted by height descending, so taking a slice off the
+    front keeps only the largest renditions — on a video with several 1080p
+    variants that leaves no 480p or 360p at all, which is exactly what a
+    viewer on a slow link needs.
+
+    One entry per (height, codec family) is kept so both an H.264 and a more
+    efficient AV1 version of the same resolution survive, and the ladder is
+    trimmed from the middle outwards so the lowest and highest rungs are the
+    last things dropped.
+    """
+    seen = set()
+    ladder = []
+    for height, fmt in video_only_formats:
+        codec_family = (fmt.get('vcodec') or '').split('.', 1)[0].lower()
+        key = (height, codec_family)
+        if key in seen:
+            continue
+        seen.add(key)
+        ladder.append((height, fmt))
+
+    if len(ladder) <= limit:
+        return ladder
+
+    # Keep the extremes, then fill inwards with an even spread.
+    kept = [ladder[0], ladder[-1]]
+    middle = ladder[1:-1]
+    if middle and limit > 2:
+        step = max(1, round(len(middle) / (limit - 2)))
+        kept.extend(middle[::step][: limit - 2])
+    # Restore the descending order the caller expects.
+    return sorted(kept, key=lambda item: item[0] or 0, reverse=True)
 
 
 def _extract_stream_url(info: dict, prefer_dash: bool = True) -> dict:
@@ -121,7 +160,8 @@ def _extract_stream_url(info: dict, prefer_dash: bool = True) -> dict:
                         'vcodec': v[1].get('vcodec'),
                         'tbr': v[1].get('tbr'),
                     }
-                    for v in video_only_formats[:6]
+                    for v in _select_quality_ladder(
+                        video_only_formats, QUALITY_LADDER_SIZE)
                 ],
                 'audio_options': [
                     {
