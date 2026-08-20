@@ -40,6 +40,10 @@ services:
       # extraction often and the fix usually ships within days, so a version
       # frozen at image build time goes stale quickly. Set to "false" to pin.
       YTDLP_AUTO_UPDATE: ${YTDLP_AUTO_UPDATE:-true}
+      # DEBUG adds a line per proxied transfer with the byte range the origin
+      # saw, which is what distinguishes a player's range request from an
+      # intermediary fetching the whole object.
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       # SQLite database, per-user cookie files, and the segment cache.
       - backend_data:/app/data
