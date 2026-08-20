@@ -814,8 +814,14 @@ async def proxy_stream(request: Request, url: str):
                 # object from the origin to satisfy a small range, which is
                 # how a 700-byte request became a 479MB origin transfer.
                 "Cache-Control": "private, no-store, no-transform",
-                # Prevent HTTP/2 connection reuse issues with large streams
-                "Connection": "close",
+                # Connection is deliberately not forced closed. It used to be
+                # set to "close" to work around HTTP/2 stream errors, but
+                # those came from partial responses sent without a
+                # Content-Range, which is fixed at the source now. Closing
+                # after every response costs a fresh connection per segment,
+                # and adaptive playback is thousands of small range requests
+                # — expensive on any link, punitive on an intercontinental
+                # one.
             }
             for key in ["content-type", "content-length", "content-range"]:
                 if key in r.headers:

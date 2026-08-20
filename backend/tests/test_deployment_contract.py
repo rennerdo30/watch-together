@@ -89,3 +89,51 @@ class TestExtensionManifest:
         # The meta-tag handshake is gone.
         assert "wt-ext-token" not in background
         assert "TOKEN_DETECTED" not in background
+
+
+class TestConnectionsAreReused:
+    """Adaptive playback is thousands of small range requests.
+
+    The proxy and nginx both used to force the connection closed after every
+    response, as a workaround for HTTP/2 stream errors. Those errors came
+    from partial responses sent without a Content-Range, which is fixed at
+    the source, and closing per response costs a fresh connection setup for
+    every segment — expensive on any link and punitive across continents.
+    """
+
+    def test_proxy_does_not_force_the_connection_closed(self):
+        source = (BACKEND / "main.py").read_text()
+        assert '"Connection": "close"' not in source
+
+    def test_nginx_keeps_the_backend_connection_alive(self):
+        conf = (REPO_ROOT / "nginx" / "nginx.conf").read_text()
+        # The websocket locations legitimately set Upgrade; only the media
+        # proxy must not force a close.
+        proxy_block = conf.split("location /api/proxy")[1].split("location ")[0]
+        assert 'Connection "close"' not in proxy_block
+        assert 'proxy_set_header Connection ""' in proxy_block
+
+
+class TestPlayerToleratesHighLatency:
+    """The server and the viewer can be on opposite sides of the world."""
+
+    PLAYER_CONSTANTS = REPO_ROOT / "frontend" / "lib" / "constants.ts"
+
+    def test_startup_bandwidth_guess_is_conservative(self):
+        """An optimistic guess opens on the top rendition and stalls."""
+        text = self.PLAYER_CONSTANTS.read_text()
+        assert "SHAKA_INITIAL_BANDWIDTH_ESTIMATE" in text
+
+    def test_rebuffer_goal_leaves_a_real_cushion(self):
+        """A small cushion is spent before the next segment lands."""
+        import re
+
+        text = self.PLAYER_CONSTANTS.read_text()
+        match = re.search(r"SHAKA_REBUFFER_GOAL_SECONDS = (\d+)", text)
+        assert match, "the rebuffering goal is no longer defined"
+        assert int(match.group(1)) >= 8
+
+    def test_segment_requests_are_retried(self):
+        text = self.PLAYER_CONSTANTS.read_text()
+        assert "SHAKA_SEGMENT_RETRIES" in text
+        assert "SHAKA_REQUEST_TIMEOUT_MS" in text
