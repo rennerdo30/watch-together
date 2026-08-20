@@ -36,6 +36,10 @@ services:
       # Room state, caches and the rate limiter are in process memory, so a
       # second worker would split rooms. Startup refuses anything above 1.
       WEB_CONCURRENCY: "1"
+      # Fetch the latest yt-dlp nightly on every start. YouTube breaks
+      # extraction often and the fix usually ships within days, so a version
+      # frozen at image build time goes stale quickly. Set to "false" to pin.
+      YTDLP_AUTO_UPDATE: ${YTDLP_AUTO_UPDATE:-true}
     volumes:
       # SQLite database, per-user cookie files, and the segment cache.
       - backend_data:/app/data

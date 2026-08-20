@@ -92,6 +92,30 @@ used**:
 Because nothing is published on the host, the origin is only reachable through
 the tunnel — but the verified path is still the one to run.
 
+## yt-dlp stays current
+
+The backend refreshes yt-dlp from the upstream nightly on every container
+start, so a deploy or restart always picks up the newest extractor code.
+YouTube changes its requirements frequently and the failure mode is total —
+zero playable formats, not reduced quality — so a version frozen at image
+build time goes stale within days.
+
+Python packages live in a virtualenv owned by the app user, which is what
+lets a non-root container upgrade them at boot. Update failures are never
+fatal: an offline or rate-limited host starts with the version it has.
+
+```bash
+YTDLP_AUTO_UPDATE=false        # pin to whatever the image was built with
+```
+
+To pick up new extractor code without a full deploy:
+
+```bash
+ssh <host> "cd /opt/watch-together && \
+  docker compose -f deploy/docker-compose.yml --env-file /opt/watch-together/.env \
+  restart backend"
+```
+
 ## Notes
 
 - **Single worker only.** Room state, caches and the rate limiter live in
@@ -118,6 +142,14 @@ ssh $HOST "cd /opt/watch-together && $C logs --tail 30 cloudflared"
 
 - **502 from Cloudflare** — the tunnel's public hostname must point at
   `HTTP` `nginx:80` (service name on the shared network), not `localhost`.
+- **Every YouTube link fails to resolve** — the server's address is a
+  datacenter IP, which YouTube treats as a bot and answers with "Sign in to
+  confirm you're not a bot" and zero formats. The same code resolves the same
+  video fine from a residential connection. The fix is cookies from a
+  signed-in account: install the browser extension, open the site, and use
+  "Connect this site" in the extension popup so it can sync them.
+  `./deploy/host-status.sh --clients=<url>` shows whether any player client
+  resolves from the server.
 - **Video stalls / `ERR_HTTP2_PROTOCOL_ERROR`** — known open issue; read
   `GET /api/metrics/proxy` (needs identity) for per-transfer outcomes, and
   see `ISSUES.md`.
