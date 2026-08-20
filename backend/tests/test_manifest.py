@@ -191,3 +191,87 @@ class TestManifestBuilding:
         root = ET.fromstring(build_mpd(10.0, [], [AUDIO_REP], PROXY_BASE))
         sets = root.findall(".//mpd:AdaptationSet", MPD_NS)
         assert [s.get("contentType") for s in sets] == ["audio"]
+
+
+class TestIndexCacheKey:
+    """Probed byte ranges must be keyed to one rendition.
+
+    Every YouTube rendition lives at /videoplayback and is distinguished
+    only by its query string. Keying on the path alone made all of a
+    video's representations — video and audio together — share one cache
+    entry, so each inherited the first one's byte ranges and the player
+    found no sidx box where the manifest promised one (Shaka error 3004,
+    MP4_SIDX_WRONG_BOX_TYPE).
+    """
+
+    VIDEO = ("https://rr3---sn-abc.googlevideo.com/videoplayback"
+             "?expire=111&sig=AAA&ei=X&ip=1.2.3.4&itag=137&clen=999&lmt=555&mime=video%2Fmp4")
+    AUDIO = ("https://rr3---sn-abc.googlevideo.com/videoplayback"
+             "?expire=111&sig=AAA&ei=X&ip=1.2.3.4&itag=140&clen=86240992&lmt=777&mime=audio%2Fmp4")
+    # Same rendition, re-resolved: new edge host and fresh signing params.
+    VIDEO_ROTATED = ("https://rr9---sn-zzz.googlevideo.com/videoplayback"
+                     "?expire=999&sig=BBB&ei=Y&ip=5.6.7.8&itag=137&clen=999&lmt=555&mime=video%2Fmp4")
+
+    def test_video_and_audio_do_not_collide(self):
+        from services.manifest import _cache_key
+        assert _cache_key(self.VIDEO) != _cache_key(self.AUDIO)
+
+    def test_different_video_itags_do_not_collide(self):
+        from services.manifest import _cache_key
+        other = self.VIDEO.replace("itag=137", "itag=136").replace("clen=999", "clen=555")
+        assert _cache_key(self.VIDEO) != _cache_key(other)
+
+    def test_rotated_signing_params_still_hit(self):
+        """Re-resolving the same rendition must reuse the probed ranges."""
+        from services.manifest import _cache_key
+        assert _cache_key(self.VIDEO) == _cache_key(self.VIDEO_ROTATED)
+
+    def test_url_without_identity_params_keys_on_itself(self):
+        from services.manifest import _cache_key
+        plain = "https://cdn.example.com/media/video.mp4"
+        assert _cache_key(plain) == plain
+
+    async def test_probe_does_not_reuse_another_renditions_index(self, monkeypatch):
+        """The cache must not hand one rendition's index to another."""
+        import services.manifest as manifest_module
+        from services.mp4_index import Mp4Index
+
+        manifest_module.clear_index_cache()
+        probed = []
+
+        async def fake_probe(client, url, headers=None):
+            probed.append(url)
+            # Distinct ranges per rendition, as real files have.
+            offset = 100 * len(probed)
+            return Mp4Index(0, offset - 1, offset, offset + 500)
+
+        # Exercise the real caching wrapper around a stubbed fetch.
+        real_open = manifest_module.open_upstream_stream
+
+        class FakeResponse:
+            status_code = 206
+            def __init__(self, payload): self._payload = payload
+            async def aread(self): return self._payload
+            async def aclose(self): return None
+
+        import struct
+
+        def make_fmp4(moov_size: int) -> bytes:
+            box = lambda t, n: struct.pack(">I", n + 8) + t + b"\0" * n
+            return box(b"ftyp", 8) + box(b"moov", moov_size) + box(b"sidx", 40)
+
+        sizes = iter([32, 64, 96])
+
+        async def fake_open(client, url, headers=None, max_redirects=3):
+            return FakeResponse(make_fmp4(next(sizes))), None
+
+        monkeypatch.setattr(manifest_module, "open_upstream_stream", fake_open)
+
+        first = await manifest_module.probe_index(None, self.VIDEO)
+        second = await manifest_module.probe_index(None, self.AUDIO)
+
+        assert first is not None and second is not None
+        assert first.index_range != second.index_range
+
+        manifest_module.open_upstream_stream = real_open
+        manifest_module.clear_index_cache()
