@@ -32,6 +32,24 @@ class TestAddressClassification:
     def test_internal_addresses_rejected(self, ip):
         assert not _is_public_ip(ip)
 
+    @pytest.mark.parametrize("ip", [
+        pytest.param("100.64.0.1", id="cgnat-shared-space"),
+        pytest.param("192.88.99.1", id="deprecated-6to4-relay"),
+        pytest.param("fec0::1", id="deprecated-ipv6-site-local"),
+        pytest.param("2001:db8::1", id="documentation-range"),
+    ])
+    def test_special_use_ranges_rejected(self, ip):
+        """Ranges Python's own flags leave unmarked must still be blocked."""
+        assert not _is_public_ip(ip)
+
+    @pytest.mark.parametrize("ip", [
+        pytest.param("::ffff:127.0.0.1", id="mapped-loopback"),
+        pytest.param("::ffff:10.0.0.1", id="mapped-rfc1918"),
+        pytest.param("::ffff:169.254.169.254", id="mapped-metadata"),
+    ])
+    def test_ipv4_tunnelled_in_ipv6_is_judged_on_the_inner_address(self, ip):
+        assert not _is_public_ip(ip)
+
     @pytest.mark.parametrize("ip", ["93.184.216.34", "1.1.1.1", "2606:4700::1111"])
     def test_public_addresses_accepted(self, ip):
         assert _is_public_ip(ip)

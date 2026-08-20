@@ -31,6 +31,17 @@ from core.config import (
 
 logger = logging.getLogger(__name__)
 
+# Ranges that Python's address flags do not mark as private or reserved,
+# but which must not be reachable from a user-supplied URL. Each of these
+# reports no restrictive flag at all, so the flag checks alone let them
+# through.
+_EXTRA_BLOCKED_NETWORKS = tuple(ipaddress.ip_network(cidr) for cidr in (
+    "100.64.0.0/10",     # RFC 6598 shared address space (carrier NAT)
+    "192.88.99.0/24",    # Deprecated 6to4 relay anycast
+    "fec0::/10",         # Deprecated IPv6 site-local addressing
+    "2001:db8::/32",     # Documentation range
+))
+
 
 class UnsafeUpstreamError(Exception):
     """Raised when a URL may not be fetched."""
@@ -59,13 +70,27 @@ def _is_public_ip(ip_str: str) -> bool:
         addr = ipaddress.ip_address(ip_str)
     except ValueError:
         return False
-    return not (
+
+    if (
         addr.is_private
         or addr.is_reserved
         or addr.is_loopback
         or addr.is_link_local
         or addr.is_multicast
         or addr.is_unspecified
+    ):
+        return False
+
+    # An IPv4 address tunnelled inside IPv6 has to be judged on the address
+    # it actually reaches, not on the wrapper around it.
+    tunnelled = getattr(addr, "ipv4_mapped", None) or getattr(addr, "sixtofour", None)
+    if tunnelled is not None and not _is_public_ip(str(tunnelled)):
+        return False
+
+    return not any(
+        addr in network
+        for network in _EXTRA_BLOCKED_NETWORKS
+        if network.version == addr.version
     )
 
 

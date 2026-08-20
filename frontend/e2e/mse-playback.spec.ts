@@ -77,7 +77,18 @@ test('shaka plays a generated manifest through one media element', async ({ page
   });
 
   const result = await page.evaluate(async () => {
-    const shaka = (window as unknown as { shaka: any }).shaka;
+    // Minimal shape of the Shaka globals this test drives.
+    interface ShakaTrack { height?: number | null; audioCodec?: string | null }
+    interface ShakaPlayer {
+      attach(element: HTMLMediaElement): Promise<void>;
+      load(uri: string): Promise<void>;
+      getVariantTracks(): ShakaTrack[];
+    }
+    interface ShakaGlobal {
+      polyfill: { installAll(): void };
+      Player: { new (): ShakaPlayer; isBrowserSupported(): boolean };
+    }
+    const shaka = (window as unknown as { shaka: ShakaGlobal }).shaka;
     shaka.polyfill.installAll();
     if (!shaka.Player.isBrowserSupported()) return { supported: false };
 
@@ -89,11 +100,13 @@ test('shaka plays a generated manifest through one media element', async ({ page
     await player.attach(element);
     try {
       await player.load('/generated.mpd');
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const shakaError = err as { code?: number; category?: number; data?: unknown };
       return {
         supported: true, duration: 0, currentTime: 0, buffered: 0,
         hasVideoTrack: false, hasAudioTrack: false,
-        error: `code=${err?.code} category=${err?.category} data=${JSON.stringify(err?.data)}`,
+        error: `code=${shakaError?.code} category=${shakaError?.category} `
+          + `data=${JSON.stringify(shakaError?.data)}`,
       };
     }
 
@@ -106,8 +119,8 @@ test('shaka plays a generated manifest through one media element', async ({ page
       duration: element.duration,
       currentTime: element.currentTime,
       buffered: element.buffered.length > 0 ? element.buffered.end(0) : 0,
-      hasVideoTrack: tracks.some((t: { height?: number | null }) => !!t.height),
-      hasAudioTrack: tracks.some((t: { audioCodec?: string | null }) => !!t.audioCodec),
+      hasVideoTrack: tracks.some((t) => !!t.height),
+      hasAudioTrack: tracks.some((t) => !!t.audioCodec),
       error: null as string | null,
     };
   });
