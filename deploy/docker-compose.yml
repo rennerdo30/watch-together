@@ -62,11 +62,6 @@ services:
   frontend:
     build:
       context: ../frontend
-      args:
-        # Next.js inlines NEXT_PUBLIC_* values when the app compiles, so the
-        # playback engine is a build-time choice, not a runtime one.
-        # Changing it requires rebuilding this image.
-        NEXT_PUBLIC_STREAM_ENGINE: ${STREAM_ENGINE:-legacy}
     image: watch-together/frontend:latest
     restart: unless-stopped
     depends_on:

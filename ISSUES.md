@@ -36,22 +36,6 @@ Last verified against the codebase: 2026-08-20.
 - **Fix if multi-worker deployment is ever wanted**: back the limiter — and room
   state, and the caches — with shared storage.
 
-#### Legacy Two-Element DASH Path Still Present
-- **Status**: Open (deliberate, pending soak)
-- **Description**: `useDashSync` and `useDashPlayer` drive a separate `<video>` and
-  `<audio>` element and correct the drift between them. The MSE engine replaces this
-  with a single element, but the old path is still the default while the new one
-  proves itself in production.
-- **Fix**: After soaking with `NEXT_PUBLIC_STREAM_ENGINE=mse`, make it the default and
-  delete `useDashSync`, `useDashPlayer`, and the dual-element markup.
-
-#### Duplicated WebSocket Sync Logic
-- **Status**: Open
-- **Description**: `frontend/lib/hooks/useRoomSync.ts` is exported but never imported.
-  The room page carries its own copy of the WebSocket setup and sync handling, so the
-  hook is dead code and the two implementations can drift apart.
-- **Fix**: Delete the unused hook, or move the room page onto it.
-
 ## Fixed Issues
 
 Verified fixed, each with a test that fails against the old behaviour:
@@ -77,8 +61,11 @@ Verified fixed, each with a test that fails against the old behaviour:
 - **Unvalidated Prefetching** — the prefetcher fetched manifest-derived URLs with no
   validation, reachable through any submitted video. It uses the validated path now.
 - **A/V Drift by Design** — two media elements cannot be kept frame-accurate. Adaptive
-  streams can now be described by a generated DASH manifest and played through one
-  element via MSE.
+  streams are described by a generated DASH manifest and played through one element via
+  MSE. The two-element path, its drift-correction hooks and its engine flag are deleted,
+  so there is no second playback path to keep working.
+- **Dead WebSocket Hook** — `lib/hooks/useRoomSync.ts` was exported but never imported
+  while the room page carried its own copy. The unused hook is deleted.
 - **Extension Sync Had No Rate Limit** — the limiter was private to the cookie routes.
   It is shared from `core/` and applied to both, under separate scopes.
 - **Cookie Files Were World-Readable** — written with the default umask; now owner-only
@@ -113,8 +100,6 @@ Verified fixed, each with a test that fails against the old behaviour:
 
 ### Pending
 - [ ] **HTTP/2 streaming root cause** — reproduce and read the new proxy metrics
-- [ ] **Make MSE the default** and delete the two-element path after a soak
-- [ ] **Remove the duplicated WebSocket sync implementation**
 - [ ] **Encrypt cookies at rest** — currently plaintext files with owner-only permissions
 - [ ] **Make the shared-cookie fallback opt-in** — resolution deliberately falls back to
       another user's cookies, which should be a visible setting rather than a default

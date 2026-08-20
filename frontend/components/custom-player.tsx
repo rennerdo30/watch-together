@@ -5,8 +5,7 @@ import { cn } from '@/lib/utils';
 import { Loader2, Info, Activity } from 'lucide-react';
 import { PlayerControls } from './player-controls';
 import { QualityOption } from '@/lib/api';
-import { useDashSync, useDashPlayer, useAudioNormalization, useHlsPlayer, useShakaPlayer, HlsQualityLevel } from './player/hooks';
-import { STREAM_ENGINE } from '@/lib/constants';
+import { useAudioNormalization, useHlsPlayer, useShakaPlayer, HlsQualityLevel } from './player/hooks';
 
 interface CustomPlayerProps {
     url: string | { src: string; type: string };
@@ -76,17 +75,12 @@ export function CustomPlayer({
 }: CustomPlayerProps) {
     // === REFS ===
     const videoRef = useRef<HTMLVideoElement>(null);
-    const audioRef = useRef<HTMLAudioElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const isAutoPlayingRef = useRef(false);
 
-    // Determine playback mode.
-    // MSE plays adaptive streams through one media element via a manifest;
-    // the legacy path drives separate video and audio elements and corrects
-    // the drift between them, so only one of the two can be active.
-    const isAdaptive = streamType === 'dash' && !!videoUrl && !!audioUrl;
-    const isMseMode = isAdaptive && STREAM_ENGINE === 'mse' && !!manifestUrl;
-    const isDashMode = isAdaptive && !isMseMode;
+    // Adaptive streams play through one media element, fed by the generated
+    // manifest, so the browser muxes audio and video against a single clock.
+    const isMseMode = streamType === 'dash' && !!manifestUrl;
     const src = typeof url === 'string' ? url : url.src;
 
     // === UI STATE ===
@@ -128,52 +122,6 @@ export function CustomPlayer({
         if (savedGain !== null) setNormalizationGain(parseFloat(savedGain));
     }, []);
 
-    // === DASH SYNC HOOK ===
-    const dashSync = useDashSync({
-        videoRef,
-        audioRef,
-        enabled: isDashMode,
-        initialVolume: volume,
-        initialMuted: isMuted,
-        onPlayingChange: (playing) => {
-            if (playing) onPlay?.();
-            else onPause?.();
-        },
-        onTimeUpdate: (time, dur) => {
-            setCurrentTime(time);
-            setDuration(dur);
-            onTimeUpdate?.(time, dashSync.isPlaying);
-        },
-        onError: setError,
-    });
-
-    // === DASH PLAYER HOOK (initialization & quality management) ===
-    const dashPlayer = useDashPlayer({
-        videoRef,
-        audioRef,
-        videoUrl: videoUrl || '',
-        audioUrl: audioUrl || '',
-        enabled: isDashMode,
-        autoPlay,
-        initialTime,
-        isLive,
-        initialVolume: volume,
-        initialMuted: isMuted,
-        availableQualities,
-        onError: setError,
-        onQualityChangeNotify,
-        onReady: () => {
-            // Trigger autoplay through dashSync after both streams are ready
-            if (autoPlay) {
-                isAutoPlayingRef.current = true;
-                dashSync.play()
-                    .finally(() => {
-                        setTimeout(() => { isAutoPlayingRef.current = false; }, 1000);
-                    });
-            }
-        },
-    });
-
     // === HLS PLAYER HOOK ===
     const [hlsLoading, setHlsLoading] = useState(true);
     const [hlsQualities, setHlsQualities] = useState<HlsQualityLevel[]>([]);
@@ -181,9 +129,9 @@ export function CustomPlayer({
 
     const hlsPlayer = useHlsPlayer({
         videoRef,
-        // HLS only handles sources the other two engines do not.
-        src: isDashMode || isMseMode ? '' : src,
-        enabled: !isDashMode && !isMseMode,
+        // HLS handles the sources MSE does not.
+        src: isMseMode ? '' : src,
+        enabled: !isMseMode,
         autoPlay,
         initialTime,
         isLive,
@@ -207,47 +155,37 @@ export function CustomPlayer({
     });
 
     // Derive loading/qualities/currentQuality from the active engine
-    const isLoading = isDashMode
-        ? dashPlayer.isLoading
-        : isMseMode ? shakaPlayer.isLoading : hlsLoading;
-    const qualities = isDashMode
-        ? dashPlayer.qualities
-        : isMseMode ? shakaPlayer.qualities : hlsQualities;
-    const currentQuality = isDashMode
-        ? dashPlayer.currentQuality
-        : isMseMode ? shakaPlayer.currentQuality : hlsCurrentQuality;
+    const isLoading = isMseMode ? shakaPlayer.isLoading : hlsLoading;
+    const qualities = isMseMode ? shakaPlayer.qualities : hlsQualities;
+    const currentQuality = isMseMode ? shakaPlayer.currentQuality : hlsCurrentQuality;
 
     // === AUDIO NORMALIZATION HOOK ===
-    // Only the legacy path has a separate audio element to tap; MSE and HLS
-    // both carry audio on the video element.
+    // Both engines carry audio on the video element.
     const normalization = useAudioNormalization({
-        sourceElement: isDashMode ? audioRef.current : videoRef.current,
+        sourceElement: videoRef.current,
         enabled: isNormalizationEnabled,
         gain: normalizationGain,
     });
 
-    // Derive buffering state from the active engine
-    const isBuffering = isDashMode
-        ? dashSync.isBuffering
-        : isMseMode ? shakaPlayer.isBuffering : hlsPlayer.isBuffering;
-    const isPlaying = isDashMode ? dashSync.isPlaying : !videoRef.current?.paused;
+    const isBuffering = isMseMode ? shakaPlayer.isBuffering : hlsPlayer.isBuffering;
+    const isPlaying = !videoRef.current?.paused;
 
     // === APPLY INITIAL VOLUME (non-DASH mode) ===
     // This runs once on mount and when switching modes to sync persisted settings
     useEffect(() => {
         const video = videoRef.current;
-        if (!video || isDashMode) return;
+        if (!video) return;
 
         // Apply saved volume and muted state to video element
         video.volume = volume;
         video.muted = isMuted;
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isDashMode]); // Only on mount/mode change, not on every volume change
+    }, []); // Only on mount, not on every volume change
 
     // === VIDEO EVENT HANDLERS (non-DASH mode) ===
     useEffect(() => {
         const video = videoRef.current;
-        if (!video || isDashMode) return;
+        if (!video) return;
 
         const handleVideoPlay = () => {
             if (!isAutoPlayingRef.current) onPlay?.();
@@ -283,30 +221,28 @@ export function CustomPlayer({
             video.removeEventListener('ended', handleVideoEnded);
             video.removeEventListener('timeupdate', handleVideoTimeUpdate);
         };
-    }, [isDashMode, isLive, onPlay, onPause, onSeeked, onEnd, onTimeUpdate]);
+    }, [isLive, onPlay, onPause, onSeeked, onEnd, onTimeUpdate]);
 
     // === EXPOSE PLAYER API ===
     useEffect(() => {
         if (playerRef) {
             playerRef.current = {
-                play: () => isDashMode ? dashSync.play() : videoRef.current?.play(),
-                pause: () => isLive ? undefined : (isDashMode ? dashSync.pause() : videoRef.current?.pause()),
+                play: () => videoRef.current?.play(),
+                pause: () => isLive ? undefined : videoRef.current?.pause(),
                 currentTime: (time?: number) => {
-                    if (time !== undefined) {
-                        if (isDashMode) dashSync.seek(time);
-                        else if (videoRef.current) videoRef.current.currentTime = time;
+                    if (time !== undefined && videoRef.current) {
+                        videoRef.current.currentTime = time;
                     }
                     return videoRef.current?.currentTime || 0;
                 },
                 getDuration: () => videoRef.current?.duration || 0,
                 setVolume: (val: number) => {
-                    if (isDashMode) dashSync.setVolume(val);
-                    else if (videoRef.current) videoRef.current.volume = val;
+                    if (videoRef.current) videoRef.current.volume = val;
                 },
                 getVideoElement: () => videoRef.current,
             };
         }
-    }, [playerRef, isLive, isDashMode, dashSync]);
+    }, [playerRef, isLive]);
 
     // === CONTROL VISIBILITY TIMEOUT ===
     useEffect(() => {
@@ -351,26 +287,19 @@ export function CustomPlayer({
     const handlePlayToggle = useCallback(() => {
         if (isLive && isPlaying) return; // Prevent pausing live
 
-        if (isDashMode) {
-            if (isPlaying) dashSync.pause();
-            else dashSync.play();
-        } else {
-            if (isPlaying) videoRef.current?.pause();
-            else videoRef.current?.play();
-        }
-    }, [isDashMode, isPlaying, isLive, dashSync]);
+        if (isPlaying) videoRef.current?.pause();
+        else videoRef.current?.play();
+    }, [isPlaying, isLive]);
 
     const handleMuteToggle = useCallback(() => {
         const newMuted = !isMuted;
         setIsMuted(newMuted);
         localStorage.setItem('w2g-player-muted', String(newMuted));
 
-        if (isDashMode) {
-            dashSync.setMuted(newMuted);
-        } else if (videoRef.current) {
+        if (videoRef.current) {
             videoRef.current.muted = newMuted;
         }
-    }, [isDashMode, isMuted, dashSync]);
+    }, [isMuted]);
 
     const handleVolumeChange = useCallback((val: number) => {
         setVolume(val);
@@ -381,32 +310,25 @@ export function CustomPlayer({
             localStorage.setItem('w2g-player-muted', 'false');
         }
 
-        if (isDashMode) {
-            dashSync.setVolume(val);
-            if (val > 0) dashSync.setMuted(false);
-        } else if (videoRef.current) {
+        if (videoRef.current) {
             videoRef.current.volume = val;
             if (val > 0) videoRef.current.muted = false;
         }
-    }, [isDashMode, isMuted, dashSync]);
+    }, [isMuted]);
 
     const handleSeek = useCallback((time: number) => {
-        if (isDashMode) {
-            dashSync.seek(time);
-        } else if (videoRef.current) {
+        if (videoRef.current) {
             videoRef.current.currentTime = time;
         }
-    }, [isDashMode, dashSync]);
+    }, []);
 
     const handleQualityChange = useCallback((index: number) => {
-        if (isDashMode) {
-            dashPlayer.setQuality(index);
-        } else if (isMseMode) {
+        if (isMseMode) {
             shakaPlayer.setQuality(index);
         } else {
             hlsPlayer.setLevel(index);
         }
-    }, [isDashMode, isMseMode, dashPlayer, shakaPlayer, hlsPlayer]);
+    }, [isMseMode, shakaPlayer, hlsPlayer]);
 
     const toggleNormalization = useCallback(() => {
         const newVal = !isNormalizationEnabled;
@@ -436,23 +358,12 @@ export function CustomPlayer({
                 poster={poster}
                 className="w-full h-full object-contain"
                 playsInline
-                data-stream-type={isDashMode ? 'dash' : isMseMode ? 'mse' : 'hls'}
+                data-stream-type={isMseMode ? 'mse' : 'hls'}
                 onClick={() => {
                     if (isLive) return;
                     handlePlayToggle();
                 }}
             />
-
-            {/* Audio element, only used by the legacy two-element path.
-                MSE and HLS carry audio on the video element itself. */}
-            {isDashMode && (
-                <audio
-                    ref={audioRef}
-                    className="absolute w-1 h-1 opacity-0 pointer-events-none"
-                    preload="auto"
-                    playsInline
-                />
-            )}
 
             {/* Loading Overlay */}
             {isLoading && (
@@ -489,51 +400,37 @@ export function CustomPlayer({
                         <span className="font-bold text-white uppercase tracking-widest flex items-center gap-1.5">
                             <Activity className="w-3 h-3" /> Stats
                         </span>
-                        <span className="text-zinc-500 uppercase">{isDashMode ? 'DASH' : 'HLS'}</span>
+                        <span className="text-zinc-500 uppercase">{isMseMode ? 'DASH' : 'HLS'}</span>
                     </div>
                     <div className="space-y-1.5">
-                        {isDashMode ? (
+                        {isMseMode ? (
                             <>
                                 <div className="flex justify-between">
                                     <span className="text-zinc-500">Mode</span>
-                                    <span className="text-right text-purple-400">Separate V+A</span>
+                                    <span className="text-right text-purple-400">MSE (single element)</span>
                                 </div>
                                 <div className="flex justify-between">
                                     <span className="text-zinc-500">Quality</span>
                                     <span className="text-right text-zinc-300">
-                                        {availableQualities?.[currentQuality]?.height || '?'}p
+                                        {qualities.find((q) => q.index === currentQuality)?.height ?? 'auto'}
                                     </span>
                                 </div>
                                 <div className="flex justify-between">
-                                    <span className="text-zinc-500">Video Buffer</span>
-                                    <span className="text-right text-emerald-400">
-                                        {dashSync.getVideoBufferHealth().toFixed(1)}s
+                                    <span className="text-zinc-500">Bandwidth</span>
+                                    <span className="text-right text-zinc-300">
+                                        {(shakaPlayer.stats.bandwidth / 1000000).toFixed(2)} Mbps
                                     </span>
                                 </div>
                                 <div className="flex justify-between">
-                                    <span className="text-zinc-500">Audio Buffer</span>
-                                    <span className="text-right text-emerald-400">
-                                        {dashSync.getAudioBufferHealth().toFixed(1)}s
+                                    <span className="text-zinc-500">Video</span>
+                                    <span className="text-right text-zinc-300 truncate pl-4">
+                                        {shakaPlayer.stats.videoCodec || 'unknown'}
                                     </span>
                                 </div>
                                 <div className="flex justify-between">
-                                    <span className="text-zinc-500">A/V Sync</span>
-                                    <span className={cn(
-                                        "text-right",
-                                        Math.abs(dashSync.lastDrift) < 0.05 ? "text-emerald-400" :
-                                            Math.abs(dashSync.lastDrift) < 0.2 ? "text-yellow-400" : "text-red-400"
-                                    )}>
-                                        {dashSync.lastDrift.toFixed(3)}s
-                                    </span>
-                                </div>
-                                <div className="flex justify-between">
-                                    <span className="text-zinc-500">Sync Health</span>
-                                    <span className={cn(
-                                        "text-right",
-                                        dashSync.syncHealth === 'good' ? "text-emerald-400" :
-                                            dashSync.syncHealth === 'recovering' ? "text-yellow-400" : "text-red-400"
-                                    )}>
-                                        {dashSync.syncHealth}
+                                    <span className="text-zinc-500">Audio</span>
+                                    <span className="text-right text-zinc-300 truncate pl-4">
+                                        {shakaPlayer.stats.audioCodec || 'unknown'}
                                     </span>
                                 </div>
                             </>
@@ -572,8 +469,8 @@ export function CustomPlayer({
                 isPlaying={isPlaying}
                 isMuted={isMuted}
                 volume={volume}
-                currentTime={isDashMode ? dashSync.currentTime : currentTime}
-                duration={isDashMode ? dashSync.duration : duration}
+                currentTime={currentTime}
+                duration={duration}
                 liveLatency={isLive ? liveLatency : undefined}
                 showSettings={showSettings}
                 showStats={showStats}
