@@ -91,9 +91,35 @@ interface ShakaBufferingEvent {
     buffering: boolean;
 }
 
-interface ShakaErrorEvent {
-    detail?: { code?: number };
+interface ShakaErrorDetail {
     code?: number;
+    category?: number;
+    severity?: number;
+    data?: unknown[];
+}
+
+interface ShakaErrorEvent {
+    detail?: ShakaErrorDetail;
+    code?: number;
+}
+
+/**
+ * Shaka errors carry their meaning in numeric code/category/data fields.
+ * The object itself stringifies to something useless once minified, so
+ * those fields are read out explicitly — otherwise a production report
+ * says only "Could not load manifest eA".
+ */
+function describeShakaError(error: unknown): string {
+    const detail = error as ShakaErrorDetail | undefined;
+    const parts = [
+        `code=${detail?.code ?? 'unknown'}`,
+        `category=${detail?.category ?? 'unknown'}`,
+    ];
+    if (Array.isArray(detail?.data) && detail.data.length > 0) {
+        // data usually holds the offending URL and HTTP status.
+        parts.push(`data=${detail.data.map((d) => String(d)).join(' | ').slice(0, 300)}`);
+    }
+    return parts.join(' ');
 }
 
 interface ShakaPlayerInstance {
@@ -154,12 +180,11 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
         const onErrorEvent = (event: Event) => {
             const shakaEvent = event as Event & ShakaErrorEvent;
             const detail = shakaEvent.detail ?? shakaEvent;
-            const code = detail?.code;
-            console.error('[ShakaPlayer] Playback error', detail);
+            console.error('[ShakaPlayer] Playback error:', describeShakaError(detail));
             if (cancelled) return;
             setLoading(false);
             callbackRefs.current.onError?.(
-                `Playback failed (code ${code ?? 'unknown'})`
+                `Playback failed (${describeShakaError(detail)})`
             );
         };
 
@@ -239,9 +264,10 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
                 }
             } catch (error: unknown) {
                 if (cancelled) return;
-                console.error('[ShakaPlayer] Could not load manifest', error);
+                const described = describeShakaError(error);
+                console.error('[ShakaPlayer] Could not load manifest:', described);
                 setLoading(false);
-                callbackRefs.current.onError?.('The video could not be loaded');
+                callbackRefs.current.onError?.(`The video could not be loaded (${described})`);
             }
         };
 
