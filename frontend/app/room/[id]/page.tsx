@@ -104,6 +104,13 @@ export default function RoomPage() {
     // "Nothing playing yet" text show through it.
     const isResolving = loading || loadingQueueIndex !== null;
 
+    // The WebSocket handler is created once, so reading videoData from its
+    // closure always saw the value from mount. Every `sync` therefore looked
+    // like a new video and triggered a re-resolve, which replaced the stream
+    // URLs and remounted the player: a rebuffer loop on every reconnect.
+    const videoDataRef = useRef<ResolveResponse | null>(null);
+    useEffect(() => { videoDataRef.current = videoData; }, [videoData]);
+
     // Layout resizing
     const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
     const isResizing = useRef(false);
@@ -363,9 +370,10 @@ export default function RoomPage() {
                 // On sync (initial load or reconnect), set video data and re-resolve for fresh DASH URLs
                 if (payload.video_data) {
                     const syncVideoData = payload.video_data;
-                    const isSameVideo = videoData?.original_url === syncVideoData.original_url;
+                    const current = videoDataRef.current;
+                    const isSameVideo = current?.original_url === syncVideoData.original_url;
 
-                    if (!videoData || !isSameVideo) {
+                    if (!current || !isSameVideo) {
                         // New video or first load: Re-resolve for fresh stream URLs
                         if (syncVideoData.original_url) {
                             console.log('[Room] Sync: Re-resolving video for fresh stream URLs...');
@@ -715,7 +723,13 @@ export default function RoomPage() {
                         {videoData ? (
                             <ErrorBoundary>
                                 <CustomPlayer
-                                    key={`${videoData.stream_url}-${useProxy}-${videoData.stream_type}`}
+                                    // Keyed by the video's identity, not by its
+                                    // signed stream URL. Those URLs rotate on
+                                    // every re-resolve, and keying on them
+                                    // remounted the player — reloading the
+                                    // manifest and rebuffering from zero — each
+                                    // time the room refreshed them.
+                                    key={`${videoData.original_url}-${useProxy}-${videoData.stream_type}`}
                                     url={getFinalVideoUrl()}
                                     isLive={videoData.is_live}
                                     poster={videoData.thumbnail}
