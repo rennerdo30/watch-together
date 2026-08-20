@@ -128,7 +128,7 @@ class PrefetchSession:
             if url in self.prefetched:
                 continue
 
-            cache_key = get_segment_cache_key(url, 0)
+            cache_key = get_segment_cache_key(url, 0, None)
 
             # Check if already in memory cache
             if await memory_cache.get(cache_key):
@@ -154,7 +154,8 @@ class PrefetchSession:
                         cache_key,
                         resp.content,
                         content_type,
-                        is_audio=self.is_audio
+                        is_audio=self.is_audio,
+                        content_range=resp.headers.get("content-range"),
                     )
                     self.prefetched.add(url)
                     logger.info(f"PREFETCH OK: segment {idx} ({len(resp.content)} bytes)")
@@ -225,9 +226,11 @@ async def prefetch_initial_segments(
             finally:
                 await resp.aclose()
             if resp.status_code in (200, 206):
-                cache_key = get_segment_cache_key(url, start)
+                cache_key = get_segment_cache_key(url, start, start + length - 1)
                 content_type = resp.headers.get("content-type", "video/mp4")
-                await memory_cache.put(cache_key, resp.content, content_type, is_audio=is_audio)
+                await memory_cache.put(cache_key, resp.content, content_type,
+                                       is_audio=is_audio,
+                                       content_range=resp.headers.get("content-range"))
                 logger.info(f"Initial prefetch OK: {len(resp.content)} bytes from {url[:60]}...")
 
                 # Mark content as active
