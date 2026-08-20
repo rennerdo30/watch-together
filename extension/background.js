@@ -35,64 +35,10 @@ const MIN_SYNC_INTERVAL_MS = 5000; // 5 seconds between syncs
 const STREAM_MAX_AGE_MS = 60 * 60 * 1000;
 
 
-/**
- * Identifier for the dynamically registered detection script.
- *
- * A Watch Together instance is self-hosted, so its origin is not known when
- * the extension is packaged and cannot be listed in the manifest. The
- * detection script is therefore registered at runtime for exactly the
- * origins the user has granted, instead of asking for access to every site.
- */
-const INSTANCE_SCRIPT_ID = 'wt-instance-detector';
-
 /** Turn any instance URL into a match pattern for its origin. */
 function originPattern(instanceUrl) {
     const { origin } = new URL(instanceUrl);
     return `${origin}/*`;
-}
-
-/**
- * Register the detection content script for every granted instance origin.
- *
- * Dynamic registrations do not survive a browser restart or an update, so
- * this runs on startup and after each grant.
- */
-async function refreshInstanceScript() {
-    const { instanceOrigins = [] } = await chrome.storage.local.get(['instanceOrigins']);
-
-    // Keep only origins the user has actually granted; a permission can be
-    // revoked from the browser's own settings without telling the extension.
-    const granted = [];
-    for (const origin of instanceOrigins) {
-        if (await chrome.permissions.contains({ origins: [origin] })) {
-            granted.push(origin);
-        }
-    }
-    if (granted.length !== instanceOrigins.length) {
-        await chrome.storage.local.set({ instanceOrigins: granted });
-    }
-
-    try {
-        const existing = await chrome.scripting.getRegisteredContentScripts({
-            ids: [INSTANCE_SCRIPT_ID],
-        });
-        if (existing.length > 0) {
-            await chrome.scripting.unregisterContentScripts({ ids: [INSTANCE_SCRIPT_ID] });
-        }
-    } catch {
-        // Nothing registered yet.
-    }
-
-    if (granted.length === 0) return;
-
-    await chrome.scripting.registerContentScripts([{
-        id: INSTANCE_SCRIPT_ID,
-        matches: granted,
-        js: ['content.js'],
-        runAt: 'document_end',
-        persistAcrossSessions: true,
-    }]);
-    console.log('[WT Sync] Detection script registered for:', granted.join(', '));
 }
 
 /**
@@ -154,7 +100,6 @@ async function connectInstance(instanceUrl) {
         await chrome.storage.local.set({ instanceOrigins });
     }
     await chrome.storage.local.set({ backendUrl: origin });
-    await refreshInstanceScript();
 
     let credentials;
     try {
@@ -192,14 +137,36 @@ chrome.runtime.onInstalled.addListener(async () => {
     // Set up auto-sync alarm
     setupAutoSync();
 
-    // Dynamic registrations are dropped on update, so restore them.
-    refreshInstanceScript().catch(err =>
-        console.warn('[WT Sync] Could not register detection script:', err));
 });
 
-chrome.runtime.onStartup.addListener(() => {
-    refreshInstanceScript().catch(err =>
-        console.warn('[WT Sync] Could not register detection script:', err));
+/**
+ * Finish connecting as soon as a host permission is granted.
+ *
+ * Chrome tears down the popup when the optional-permission prompt opens,
+ * so any code after `chrome.permissions.request()` in the popup may never
+ * run — the permission is granted and nothing else happens. Completing the
+ * work here instead makes it independent of the popup's lifetime.
+ */
+chrome.permissions.onAdded.addListener((permissions) => {
+    const origins = permissions.origins || [];
+    if (origins.length === 0) return;
+
+    (async () => {
+        for (const pattern of origins) {
+            // Patterns look like https://host/*; recover the origin.
+            const origin = pattern.replace(/\/\*$/, '');
+            try {
+                const result = await connectInstance(origin);
+                if (result.success) {
+                    console.log('[WT Sync] Connected to', origin, 'as', result.userEmail);
+                } else {
+                    console.warn('[WT Sync] Could not finish connecting to', origin, '-', result.error);
+                }
+            } catch (err) {
+                console.warn('[WT Sync] Error connecting to', origin, err);
+            }
+        }
+    })();
 });
 
 /**
@@ -266,11 +233,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             getStatus().then(status => sendResponse(status));
             return true;
 
-        case 'TOKEN_DETECTED':
-            // Include backendUrl from content script
-            handleTokenDetected(message.token, message.userEmail, message.backendUrl)
-                .then(result => sendResponse(result));
-            return true;
 
         case 'CONNECT_INSTANCE':
             connectInstance(message.instanceUrl).then(result => sendResponse(result));
@@ -305,24 +267,6 @@ async function getInstanceState() {
     const { instanceOrigins = [], backendUrl = null, token = null } =
         await chrome.storage.local.get(['instanceOrigins', 'backendUrl', 'token']);
     return { instanceOrigins, backendUrl, hasToken: Boolean(token) };
-}
-
-/**
- * Handle token detected from content script
- */
-async function handleTokenDetected(token, userEmail, backendUrl) {
-    console.log('[WT Sync] Token detected for user:', userEmail, 'backend:', backendUrl);
-
-    try {
-        await chrome.storage.local.set({ token, userEmail, backendUrl });
-    } catch (err) {
-        console.error('[WT Sync] Failed to save token:', err);
-        return { success: false, error: 'Failed to save token to storage' };
-    }
-
-    // Try an initial sync
-    const result = await syncCookies();
-    return { success: true, syncResult: result };
 }
 
 /**
@@ -440,7 +384,26 @@ async function syncCookies() {
     console.log('[WT Sync] Starting cookie sync...');
 
     try {
-        const local = await chrome.storage.local.get(['token', 'backendUrl']);
+        let local = await chrome.storage.local.get(['token', 'backendUrl']);
+
+        // A token can be missing because it was never fetched, or because it
+        // was rotated on the server. If the instance is still granted, ask it
+        // for a fresh one rather than failing with "No token configured".
+        if (!local.token && local.backendUrl) {
+            try {
+                if (await chrome.permissions.contains({ origins: [originPattern(local.backendUrl)] })) {
+                    const credentials = await fetchInstanceToken(local.backendUrl);
+                    await chrome.storage.local.set({
+                        token: credentials.token,
+                        userEmail: credentials.userEmail,
+                    });
+                    local = await chrome.storage.local.get(['token', 'backendUrl']);
+                    console.log('[WT Sync] Recovered a token for', local.backendUrl);
+                }
+            } catch (err) {
+                console.warn('[WT Sync] Could not recover a token:', err);
+            }
+        }
         const sync = await chrome.storage.sync.get(['domains']);
         const storage = { ...sync, ...local };
 
