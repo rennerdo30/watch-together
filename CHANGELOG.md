@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [1.1.0] - 2026-08-20
 
 ### Security
 
@@ -19,7 +19,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **SSRF Closed**: removed the trusted-CDN allowlist that skipped address validation for
   any subdomain of an allowlisted domain; redirects are now followed by the proxy with
   every hop re-validated; the validated IP is pinned for the connection so DNS cannot
-  rebind between check and fetch.
+  rebind between check and fetch. An adversarial pass then closed four special-use
+  ranges that carry no restrictive flag from the `ipaddress` module — RFC 6598 carrier
+  NAT space, the deprecated 6to4 relay range, deprecated IPv6 site-local, and the
+  documentation range — and made IPv4-in-IPv6 unwrapping explicit.
 - **Per-User Cookies**: the single shared cookie jar is gone. Cookies are loaded per user
   and attached per request, and responses fetched with cookies are cached under a key
   that includes the user's identity.
