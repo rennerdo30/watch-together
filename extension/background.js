@@ -96,7 +96,39 @@ async function refreshInstanceScript() {
 }
 
 /**
- * Grant access to an instance and start detecting tokens on it.
+ * Fetch this user's API token straight from an instance.
+ *
+ * Once the origin is granted, the extension can ask the backend directly
+ * and the browser attaches the session cookies — including the Cloudflare
+ * Access cookie. That replaces waiting for the page to advertise a token
+ * in a meta tag, which only worked if the content script happened to run
+ * after the page had fetched it.
+ */
+async function fetchInstanceToken(origin) {
+    const meResponse = await fetch(`${origin}/api/me`, { credentials: 'include' });
+    if (!meResponse.ok) {
+        throw new Error(`Instance returned ${meResponse.status} for /api/me`);
+    }
+    const me = await meResponse.json();
+    if (!me.authenticated || !me.email) {
+        throw new Error('Not signed in to this instance — open it in a tab and log in first');
+    }
+
+    const tokenResponse = await fetch(`${origin}/api/token`, { credentials: 'include' });
+    if (!tokenResponse.ok) {
+        throw new Error(`Instance returned ${tokenResponse.status} for /api/token`);
+    }
+    const body = await tokenResponse.json();
+    const token = body?.token?.id;
+    if (!token) {
+        throw new Error('Instance did not return a token');
+    }
+
+    return { token, userEmail: me.email };
+}
+
+/**
+ * Grant access to an instance and start syncing to it.
  *
  * Called from the popup ("Connect this site") and the options page. The
  * permission prompt must be triggered from a user gesture, so the caller
@@ -114,27 +146,32 @@ async function connectInstance(instanceUrl) {
         return { success: false, error: 'Permission for this site was not granted' };
     }
 
+    const origin = new URL(instanceUrl).origin;
+
     const { instanceOrigins = [] } = await chrome.storage.local.get(['instanceOrigins']);
     if (!instanceOrigins.includes(pattern)) {
         instanceOrigins.push(pattern);
         await chrome.storage.local.set({ instanceOrigins });
     }
-    await chrome.storage.local.set({ backendUrl: new URL(instanceUrl).origin });
-
+    await chrome.storage.local.set({ backendUrl: origin });
     await refreshInstanceScript();
 
-    // The page is already open, so pick the token up now rather than waiting
-    // for the next navigation.
+    let credentials;
     try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (tab?.id && tab.url && tab.url.startsWith(new URL(instanceUrl).origin)) {
-            await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
-        }
+        credentials = await fetchInstanceToken(origin);
     } catch (err) {
-        console.warn('[WT Sync] Could not inject into the open tab:', err);
+        console.warn('[WT Sync] Could not fetch a token:', err);
+        return { success: false, error: err.message };
     }
 
-    return { success: true, backendUrl: new URL(instanceUrl).origin };
+    await chrome.storage.local.set({
+        token: credentials.token,
+        userEmail: credentials.userEmail,
+        backendUrl: origin,
+    });
+
+    const syncResult = await syncCookies();
+    return { success: true, backendUrl: origin, userEmail: credentials.userEmail, syncResult };
 }
 
 /**
@@ -265,9 +302,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
  * Report which instances are connected, for the popup and options page.
  */
 async function getInstanceState() {
-    const { instanceOrigins = [], backendUrl = null } = await chrome.storage.local.get(
-        ['instanceOrigins', 'backendUrl']);
-    return { instanceOrigins, backendUrl };
+    const { instanceOrigins = [], backendUrl = null, token = null } =
+        await chrome.storage.local.get(['instanceOrigins', 'backendUrl', 'token']);
+    return { instanceOrigins, backendUrl, hasToken: Boolean(token) };
 }
 
 /**
