@@ -39,6 +39,13 @@ COPY . .
 COPY start.sh .
 RUN chmod +x start.sh
 
+# Create the data directory inside the image, owned by the app user.
+# `data/` is in .dockerignore, so without this the directory does not exist
+# at build time — and a named volume mounted onto a path the image lacks is
+# created root-owned, which the non-root process below cannot write to.
+# Startup then dies creating its cache/cookie directories.
+RUN mkdir -p /app/data
+
 # Fix ownership
 RUN chown -R appuser:appgroup /app
 

@@ -1,0 +1,125 @@
+# Production stack for Watch Together — fronted by a Cloudflare Tunnel.
+#
+# Lives at /opt/watch-together/ on the deployment host. Nothing is published
+# to the host: cloudflared handles ingress and proxies to nginx:80 over the
+# internal bridge, and nginx routes to the frontend and backend.
+#
+# Differences from the repo-root compose, which is for local development:
+#   - No source bind mounts. Both images contain their own code, so a deploy
+#     is a rebuild rather than a file copy, and the running container cannot
+#     be changed by editing files on the host.
+#   - Backend data lives in a named volume, so the SQLite database, cookie
+#     files and segment cache survive rebuilds.
+#   - Nothing binds a host port.
+
+name: watch-together
+
+services:
+  backend:
+    build:
+      context: ../backend
+    image: watch-together/backend:latest
+    restart: unless-stopped
+    depends_on:
+      - bgutil-provider
+    environment:
+      BGUTIL_YTDLP_POT_PROVIDER_URL: http://bgutil-provider:4416
+      # Never enable in production: it lets ?user= set any identity.
+      DEVELOPMENT_MODE: "false"
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://${WT_HOST:?required}}
+      # Verify Cloudflare Access assertions rather than trusting the plain
+      # identity header, which anyone reaching the origin directly can send.
+      # Setting both also turns REQUIRE_AUTHENTICATION on by default.
+      CF_ACCESS_TEAM_DOMAIN: ${CF_ACCESS_TEAM_DOMAIN:-}
+      CF_ACCESS_AUD: ${CF_ACCESS_AUD:-}
+      REQUIRE_AUTHENTICATION: ${REQUIRE_AUTHENTICATION:-}
+      # Room state, caches and the rate limiter are in process memory, so a
+      # second worker would split rooms. Startup refuses anything above 1.
+      WEB_CONCURRENCY: "1"
+    volumes:
+      # SQLite database, per-user cookie files, and the segment cache.
+      - backend_data:/app/data
+    networks: [ watch_net ]
+    expose: [ "8000" ]
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+
+  bgutil-provider:
+    # Solves YouTube BotGuard challenges so yt-dlp can obtain PO tokens.
+    image: brainicism/bgutil-ytdlp-pot-provider:0.7.2
+    restart: unless-stopped
+    networks: [ watch_net ]
+    expose: [ "4416" ]
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+  frontend:
+    build:
+      context: ../frontend
+      args:
+        # Next.js inlines NEXT_PUBLIC_* values when the app compiles, so the
+        # playback engine is a build-time choice, not a runtime one.
+        # Changing it requires rebuilding this image.
+        NEXT_PUBLIC_STREAM_ENGINE: ${STREAM_ENGINE:-legacy}
+    image: watch-together/frontend:latest
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      # Server-side rendering reaches the backend over the internal network.
+      BACKEND_URL: http://backend:8000
+    networks: [ watch_net ]
+    expose: [ "3000" ]
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      - frontend
+      - backend
+    volumes:
+      - ../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      watch_net:
+        aliases: [ nginx, proxy ]
+    expose: [ "80" ]
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    depends_on:
+      - nginx
+    # http2 rather than the default QUIC (UDP/443), which many networks
+    # block. Drop the flag if the host has clean UDP egress.
+    command: tunnel --no-autoupdate --protocol http2 run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARED_TOKEN:?required}
+    networks: [ watch_net ]
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+
+networks:
+  watch_net:
+    name: watch_net
+
+volumes:
+  backend_data:
