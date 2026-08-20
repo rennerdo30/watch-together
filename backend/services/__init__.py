@@ -3,8 +3,9 @@ Services module exports.
 """
 from services.cache import (
     parse_range_header,
-    get_bucket_for_position,
     get_segment_disk_key,
+    stream_identity,
+    measure_cache_size,
     check_disk_space,
     get_current_cache_size,
     cache_cleanup_task,
@@ -17,8 +18,9 @@ from services.resolver import (
 
 __all__ = [
     "parse_range_header",
-    "get_bucket_for_position", 
     "get_segment_disk_key",
+    "stream_identity",
+    "measure_cache_size",
     "check_disk_space",
     "get_current_cache_size",
     "cache_cleanup_task",

@@ -17,10 +17,11 @@ import logging
 import time
 from xml.sax.saxutils import escape, quoteattr
 from typing import Dict, List, Optional, Tuple
-from urllib.parse import quote, urlparse, parse_qs
+from urllib.parse import quote
 
 import httpx
 
+from services.cache import stream_identity
 from services.mp4_index import Mp4Index, parse_index
 from services.upstream import open_upstream_stream, UnsafeUpstreamError
 from core.config import (
@@ -40,39 +41,6 @@ _index_lock = asyncio.Lock()
 
 class ManifestError(Exception):
     """Raised when a manifest cannot be produced."""
-
-
-# Query parameters that identify *which* rendition a URL addresses, as
-# opposed to the signing parameters that rotate on every resolution.
-_STREAM_IDENTITY_PARAMS = ("itag", "clen", "lmt", "mime")
-
-
-def _cache_key(url: str) -> str:
-    """Identity of one rendition, ignoring the parts that rotate.
-
-    Signed CDN URLs carry expiry and token parameters that change between
-    resolutions while addressing the same bytes, so they cannot be part of
-    the key. The path alone is not enough either: every YouTube rendition
-    lives at /videoplayback and is told apart only by its query, so keying
-    on the path made every representation of a video — including the audio
-    one — share a single entry. Each then inherited the first one's byte
-    ranges, and the player found no sidx box where the manifest promised
-    one.
-
-    The host is deliberately excluded: the same rendition served from a
-    different edge is byte-identical, so its ranges still apply.
-    """
-    parsed = urlparse(url)
-    params = parse_qs(parsed.query)
-    identity = [
-        f"{name}={params[name][0]}"
-        for name in _STREAM_IDENTITY_PARAMS
-        if params.get(name)
-    ]
-    if not identity:
-        # Nothing stable to key on. Correctness beats cache hits.
-        return url
-    return f"{parsed.path}?{'&'.join(identity)}"
 
 
 async def _prune_index_cache(now: float) -> None:
@@ -95,7 +63,7 @@ async def probe_index(
     headers: Optional[dict] = None,
 ) -> Optional[Mp4Index]:
     """Find the init and index byte ranges for one representation."""
-    key = _cache_key(url)
+    key = stream_identity(url)
     now = time.time()
 
     async with _index_lock:

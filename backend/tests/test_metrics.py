@@ -467,3 +467,151 @@ class TestDiskCacheServesSegmentsWithoutRefetching:
                    headers={"Range": "bytes=0-99"})
 
         assert len(hits) == 2
+
+
+class TestCacheSurvivesUrlRotation:
+    """Signed CDN URLs rotate; the bytes behind them do not.
+
+    Every resolve returns fresh `expire`/`sig`/`ei` parameters and often a
+    different edge host for the same rendition. Keyed on the raw URL, the
+    whole cache was orphaned each time a room refreshed its stream URLs —
+    which is every few minutes — so a re-watch or a second viewer never got
+    a hit however long entries were kept. Both tiers now key on the
+    rendition's stable identity: itag + clen + lmt + mime.
+    """
+
+    RENDITION = ("?expire=111&ei=X&ip=1.2.3.4&sig=AAA"
+                 "&itag=137&clen=999&lmt=555&mime=video%2Fmp4")
+    ROTATED = ("?expire=999&ei=Y&ip=5.6.7.8&sig=BBB"
+               "&itag=137&clen=999&lmt=555&mime=video%2Fmp4")
+
+    def url(self, host: str, query: str) -> str:
+        return f"https://{host}/videoplayback{query}"
+
+    def test_memory_key_ignores_the_signing_parameters(self):
+        from services.cache import get_segment_cache_key
+
+        original = get_segment_cache_key(
+            self.url("rr3---sn-abc.googlevideo.com", self.RENDITION), 0, 99)
+        rotated = get_segment_cache_key(
+            self.url("rr9---sn-zzz.googlevideo.com", self.ROTATED), 0, 99)
+        assert original == rotated
+
+    def test_disk_key_ignores_the_signing_parameters(self):
+        from services.cache import get_segment_disk_key
+
+        original, _ = get_segment_disk_key(
+            self.url("rr3---sn-abc.googlevideo.com", self.RENDITION), 0, 99)
+        rotated, _ = get_segment_disk_key(
+            self.url("rr9---sn-zzz.googlevideo.com", self.ROTATED), 0, 99)
+        assert original == rotated
+
+    def test_a_different_rendition_still_gets_its_own_entry(self):
+        """Sharing a key across renditions is the failure this must not cause."""
+        from services.cache import get_segment_cache_key
+
+        video = get_segment_cache_key(
+            self.url("cdn", self.RENDITION), 0, 99)
+        audio = get_segment_cache_key(
+            self.url("cdn", "?itag=140&clen=86240992&lmt=777&mime=audio%2Fmp4"), 0, 99)
+        other_quality = get_segment_cache_key(
+            self.url("cdn", self.RENDITION.replace("itag=137", "itag=136")
+                     .replace("clen=999", "clen=555")), 0, 99)
+        assert len({video, audio, other_quality}) == 3
+
+    def test_the_range_still_separates_entries(self):
+        from services.cache import get_segment_disk_key
+
+        url = self.url("cdn", self.RENDITION)
+        narrow, _ = get_segment_disk_key(url, 0, 9)
+        wide, _ = get_segment_disk_key(url, 0, 999)
+        assert narrow != wide
+
+    def test_a_url_without_identity_params_keys_on_itself(self):
+        """A non-YouTube source has nothing stable to key on."""
+        from services.cache import stream_identity
+
+        plain = "https://cdn.example.com/media/video.mp4"
+        assert stream_identity(plain) == plain
+
+
+class TestCacheBudgetDoesNotSilentlyDisableCaching:
+    """Reaching the budget stops all caching until the janitor runs.
+
+    That is the intended backstop, but the budget was 200 MB — smaller
+    than a single viewing session — so caching switched itself off partway
+    through and every later segment went to the CDN. Measured in
+    production: 3392 transfers, 194 cache hits.
+
+    And the budget is consulted on *every* proxied request, which meant
+    stat-ing every file in the cache directory thousands of times a
+    session.
+    """
+
+    def test_budget_is_large_enough_for_a_session(self):
+        from core.config import MAX_CACHE_SIZE_BYTES
+
+        one_gigabyte = 1024 ** 3
+        assert MAX_CACHE_SIZE_BYTES >= one_gigabyte, (
+            "a budget below a gigabyte is reached mid-session, after which "
+            "nothing is cached at all"
+        )
+
+    def test_budget_is_configurable_per_host(self):
+        """Hosts differ; the ceiling must not need a code change."""
+        import importlib
+        import os
+
+        import core.config as config
+
+        os.environ["MAX_CACHE_SIZE_GB"] = "7"
+        try:
+            reloaded = importlib.reload(config)
+            assert reloaded.MAX_CACHE_SIZE_BYTES == 7 * 1024 ** 3
+        finally:
+            del os.environ["MAX_CACHE_SIZE_GB"]
+            importlib.reload(config)
+
+    def test_size_is_not_re_measured_on_every_call(self, tmp_path, monkeypatch):
+        import services.cache as cache_module
+
+        monkeypatch.setattr(cache_module, "CACHE_DIR", str(tmp_path))
+        (tmp_path / "seg_abc_0-99").write_bytes(b"x" * 100)
+        monkeypatch.setattr(cache_module, "_cache_size_measurement", (0, 0.0))
+
+        scans = []
+        real_measure = cache_module.measure_cache_size
+
+        def counted():
+            scans.append(1)
+            return real_measure()
+
+        monkeypatch.setattr(cache_module, "measure_cache_size", counted)
+
+        first = cache_module.get_current_cache_size()
+        for _ in range(20):
+            cache_module.get_current_cache_size()
+
+        assert first == 100
+        assert len(scans) == 1, f"the cache directory was scanned {len(scans)} times"
+
+    def test_a_forced_measurement_always_scans(self, tmp_path, monkeypatch):
+        import services.cache as cache_module
+
+        monkeypatch.setattr(cache_module, "CACHE_DIR", str(tmp_path))
+        monkeypatch.setattr(cache_module, "_cache_size_measurement", (0, 0.0))
+
+        (tmp_path / "seg_abc_0-99").write_bytes(b"x" * 100)
+        assert cache_module.get_current_cache_size(0) == 100
+        (tmp_path / "seg_def_0-99").write_bytes(b"y" * 50)
+        assert cache_module.get_current_cache_size(0) == 150
+
+    def test_metadata_and_partial_files_do_not_count(self, tmp_path, monkeypatch):
+        import services.cache as cache_module
+
+        monkeypatch.setattr(cache_module, "CACHE_DIR", str(tmp_path))
+        (tmp_path / "seg_abc_0-99").write_bytes(b"x" * 100)
+        (tmp_path / "seg_abc_0-99.meta").write_text('{"size": 100}')
+        (tmp_path / "seg_abc_0-99.123.tmp").write_bytes(b"z" * 999)
+
+        assert cache_module.measure_cache_size() == 100

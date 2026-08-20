@@ -213,21 +213,21 @@ class TestIndexCacheKey:
                      "?expire=999&sig=BBB&ei=Y&ip=5.6.7.8&itag=137&clen=999&lmt=555&mime=video%2Fmp4")
 
     def test_video_and_audio_do_not_collide(self):
-        from services.manifest import _cache_key
+        from services.cache import stream_identity as _cache_key
         assert _cache_key(self.VIDEO) != _cache_key(self.AUDIO)
 
     def test_different_video_itags_do_not_collide(self):
-        from services.manifest import _cache_key
+        from services.cache import stream_identity as _cache_key
         other = self.VIDEO.replace("itag=137", "itag=136").replace("clen=999", "clen=555")
         assert _cache_key(self.VIDEO) != _cache_key(other)
 
     def test_rotated_signing_params_still_hit(self):
         """Re-resolving the same rendition must reuse the probed ranges."""
-        from services.manifest import _cache_key
+        from services.cache import stream_identity as _cache_key
         assert _cache_key(self.VIDEO) == _cache_key(self.VIDEO_ROTATED)
 
     def test_url_without_identity_params_keys_on_itself(self):
-        from services.manifest import _cache_key
+        from services.cache import stream_identity as _cache_key
         plain = "https://cdn.example.com/media/video.mp4"
         assert _cache_key(plain) == plain
 

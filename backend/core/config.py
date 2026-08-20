@@ -6,13 +6,22 @@ import os
 # Cache configuration
 CACHE_DIR = "data/cache"
 COOKIES_DIR = "data/cookies"
-MAX_CACHE_SIZE_BYTES = 200 * 1024 * 1024  # 200 MB
-CACHE_TTL_SECONDS = 1800  # 30 minutes
+# Segment cache budget. Once it is reached, nothing new is cached at all
+# until the janitor evicts — so a budget smaller than a viewing session
+# silently turns caching off partway through. An hour of 1080p is a couple
+# of GB; `MIN_DISK_FREE_BYTES` is the real safety floor.
+MAX_CACHE_SIZE_GB = float(os.environ.get("MAX_CACHE_SIZE_GB", "4"))
+MAX_CACHE_SIZE_BYTES = int(MAX_CACHE_SIZE_GB * 1024 * 1024 * 1024)
+# Segment bodies are immutable and keyed on the rendition's stable identity,
+# so an entry stays valid for as long as it is worth keeping. The size cap
+# above is what actually bounds the cache; this only expires cold content.
+CACHE_TTL_SECONDS = 21600  # 6 hours
 MIN_DISK_FREE_BYTES = 500 * 1024 * 1024  # Keep at least 500MB free
 MAX_CACHEABLE_FILE_BYTES = 50 * 1024 * 1024  # Don't cache files larger than 50MB
-
-# Bucket cache configuration for position-aware caching
-BUCKET_SIZE_BYTES = 3 * 1024 * 1024  # 3MB buckets (aligned with typical DASH segment size)
+# How long a measured cache size may be reused. The size is consulted on
+# every proxied request and measuring it means scanning the whole cache
+# directory, which is thousands of files once the cache is warm.
+CACHE_SIZE_MEASURE_TTL_SECONDS = 10
 
 # In-memory cache configuration for hot segments
 MEMORY_CACHE_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB in-memory LRU cache
