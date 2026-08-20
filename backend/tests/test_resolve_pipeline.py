@@ -204,3 +204,63 @@ class TestResolveCachesItsResult:
                               params={"url": url, "user": "a@example.com"})
         assert manifest.status_code == 200
         assert manifest.headers["content-type"].startswith("application/dash+xml")
+
+
+class TestQualityLadder:
+    """A viewer on a slow link needs the low rungs most.
+
+    The candidate list arrives sorted by height descending, and the code took
+    a slice off the front. On a video with several 1080p variants that kept
+    only the largest renditions, so there was no 480p or 360p to fall back to
+    — the quality menu offered nothing below 720p.
+    """
+
+    LADDER = [
+        (1080, {"vcodec": "avc1.640028", "format_id": "137"}),
+        (1080, {"vcodec": "av01.0.08M.08", "format_id": "399"}),
+        (1080, {"vcodec": "vp9", "format_id": "248"}),
+        (720, {"vcodec": "avc1.4d401f", "format_id": "136"}),
+        (720, {"vcodec": "vp9", "format_id": "247"}),
+        (480, {"vcodec": "avc1", "format_id": "135"}),
+        (360, {"vcodec": "avc1", "format_id": "134"}),
+        (240, {"vcodec": "avc1", "format_id": "133"}),
+        (144, {"vcodec": "avc1", "format_id": "160"}),
+    ]
+
+    def heights(self, limit):
+        from services.resolver import _select_quality_ladder
+        return [h for h, _ in _select_quality_ladder(self.LADDER, limit)]
+
+    def test_low_renditions_survive(self):
+        heights = self.heights(10)
+        assert 360 in heights, "no 360p to fall back to"
+        assert min(heights) <= 240
+
+    def test_highest_and_lowest_are_both_kept_when_trimming(self):
+        heights = self.heights(4)
+        assert max(heights) == 1080
+        assert min(heights) == 144
+
+    def test_result_stays_sorted_by_height_descending(self):
+        heights = self.heights(6)
+        assert heights == sorted(heights, reverse=True)
+
+    def test_both_codecs_of_one_height_can_survive(self):
+        """AV1 at the same resolution is far cheaper to stream."""
+        from services.resolver import _select_quality_ladder
+        picked = _select_quality_ladder(self.LADDER, 10)
+        codecs_1080 = {f["vcodec"].split(".")[0] for h, f in picked if h == 1080}
+        assert len(codecs_1080) > 1
+
+    def test_duplicate_height_and_codec_is_not_repeated(self):
+        from services.resolver import _select_quality_ladder
+        duplicated = self.LADDER + [(360, {"vcodec": "avc1", "format_id": "134-dup"})]
+        picked = _select_quality_ladder(duplicated, 10)
+        keys = [(h, f["vcodec"].split(".")[0]) for h, f in picked]
+        assert len(keys) == len(set(keys))
+
+    def test_the_configured_ladder_is_big_enough_for_low_rungs(self):
+        from core.config import QUALITY_LADDER_SIZE, MANIFEST_MAX_VIDEO_REPRESENTATIONS
+        assert QUALITY_LADDER_SIZE >= 8
+        # The manifest must not re-truncate what the ladder deliberately kept.
+        assert MANIFEST_MAX_VIDEO_REPRESENTATIONS >= QUALITY_LADDER_SIZE
