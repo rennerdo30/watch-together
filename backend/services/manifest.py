@@ -156,6 +156,31 @@ def _bandwidth(fmt: dict, fallback: int) -> int:
     return fallback
 
 
+def _codec_family(codec: str) -> str:
+    """The interchangeable-codec group a representation belongs to.
+
+    'avc1.640028' and 'avc1.4d401f' are the same decoder; 'av01...' is not.
+    """
+    return (codec or "").split(".", 1)[0].lower()
+
+
+def _group_by_codec(reps: List[dict], codec_field: str) -> List[Tuple[str, List[dict]]]:
+    """Split representations into one group per codec family.
+
+    A DASH AdaptationSet promises its representations are mutually
+    interchangeable, and a player backs one with a single MSE SourceBuffer
+    created for a single codec. Mixing H.264 and AV1 in one set makes the
+    player append one codec's segments into the other's buffer, which plays
+    for a fraction of a second and then freezes on a stale frame.
+
+    Insertion order is preserved so the caller's quality ordering survives.
+    """
+    groups: Dict[str, List[dict]] = {}
+    for rep in reps:
+        groups.setdefault(_codec_family(rep.get(codec_field)), []).append(rep)
+    return list(groups.items())
+
+
 def build_mpd(
     duration_seconds: float,
     video_reps: List[dict],
@@ -180,13 +205,13 @@ def build_mpd(
         f'  <Period duration="{_duration_attr(duration_seconds)}">',
     ]
 
-    if video_reps:
+    for _family, family_reps in _group_by_codec(video_reps, "vcodec"):
         lines.append(
             '    <AdaptationSet contentType="video" mimeType="video/mp4" '
             'segmentAlignment="true" startWithSAP="1" subsegmentAlignment="true" '
             'subsegmentStartsWithSAP="1">'
         )
-        for rep in video_reps:
+        for rep in family_reps:
             index: Mp4Index = rep["index"]
             attrs = [
                 f'id={quoteattr(str(rep["id"]))}',
@@ -207,13 +232,13 @@ def build_mpd(
             lines.append('      </Representation>')
         lines.append('    </AdaptationSet>')
 
-    if audio_reps:
+    for _family, family_reps in _group_by_codec(audio_reps, "acodec"):
         lines.append(
             '    <AdaptationSet contentType="audio" mimeType="audio/mp4" '
             'segmentAlignment="true" startWithSAP="1" subsegmentAlignment="true" '
             'subsegmentStartsWithSAP="1">'
         )
-        for rep in audio_reps:
+        for rep in family_reps:
             index = rep["index"]
             attrs = [
                 f'id={quoteattr(str(rep["id"]))}',

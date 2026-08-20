@@ -125,5 +125,17 @@ jobs:
 
       - name: Syntax check extension scripts
         run: |
-          node --check extension/background.js
-          node --check extension/content.js
+          # Check whatever scripts exist rather than a fixed list: the set
+          # changes as the extension does, and a stale name here fails the
+          # build for a file that was deliberately removed.
+          found=0
+          while IFS= read -r script; do
+            echo "checking $script"
+            node --check "$script"
+            found=$((found + 1))
+          done < <(find extension -name '*.js' -not -path '*/lib/*' | sort)
+          if [ "$found" -eq 0 ]; then
+            echo "no extension scripts found" >&2
+            exit 1
+          fi
+          echo "checked $found script(s)"
