@@ -49,40 +49,43 @@ async def _ensure_cookie_file(user_email: str) -> Optional[str]:
     return None
 
 
-def _select_quality_ladder(video_only_formats, limit: int):
-    """Pick renditions spanning the quality range, not just the top of it.
+def _select_quality_ladder(video_only_formats, per_codec_limit: int):
+    """Build a complete quality ladder for each codec family.
 
-    The list arrives sorted by height descending, so taking a slice off the
-    front keeps only the largest renditions — on a video with several 1080p
-    variants that leaves no 480p or 360p at all, which is exactly what a
-    viewer on a slow link needs.
+    Two constraints shape this. The list arrives sorted by height
+    descending, so slicing off the front keeps only the largest renditions
+    and leaves a viewer on a slow link nothing to fall back to. And a player
+    commits to a single codec family for the session — mixing them inside one
+    adaptation set is not something MSE can switch across — so a budget
+    spread across codecs leaves holes in whichever one gets chosen.
 
-    One entry per (height, codec family) is kept so both an H.264 and a more
-    efficient AV1 version of the same resolution survive, and the ladder is
-    trimmed from the middle outwards so the lowest and highest rungs are the
-    last things dropped.
+    Spreading ten slots over AV1 and H.264 previously gave AV1 only 2160p and
+    1440p; a player that picked AV1 then had nothing lower to drop to. Each
+    family therefore gets its own ladder, trimmed from the middle outwards so
+    the extremes survive.
     """
-    seen = set()
-    ladder = []
+    families = {}
     for height, fmt in video_only_formats:
-        codec_family = (fmt.get('vcodec') or '').split('.', 1)[0].lower()
-        key = (height, codec_family)
-        if key in seen:
-            continue
-        seen.add(key)
-        ladder.append((height, fmt))
+        family = (fmt.get('vcodec') or '').split('.', 1)[0].lower()
+        rungs = families.setdefault(family, {})
+        # One rendition per height; the list is height-ordered so the first
+        # seen is the preferred one.
+        if height not in rungs:
+            rungs[height] = fmt
 
-    if len(ladder) <= limit:
-        return ladder
+    selected = []
+    for family, rungs in families.items():
+        ladder = [(h, rungs[h]) for h in sorted(rungs, reverse=True)]
+        if len(ladder) > per_codec_limit:
+            kept = [ladder[0], ladder[-1]]
+            middle = ladder[1:-1]
+            if middle and per_codec_limit > 2:
+                step = max(1, round(len(middle) / (per_codec_limit - 2)))
+                kept.extend(middle[::step][: per_codec_limit - 2])
+            ladder = kept
+        selected.extend(ladder)
 
-    # Keep the extremes, then fill inwards with an even spread.
-    kept = [ladder[0], ladder[-1]]
-    middle = ladder[1:-1]
-    if middle and limit > 2:
-        step = max(1, round(len(middle) / (limit - 2)))
-        kept.extend(middle[::step][: limit - 2])
-    # Restore the descending order the caller expects.
-    return sorted(kept, key=lambda item: item[0] or 0, reverse=True)
+    return sorted(selected, key=lambda item: item[0] or 0, reverse=True)
 
 
 def _extract_stream_url(info: dict, prefer_dash: bool = True) -> dict:
