@@ -44,3 +44,6 @@ coverage/
 *.bak
 *.tmp
 *.har
+
+# Deployment target (host address / login) — never committed.
+deploy/target.env
