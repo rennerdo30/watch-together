@@ -171,6 +171,13 @@ else
 	$SSH "set -e; cd ${REMOTE} && ${COMPOSE} up -d --build"
 	green "  ✓ stack up"
 
+	# nginx.conf is a bind mount, so `up -d` sees no change to the service
+	# and leaves the container running with the config it started with. A
+	# restart is the only way an edited config takes effect — without this
+	# the file on disk and the running proxy silently disagree.
+	$SSH "cd ${REMOTE} && ${COMPOSE} restart nginx" >/dev/null
+	green "  ✓ nginx reloaded with the current config"
+
 	bold "[5b/6] Waiting for the backend to answer"
 	backend_ok=0
 	for _ in $(seq 1 30); do
