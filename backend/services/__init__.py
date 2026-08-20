@@ -4,7 +4,7 @@ Services module exports.
 from services.cache import (
     parse_range_header,
     get_bucket_for_position,
-    get_bucket_cache_key,
+    get_segment_disk_key,
     check_disk_space,
     get_current_cache_size,
     cache_cleanup_task,
@@ -18,7 +18,7 @@ from services.resolver import (
 __all__ = [
     "parse_range_header",
     "get_bucket_for_position", 
-    "get_bucket_cache_key",
+    "get_segment_disk_key",
     "check_disk_space",
     "get_current_cache_size",
     "cache_cleanup_task",

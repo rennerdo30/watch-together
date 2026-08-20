@@ -128,6 +128,14 @@ class MemoryCache:
                 return True
         return False
 
+    async def clear(self) -> None:
+        """Drop every entry. Used on shutdown and by tests exercising the
+        disk tier, which only answers what memory no longer holds."""
+        async with self._lock:
+            self._cache.clear()
+            self._audio_keys.clear()
+            self._current_size = 0
+
     def get_stats(self) -> dict:
         """Get cache statistics."""
         total_requests = self._hits + self._misses
@@ -317,21 +325,26 @@ def get_bucket_for_position(byte_pos: int) -> int:
     return byte_pos // BUCKET_SIZE_BYTES
 
 
-def get_bucket_cache_key(url: str, bucket_num: int, identity: str = None) -> Tuple[str, str]:
-    """Get cache key and path for a bucket.
+def get_segment_disk_key(url: str, range_start: int = 0, range_end: int = None,
+                         identity: str = None) -> Tuple[str, str]:
+    """Cache key and path for one exact byte range on disk.
 
-    Uses SHA-256 for better collision resistance and includes full URL in hash.
-    DASH video and audio URLs have different itag parameters so they won't collide.
-    `identity` separates entries fetched with a specific user's cookies
-    from the shared anonymous ones.
+    Keyed by the whole requested range, like the memory cache. It used to be
+    keyed by a position bucket, which could not answer an arbitrary range:
+    a hit streamed from an offset to the end of its bucket, so the body did
+    not match the request and the response had no Content-Range to describe
+    it. Ranged requests had to bypass it entirely, which meant no persistent
+    caching at all for adaptive playback — every request is ranged.
+
+    `identity` separates content fetched with a specific user's cookies from
+    the shared anonymous entries.
     """
-    # Use SHA-256 with 24 char prefix for better collision resistance
     url_hash = hashlib.sha256(url.encode()).hexdigest()[:24]
+    span = f"{range_start}-{'' if range_end is None else range_end}"
+    cache_key = f"seg_{url_hash}_{span}"
     if identity:
         identity_hash = hashlib.sha256(identity.encode()).hexdigest()[:16]
-        cache_key = f"bucket_{url_hash}_{bucket_num}_u{identity_hash}"
-    else:
-        cache_key = f"bucket_{url_hash}_{bucket_num}"
+        cache_key = f"{cache_key}_u{identity_hash}"
     cache_path = os.path.join(CACHE_DIR, cache_key)
     return cache_key, cache_path
 

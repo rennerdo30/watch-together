@@ -37,7 +37,7 @@ from core.security import (
 )
 from core.access_jwt import is_configured as access_is_configured
 from services.cache import (
-    parse_range_header, get_bucket_for_position, get_bucket_cache_key,
+    parse_range_header, get_segment_disk_key,
     check_disk_space, get_current_cache_size,
     cache_cleanup_task,
     memory_cache, get_segment_cache_key, is_audio_url, mark_content_active,
@@ -734,68 +734,69 @@ async def proxy_stream(request: Request, url: str):
                     headers=cached_headers,
                 )
 
-            # The position-bucket cache is only consulted for whole-object
-            # requests. It streams from an offset to the end of its bucket,
-            # which cannot satisfy a specific byte range, and it has no
-            # record of the object's total size to build a Content-Range
-            # from. Adaptive playback is entirely ranged requests, so this
-            # costs nothing there and keeps the responses honest.
-            start_bucket = get_bucket_for_position(range_start)
-            _, bucket_cache_path = get_bucket_cache_key(url, start_bucket, identity=cache_identity)
-            bucket_meta_path = bucket_cache_path + ".meta"
+            # Persistent cache for this exact range. Keyed on the whole
+            # range and storing the origin's Content-Range, so a hit is
+            # byte-identical to the miss it replaces and can state what it
+            # is. This is what makes a re-watch, a seek backwards, or a
+            # second viewer in the room free instead of another trip to the
+            # CDN.
+            _, disk_cache_path = get_segment_disk_key(
+                url, range_start, range_end, identity=cache_identity)
+            disk_meta_path = disk_cache_path + ".meta"
 
-            # Check bucket cache (with race condition protection)
-            if not range_header and os.path.exists(bucket_cache_path) and os.path.exists(bucket_meta_path):
+            if os.path.exists(disk_cache_path) and os.path.exists(disk_meta_path):
                 try:
-                    async with aiofiles.open(bucket_meta_path, 'r') as f:
-                        bucket_meta = json.loads(await f.read())
+                    async with aiofiles.open(disk_meta_path, 'r') as f:
+                        disk_meta = json.loads(await f.read())
 
-                    bucket_start = bucket_meta.get("bucket_start", 0)
-                    bucket_end = bucket_meta.get("bucket_end", 0)
+                    stored_range = disk_meta.get("content_range")
+                    # A partial response must be able to describe itself.
+                    if range_header and not stored_range:
+                        raise ValueError("cached entry cannot describe its range")
 
-                    if bucket_start <= range_start < bucket_end:
-                        offset = range_start - bucket_start
+                    # Open before responding: the janitor may remove the file
+                    # between the existence check and the first read.
+                    cache_file = await aiofiles.open(disk_cache_path, 'rb')
+                    try:
+                        os.utime(disk_cache_path, None)
+                    except (FileNotFoundError, OSError):
+                        pass
 
-                        # Open the cache file BEFORE returning the response
-                        # This handles the race condition where the file could be deleted
-                        # between os.path.exists() check and the actual read
+                    async def iter_cached():
                         try:
-                            cache_file = await aiofiles.open(bucket_cache_path, 'rb')
-                            await cache_file.seek(offset)
-                            # M1: Wrap utime in its own try-except for TOCTOU race
-                            try:
-                                os.utime(bucket_cache_path, None)
-                            except (FileNotFoundError, OSError):
-                                pass  # File may have been deleted between open and utime
-                        except FileNotFoundError:
-                            logger.warning(f"Bucket cache file deleted during read: {bucket_cache_path}")
-                            # Fall through to upstream fetch
-                        else:
-                            async def iter_bucket():
-                                try:
-                                    while True:
-                                        chunk = await cache_file.read(64 * 1024)
-                                        if not chunk:
-                                            break
-                                        yield chunk
-                                finally:
-                                    await cache_file.close()
+                            while True:
+                                chunk = await cache_file.read(64 * 1024)
+                                if not chunk:
+                                    break
+                                yield chunk
+                        finally:
+                            await cache_file.close()
 
-                            logger.info(f"BUCKET HIT: {start_bucket} for {url[:60]}...")
-                            return StreamingResponse(
-                                iter_bucket(),
-                                status_code=206,
-                                headers={
-                                    "Access-Control-Allow-Origin": "*",
-                                    "Accept-Ranges": "bytes",
-                                    "Cache-Control": "private, no-store, no-transform",
-                                    "Content-Type": bucket_meta.get("content_type", "application/octet-stream"),
-                                }
-                            )
+                    cached_headers = {
+                        "Access-Control-Allow-Origin": "*",
+                        "Accept-Ranges": "bytes",
+                        "Cache-Control": "private, no-store, no-transform",
+                        "Content-Type": disk_meta.get("content_type", "video/mp4"),
+                    }
+                    if range_header and stored_range:
+                        cached_headers["Content-Range"] = stored_range
+                    # Without a length the reply goes out chunked, and a
+                    # partial body whose length the player cannot check up
+                    # front is treated as a mismatch.
+                    stored_size = disk_meta.get("size")
+                    if isinstance(stored_size, int) and stored_size >= 0:
+                        cached_headers["Content-Length"] = str(stored_size)
+
+                    logger.info(f"DISK HIT: {url[:60]}... range={range_header or 'full'}")
+                    return StreamingResponse(
+                        iter_cached(),
+                        status_code=206 if (range_header and stored_range) else 200,
+                        headers=cached_headers,
+                    )
                 except FileNotFoundError:
-                    logger.warning(f"Bucket cache metadata deleted: {bucket_meta_path}")
+                    logger.warning(f"Disk cache entry vanished: {disk_cache_path}")
                 except Exception as e:
-                    logger.warning(f"Bucket cache read error: {e}")
+                    logger.warning(f"Disk cache read error: {e}")
 
             # Fetch from upstream
             upstream_started = time.monotonic()
@@ -852,7 +853,8 @@ async def proxy_stream(request: Request, url: str):
                 return Response(content=rewritten, media_type="application/dash+xml")
 
             if should_cache:
-                _, cache_path = get_bucket_cache_key(url, start_bucket, identity=cache_identity)
+                _, cache_path = get_segment_disk_key(
+                    url, range_start, range_end, identity=cache_identity)
                 cache_meta_path = cache_path + ".meta"
 
                 async def stream_and_cache():
@@ -874,9 +876,12 @@ async def proxy_stream(request: Request, url: str):
                         if r.status_code in (200, 206):
                             os.rename(temp_path, cache_path)
                             meta = {
-                                "bucket_num": start_bucket,
-                                "bucket_start": range_start,
-                                "bucket_end": range_start + total,
+                                "range_start": range_start,
+                                "range_end": range_end,
+                                "size": total,
+                                # Replayed verbatim on a hit: a 206 that cannot
+                                # state its range is rejected downstream.
+                                "content_range": r.headers.get("content-range"),
                                 "content_type": content_type,
                                 "cached_at": time.time(),
                             }

@@ -303,3 +303,167 @@ class TestAbortClassification:
         """Guard the condition itself: it is easy to drop in a refactor."""
         source = (BACKEND_MAIN).read_text()
         assert source.count("if not expected_bytes or total < expected_bytes:") == 2
+
+
+class TestDiskCacheServesSegmentsWithoutRefetching:
+    """Every MSE request is a ranged one, and ranged requests used to skip
+    the persistent cache entirely.
+
+    The disk cache was keyed on a 10MB position bucket, so it could never
+    describe an exact range and was bypassed for anything with a Range
+    header — which is all adaptive playback. Each re-watch, each backwards
+    seek and each additional viewer in the room paid a full trip to the CDN
+    again. These tests pin the replacement: an exact-range key whose hit is
+    byte-identical to the miss, states its own Content-Range and Content-
+    Length, and does not touch the origin.
+    """
+
+    PAYLOAD = bytes(range(256)) * 8
+
+    @pytest.fixture
+    def counting_origin(self):
+        """A range-capable origin that counts the requests it receives."""
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        payload = self.PAYLOAD
+        hits = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                hits.append(self.headers.get("Range") or "full")
+                rng = self.headers.get("Range")
+                if rng and rng.startswith("bytes="):
+                    start_s, _, end_s = rng.split("=", 1)[1].partition("-")
+                    start = int(start_s)
+                    end = min(int(end_s) if end_s else len(payload) - 1, len(payload) - 1)
+                    body = payload[start:end + 1]
+                    self.send_response(206)
+                    self.send_header("Content-Type", "video/mp4")
+                    self.send_header("Content-Range", f"bytes {start}-{end}/{len(payload)}")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        yield f"http://127.0.0.1:{server.server_port}/segment.mp4", hits
+        server.shutdown()
+        server.server_close()
+
+    @pytest.fixture(autouse=True)
+    def allow_local_origin(self, monkeypatch, counting_origin):
+        import services.upstream as upstream
+        from urllib.parse import urlparse
+
+        url, _ = counting_origin
+        real = upstream._is_public_ip
+        monkeypatch.setattr(upstream, "_is_public_ip",
+                            lambda ip: ip == "127.0.0.1" or real(ip))
+        monkeypatch.setattr(upstream, "UPSTREAM_ALLOWED_PORTS",
+                            upstream.UPSTREAM_ALLOWED_PORTS + (urlparse(url).port,))
+
+    @pytest.fixture
+    def cookie_owners(self, counting_origin):
+        """Give two viewers their own cookies for the test origin."""
+        import time as _time
+        from urllib.parse import urlparse
+        from core.security import get_user_cookie_path
+        from services.user_cookies import clear_cache
+
+        url, _ = counting_origin
+        host = urlparse(url).hostname
+        written = []
+        expiry = int(_time.time()) + 3600
+        for email, value in (("alice@example.com", "alice"), ("bob@example.com", "bob")):
+            path = get_user_cookie_path(email)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as handle:
+                handle.write("# Netscape HTTP Cookie File\n")
+                handle.write("\t".join([
+                    host, "FALSE", "/", "FALSE", str(expiry), "SID", value,
+                ]) + "\n")
+            written.append(path)
+        clear_cache()
+        yield
+        for path in written:
+            if os.path.exists(path):
+                os.remove(path)
+        clear_cache()
+
+    async def _drop_memory_cache(self):
+        """Force the next read to come off disk rather than out of memory."""
+        from services.cache import memory_cache
+        await memory_cache.clear()
+
+    async def test_ranged_request_is_written_to_disk(self, client, counting_origin):
+        url, hits = counting_origin
+        from services.cache import get_segment_disk_key
+
+        client.get("/api/proxy", params={"url": url, "user": "disk@example.com"},
+                   headers={"Range": "bytes=0-99"})
+
+        # No cookies were sent, so the entry is shared rather than
+        # per-identity — see the isolation test below for the other case.
+        _, path = get_segment_disk_key(url, 0, 99)
+        assert os.path.exists(path), "a ranged segment was not persisted"
+        assert os.path.exists(path + ".meta")
+
+    async def test_disk_hit_is_byte_identical_and_skips_the_origin(
+            self, client, counting_origin):
+        url, hits = counting_origin
+        params = {"url": url, "user": "disk@example.com"}
+
+        first = client.get("/api/proxy", params=params, headers={"Range": "bytes=0-99"})
+        assert len(hits) == 1
+
+        await self._drop_memory_cache()
+
+        second = client.get("/api/proxy", params=params, headers={"Range": "bytes=0-99"})
+
+        assert second.status_code == first.status_code == 206
+        assert second.content == first.content == self.PAYLOAD[:100]
+        assert second.headers["content-range"] == first.headers["content-range"]
+        assert second.headers["content-length"] == str(len(self.PAYLOAD[:100]))
+        assert len(hits) == 1, f"the origin was asked again: {hits}"
+
+    async def test_a_different_range_is_not_answered_from_disk(
+            self, client, counting_origin):
+        url, hits = counting_origin
+        params = {"url": url, "user": "disk@example.com"}
+
+        client.get("/api/proxy", params=params, headers={"Range": "bytes=0-199"})
+        await self._drop_memory_cache()
+        narrow = client.get("/api/proxy", params=params, headers={"Range": "bytes=0-9"})
+
+        assert narrow.content == self.PAYLOAD[:10]
+        assert narrow.headers["content-range"] == f"bytes 0-9/{len(self.PAYLOAD)}"
+        assert len(hits) == 2, "a cached wider range must not answer a narrower request"
+
+    async def test_one_viewers_cached_segment_is_not_reused_for_another(
+            self, client, counting_origin, cookie_owners):
+        """A body fetched with one viewer's cookies is theirs alone.
+
+        Anonymous fetches are shared on purpose; a fetch carrying cookies
+        is not, or the cache hands one account's authenticated content to
+        another.
+        """
+        url, hits = counting_origin
+
+        client.get("/api/proxy", params={"url": url, "user": "alice@example.com"},
+                   headers={"Range": "bytes=0-99"})
+        await self._drop_memory_cache()
+        client.get("/api/proxy", params={"url": url, "user": "bob@example.com"},
+                   headers={"Range": "bytes=0-99"})
+
+        assert len(hits) == 2
