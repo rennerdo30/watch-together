@@ -19,12 +19,21 @@ ENV PATH="${DENO_INSTALL}/bin:${PATH}"
 RUN curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/opt/deno sh && \
     chmod -R 755 /opt/deno
 
+# Python packages live in a virtualenv owned by the app user, so yt-dlp can
+# be upgraded at container start without running as root. YouTube breaks
+# extraction regularly and the fix usually ships within days, so the version
+# baked into the image goes stale faster than the image is rebuilt.
+ENV VIRTUAL_ENV=/opt/venv
+RUN python -m venv "$VIRTUAL_ENV"
+ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
+
 # Install python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Install latest yt-dlp NIGHTLY from GitHub master for SABR streaming fixes
-# See: https://github.com/yt-dlp/yt-dlp/issues/12482
+# Install the yt-dlp nightly from master for the latest extractor fixes.
+# start.sh refreshes this on every boot; see YTDLP_AUTO_UPDATE.
 RUN pip install --no-cache-dir -U "yt-dlp[default] @ https://github.com/yt-dlp/yt-dlp/archive/master.tar.gz"
 
 # Install yt-dlp PO token plugins:
@@ -46,8 +55,9 @@ RUN chmod +x start.sh
 # Startup then dies creating its cache/cookie directories.
 RUN mkdir -p /app/data
 
-# Fix ownership
-RUN chown -R appuser:appgroup /app
+# Fix ownership. The virtualenv is included so the boot-time yt-dlp upgrade
+# can write to it as the non-root user.
+RUN chown -R appuser:appgroup /app "$VIRTUAL_ENV"
 
 # Switch to non-root user
 USER appuser
