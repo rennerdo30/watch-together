@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Endless Buffering, and Paused Videos Resuming Themselves**: the MSE playback engine
+  was rebuilt whenever room state changed. Its setup effect depended on `autoPlay` (which
+  mirrors play/pause) and `initialTime` (which every seek and every 5-second heartbeat
+  rewrites), so the player was destroyed and the manifest reloaded every few seconds
+  during normal playback. That rebuffered from zero, and detaching the media element
+  fired a `pause` the room broadcast as real while the following reload autoplayed and
+  broadcast a real `play` — so a paused room resumed itself. Both values are now read at
+  load time and the engine is keyed on the stream alone.
+
+### Performance
+
+- **Ranged Segments Are Cached On Disk Again**: every request the MSE engine makes carries
+  a `Range` header, and the persistent cache could not answer one — it was keyed on a 10MB
+  position bucket, so it had no way to describe an exact range and was bypassed for
+  anything ranged. Entries are now keyed on the exact range and store the origin's
+  `Content-Range` and length, so a hit is byte-identical to the miss it replaces. A
+  re-watch, a backwards seek, or a second viewer in the room no longer costs another trip
+  to the CDN. Entries fetched with a viewer's cookies stay scoped to that viewer.
+- **Pooled Upstream Connections and Buffered Media Responses**: the nginx upstreams had no
+  `keepalive` directive, so clearing `Connection` pooled nothing and a fresh TCP connection
+  was opened per segment; `proxy_buffering` was off, which pinned a backend task and its
+  CDN connection for the whole of a slow intercontinental delivery.
+
 ## [1.1.0] - 2026-08-20
 
 ### Security
