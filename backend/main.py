@@ -698,12 +698,15 @@ async def proxy_stream(request: Request, url: str):
             # Notify prefetcher about this segment request (triggers prefetch of next segments)
             await notify_segment_for_url(url)
 
-            # Check memory cache first (fastest)
-            segment_cache_key = get_segment_cache_key(url, range_start, identity=cache_identity)
+            # Check memory cache first (fastest). The key spans the whole
+            # requested range: a 206 has to answer exactly what was asked
+            # for, and a body cached for a different range is not an answer.
+            segment_cache_key = get_segment_cache_key(
+                url, range_start, range_end, identity=cache_identity)
             is_audio = is_audio_url(url)
             mem_result = await memory_cache.get(segment_cache_key)
             if mem_result:
-                data, content_type = mem_result
+                data, content_type, cached_content_range = mem_result
                 logger.info(f"MEMORY HIT: {url[:60]}... ({len(data)} bytes)")
 
                 # Mark content as active for adaptive TTL
@@ -711,24 +714,38 @@ async def proxy_stream(request: Request, url: str):
                 if url_hash:
                     await mark_content_active(url_hash)
 
+                cached_headers = {
+                    "Access-Control-Allow-Origin": "*",
+                    "Accept-Ranges": "bytes",
+                    "Cache-Control": "private, no-store, no-transform",
+                }
+                # A partial response without its Content-Range is malformed:
+                # the player rejects it ("payload length does not match range
+                # requested bytes") and Cloudflare turns it into a 416. Only
+                # answer 206 when the stored range can be reproduced.
+                serve_partial = bool(range_header and cached_content_range)
+                if serve_partial:
+                    cached_headers["Content-Range"] = cached_content_range
+
                 return Response(
                     content=data,
                     media_type=content_type,
-                    status_code=206 if range_header else 200,
-                    headers={
-                        "Access-Control-Allow-Origin": "*",
-                        "Accept-Ranges": "bytes",
-                "Cache-Control": "private, no-store, no-transform",
-                    }
+                    status_code=206 if serve_partial else 200,
+                    headers=cached_headers,
                 )
 
-            # Check disk bucket cache
+            # The position-bucket cache is only consulted for whole-object
+            # requests. It streams from an offset to the end of its bucket,
+            # which cannot satisfy a specific byte range, and it has no
+            # record of the object's total size to build a Content-Range
+            # from. Adaptive playback is entirely ranged requests, so this
+            # costs nothing there and keeps the responses honest.
             start_bucket = get_bucket_for_position(range_start)
             _, bucket_cache_path = get_bucket_cache_key(url, start_bucket, identity=cache_identity)
             bucket_meta_path = bucket_cache_path + ".meta"
 
             # Check bucket cache (with race condition protection)
-            if os.path.exists(bucket_cache_path) and os.path.exists(bucket_meta_path):
+            if not range_header and os.path.exists(bucket_cache_path) and os.path.exists(bucket_meta_path):
                 try:
                     async with aiofiles.open(bucket_meta_path, 'r') as f:
                         bucket_meta = json.loads(await f.read())
@@ -867,7 +884,8 @@ async def proxy_stream(request: Request, url: str):
                                     segment_cache_key,
                                     full_data,
                                     content_type,
-                                    is_audio=is_audio
+                                    is_audio=is_audio,
+                                    content_range=r.headers.get("content-range"),
                                 )
                                 logger.info(f"Added to memory cache: {url[:60]}... ({total} bytes)")
 

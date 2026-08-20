@@ -156,3 +156,111 @@ class TestMediaResponsesAreNotCacheable:
         assert "no-store" in cache_control
         assert "private" in cache_control
         assert "no-transform" in cache_control
+
+
+class TestRangedResponsesAreWellFormed:
+    """A 206 must answer exactly the range that was asked for.
+
+    The cache used to key on the range's start only and returned 206 with
+    no Content-Range, so a body cached for one range answered a request for
+    another. Players reject that ("payload length does not match range
+    requested bytes") and Cloudflare turns it into a 416.
+
+    Served from a local origin rather than a live one: the assertions are
+    about exact byte counts, which a real CDN can change by compressing.
+    """
+
+    PAYLOAD = bytes(range(256)) * 8  # 2048 deterministic bytes
+
+    @pytest.fixture
+    def origin(self):
+        """A minimal range-capable HTTP origin."""
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        payload = self.PAYLOAD
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                rng = self.headers.get("Range")
+                if rng and rng.startswith("bytes="):
+                    spec = rng.split("=", 1)[1]
+                    start_s, _, end_s = spec.partition("-")
+                    start = int(start_s)
+                    end = int(end_s) if end_s else len(payload) - 1
+                    end = min(end, len(payload) - 1)
+                    body = payload[start:end + 1]
+                    self.send_response(206)
+                    self.send_header("Content-Type", "video/mp4")
+                    self.send_header("Content-Range", f"bytes {start}-{end}/{len(payload)}")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        yield f"http://127.0.0.1:{server.server_port}/media.mp4"
+        server.shutdown()
+        server.server_close()
+
+    @pytest.fixture(autouse=True)
+    def allow_local_origin(self, monkeypatch, origin):
+        """Let the proxy reach the test origin, which is otherwise private."""
+        import services.upstream as upstream
+        from urllib.parse import urlparse
+
+        real = upstream._is_public_ip
+        monkeypatch.setattr(upstream, "_is_public_ip",
+                            lambda ip: ip == "127.0.0.1" or real(ip))
+        port = urlparse(origin).port
+        monkeypatch.setattr(upstream, "UPSTREAM_ALLOWED_PORTS",
+                            upstream.UPSTREAM_ALLOWED_PORTS + (port,))
+
+    def test_range_response_carries_content_range(self, client, origin):
+        response = client.get(
+            "/api/proxy",
+            params={"url": origin, "user": "range@example.com"},
+            headers={"Range": "bytes=0-99"},
+        )
+        assert response.status_code == 206
+        assert response.headers["content-range"] == f"bytes 0-99/{len(self.PAYLOAD)}"
+        assert response.content == self.PAYLOAD[:100]
+
+    def test_cache_hit_is_identical_to_the_miss(self, client, origin):
+        params = {"url": origin, "user": "range@example.com"}
+        first = client.get("/api/proxy", params=params, headers={"Range": "bytes=0-49"})
+        second = client.get("/api/proxy", params=params, headers={"Range": "bytes=0-49"})
+
+        assert first.status_code == second.status_code == 206
+        assert second.content == first.content == self.PAYLOAD[:50]
+        assert second.headers["content-range"] == first.headers["content-range"]
+
+    def test_a_wider_cached_range_does_not_answer_a_narrower_one(self, client, origin):
+        """The exact defect: one range's body answering another's request."""
+        params = {"url": origin, "user": "range@example.com"}
+        wide = client.get("/api/proxy", params=params, headers={"Range": "bytes=0-199"})
+        narrow = client.get("/api/proxy", params=params, headers={"Range": "bytes=0-9"})
+
+        assert wide.content == self.PAYLOAD[:200]
+        assert narrow.content == self.PAYLOAD[:10]
+        assert narrow.headers["content-range"] == f"bytes 0-9/{len(self.PAYLOAD)}"
+
+    def test_offset_range_is_served_from_the_right_offset(self, client, origin):
+        response = client.get(
+            "/api/proxy",
+            params={"url": origin, "user": "range@example.com"},
+            headers={"Range": "bytes=500-599"},
+        )
+        assert response.status_code == 206
+        assert response.content == self.PAYLOAD[500:600]
+        assert response.headers["content-range"] == f"bytes 500-599/{len(self.PAYLOAD)}"

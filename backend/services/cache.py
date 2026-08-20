@@ -44,8 +44,12 @@ class MemoryCache:
     """
 
     def __init__(self, max_size_bytes: int = MEMORY_CACHE_SIZE_BYTES):
-        # key -> (data, content_type, added_at)
-        self._cache: OrderedDict[str, tuple[bytes, str, float]] = OrderedDict()
+        # key -> (data, content_type, content_range, added_at)
+        # content_range is the upstream's Content-Range for a partial body.
+        # A 206 must reproduce it exactly: returning a cached body under a
+        # different range makes the response self-contradictory, which the
+        # player rejects ("payload length does not match range requested").
+        self._cache: OrderedDict[str, tuple[bytes, str, str | None, float]] = OrderedDict()
         self._current_size = 0
         self._max_size = max_size_bytes
         self._lock = asyncio.Lock()
@@ -53,22 +57,23 @@ class MemoryCache:
         self._hits = 0
         self._misses = 0
 
-    async def get(self, key: str) -> tuple[bytes, str] | None:
+    async def get(self, key: str) -> tuple[bytes, str, str | None] | None:
         """
         Get item from cache.
 
-        Returns (data, content_type) or None if not found.
+        Returns (data, content_type, content_range) or None if not found.
         """
         async with self._lock:
             if key in self._cache:
                 self._cache.move_to_end(key)  # LRU: move to end (most recently used)
-                data, ctype, _ = self._cache[key]
+                data, ctype, crange, _ = self._cache[key]
                 self._hits += 1
-                return (data, ctype)
+                return (data, ctype, crange)
             self._misses += 1
         return None
 
-    async def put(self, key: str, data: bytes, content_type: str, is_audio: bool = False):
+    async def put(self, key: str, data: bytes, content_type: str, is_audio: bool = False,
+                  content_range: str | None = None):
         """
         Add item to cache, evicting LRU items if needed.
 
@@ -84,7 +89,7 @@ class MemoryCache:
         async with self._lock:
             # If key exists, remove old data first
             if key in self._cache:
-                old_data, _, _ = self._cache.pop(key)
+                old_data, _, _, _ = self._cache.pop(key)
                 self._current_size -= len(old_data)
                 self._audio_keys.discard(key)
 
@@ -94,7 +99,7 @@ class MemoryCache:
                 evicted = False
                 for old_key in list(self._cache.keys()):
                     if old_key not in self._audio_keys:
-                        old_data, _, _ = self._cache.pop(old_key)
+                        old_data, _, _, _ = self._cache.pop(old_key)
                         self._current_size -= len(old_data)
                         evicted = True
                         logger.debug(f"Evicted video segment from memory cache: {old_key[:40]}...")
@@ -102,13 +107,13 @@ class MemoryCache:
 
                 if not evicted and self._cache:
                     # All items are audio, evict oldest audio (least recently used)
-                    old_key, (old_data, _, _) = self._cache.popitem(last=False)
+                    old_key, (old_data, _, _, _) = self._cache.popitem(last=False)
                     self._current_size -= len(old_data)
                     self._audio_keys.discard(old_key)
                     logger.debug(f"Evicted audio segment from memory cache: {old_key[:40]}...")
 
             # Add new item
-            self._cache[key] = (data, content_type, time.time())
+            self._cache[key] = (data, content_type, content_range, time.time())
             self._current_size += len(data)
             if is_audio:
                 self._audio_keys.add(key)
@@ -117,7 +122,7 @@ class MemoryCache:
         """Remove item from cache. Returns True if item was removed."""
         async with self._lock:
             if key in self._cache:
-                data, _, _ = self._cache.pop(key)
+                data, _, _, _ = self._cache.pop(key)
                 self._current_size -= len(data)
                 self._audio_keys.discard(key)
                 return True
@@ -142,19 +147,26 @@ class MemoryCache:
 memory_cache = MemoryCache()
 
 
-def get_segment_cache_key(url: str, range_start: int = 0, identity: str = None) -> str:
+def get_segment_cache_key(url: str, range_start: int = 0, range_end: int = None,
+                          identity: str = None) -> str:
     """
     Generate a cache key for a segment.
 
-    Uses SHA-256 hash of URL with range start position. `identity` is set
-    when the fetch carried a specific user's cookies, which keeps
-    authenticated content out of the shared, anonymous cache entries.
+    The key covers the whole requested range, not just its start. Keying on
+    the start alone let a body cached for one range answer a request for a
+    different one, and a 206 whose body does not match the requested range
+    is rejected by players and by intermediaries.
+
+    `identity` is set when the fetch carried a specific user's cookies,
+    which keeps authenticated content out of the shared, anonymous entries.
     """
     url_hash = hashlib.sha256(url.encode()).hexdigest()[:24]
+    span = f"{range_start}-{'' if range_end is None else range_end}"
+    key = f"seg_{url_hash}_{span}"
     if identity:
         identity_hash = hashlib.sha256(identity.encode()).hexdigest()[:16]
-        return f"seg_{url_hash}_{range_start}_u{identity_hash}"
-    return f"seg_{url_hash}_{range_start}"
+        key = f"{key}_u{identity_hash}"
+    return key
 
 
 def is_audio_url(url: str) -> bool:
