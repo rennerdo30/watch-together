@@ -137,3 +137,31 @@ class TestPlayerToleratesHighLatency:
         text = self.PLAYER_CONSTANTS.read_text()
         assert "SHAKA_SEGMENT_RETRIES" in text
         assert "SHAKA_REQUEST_TIMEOUT_MS" in text
+
+
+class TestPlayerIsNotRemountedOnReResolve:
+    """Re-resolving the same video must not restart playback.
+
+    Signed stream URLs rotate on every resolve while the video does not.
+    Keying the player on the stream URL remounted it each time the room
+    refreshed those URLs, which reloaded the manifest and rebuffered from
+    zero — an endless buffering loop on a reconnect-prone link. And the
+    WebSocket handler read the current video from a stale closure, so every
+    `sync` looked like a new video and triggered exactly that refresh.
+    """
+
+    ROOM_PAGE = REPO_ROOT / "frontend" / "app" / "room" / "[id]" / "page.tsx"
+
+    def test_player_is_keyed_on_video_identity(self):
+        text = self.ROOM_PAGE.read_text()
+        assert "key={`${videoData.original_url}" in text
+        assert "key={`${videoData.stream_url}" not in text, (
+            "keying on the signed stream URL remounts the player whenever it rotates"
+        )
+
+    def test_sync_reads_the_current_video_from_a_ref(self):
+        """A closure over videoData is stale for the life of the socket."""
+        text = self.ROOM_PAGE.read_text()
+        assert "videoDataRef" in text
+        assert "const current = videoDataRef.current;" in text
+        assert "const isSameVideo = videoData?.original_url" not in text
