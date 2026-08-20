@@ -11,6 +11,8 @@ and the backend. Same shape as the `eupd` deploy on the same host.
 - [`env.example`](env.example) — copy to `/opt/watch-together/.env` and fill in
 - [`sync.sh`](sync.sh) — rsync the repo to `/opt/watch-together/`
 - [`deploy.sh`](deploy.sh) — one command: sync → build → up → probe
+- [`make-env.sh`](make-env.sh) — build the host `.env`, carrying existing values over
+- [`host-status.sh`](host-status.sh) — containers, volumes, `.env` keys, `--logs=<service>`
 
 ## One-time setup
 
@@ -36,8 +38,21 @@ cp deploy/target.env.example deploy/target.env
 $EDITOR deploy/target.env                     # SSH host + login (gitignored)
 
 ./deploy/sync.sh                              # ship the files
-ssh <host> 'nano /opt/watch-together/.env'    # fill in secrets
+./deploy/make-env.sh --show                   # see what the host already has
+./deploy/make-env.sh \
+  --wt-host=w2g.renner.dev \
+  --cf-team=https://TEAM.cloudflareaccess.com \
+  --cf-aud=YOUR_APP_AUD_TAG                   # writes .env, mode 600
 ./deploy/deploy.sh                            # build, start, probe
+```
+
+`make-env.sh` reuses a tunnel token that is already on the host, including one
+stored under the older `TUNNEL_TOKEN` name, so an existing tunnel does not have
+to be re-provisioned. If Access already protects the hostname, the team domain
+and AUD tag are visible in the login redirect it serves:
+
+```bash
+curl -sI https://w2g.renner.dev/ | grep -i location
 ```
 
 `deploy/target.env` is gitignored on purpose: this repository is public, so the
