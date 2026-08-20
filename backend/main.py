@@ -64,8 +64,11 @@ from api.routes.tokens import router as tokens_router
 from api.routes.extension import router as extension_router
 from connection_manager import manager
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging. LOG_LEVEL=DEBUG turns on the per-transfer proxy traces,
+# which record the byte range the origin actually received — the only way to
+# tell a player's ranged request apart from an intermediary rewriting it.
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
 logger = logging.getLogger(__name__)
 
 # Allowed origins for CORS (set via environment variable, comma-separated)
@@ -214,12 +217,18 @@ async def lifespan(app: FastAPI):
         if tasks:
             logger.info("All background tasks shut down cleanly")
 
-        # Clean up HTTP client
+        # Clean up HTTP client. Closing can fail if the client was created
+        # on a different event loop than the one shutting down, which must
+        # not turn a clean shutdown into an error.
         global _proxy_client
         if _proxy_client is not None:
-            await _proxy_client.aclose()
-            _proxy_client = None
-            logger.info("Closed proxy HTTP client")
+            try:
+                await _proxy_client.aclose()
+                logger.info("Closed proxy HTTP client")
+            except Exception as exc:
+                logger.warning(f"Proxy HTTP client did not close cleanly: {exc}")
+            finally:
+                _proxy_client = None
 
 
 # ============================================================================
@@ -709,6 +718,7 @@ async def proxy_stream(request: Request, url: str):
                     headers={
                         "Access-Control-Allow-Origin": "*",
                         "Accept-Ranges": "bytes",
+                "Cache-Control": "private, no-store, no-transform",
                     }
                 )
 
@@ -761,6 +771,7 @@ async def proxy_stream(request: Request, url: str):
                                 headers={
                                     "Access-Control-Allow-Origin": "*",
                                     "Accept-Ranges": "bytes",
+                                    "Cache-Control": "private, no-store, no-transform",
                                     "Content-Type": bucket_meta.get("content_type", "application/octet-stream"),
                                 }
                             )
@@ -779,6 +790,13 @@ async def proxy_stream(request: Request, url: str):
             response_headers = {
                 "Access-Control-Allow-Origin": "*",
                 "Accept-Ranges": "bytes",
+                # Never let an intermediary cache or rewrite these. Segments
+                # are fetched with the caller's own cookies, so a shared cache
+                # would hand one user's authenticated content to another; and
+                # a cacheable response invites Cloudflare to fetch the whole
+                # object from the origin to satisfy a small range, which is
+                # how a 700-byte request became a 479MB origin transfer.
+                "Cache-Control": "private, no-store, no-transform",
                 # Prevent HTTP/2 connection reuse issues with large streams
                 "Connection": "close",
             }

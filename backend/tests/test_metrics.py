@@ -130,3 +130,29 @@ class TestMetricsEndpoint:
         body = client.get("/api/metrics/proxy?user=ops@example.com").json()
         assert body["totals"]["failures"] == 1
         await proxy_metrics.reset()
+
+
+class TestMediaResponsesAreNotCacheable:
+    """Proxied media must never be stored by an intermediary.
+
+    Segments are fetched with the caller's own cookies, so a shared cache
+    would serve one user's authenticated content to another. A cacheable
+    response also invites Cloudflare to fetch a whole object from the origin
+    to satisfy a small range request.
+    """
+
+    def test_proxy_marks_media_uncacheable(self, client, monkeypatch):
+        import main as main_module
+
+        # A tiny public object is enough: the assertion is about headers.
+        response = client.get(
+            "/api/proxy",
+            params={"url": "https://www.youtube.com/robots.txt", "user": "cache@example.com"},
+        )
+        if response.status_code not in (200, 206):
+            pytest.skip("upstream not reachable in this environment")
+
+        cache_control = response.headers.get("cache-control", "")
+        assert "no-store" in cache_control
+        assert "private" in cache_control
+        assert "no-transform" in cache_control

@@ -63,6 +63,20 @@ def isolated_data_dir():
 
 
 @pytest.fixture(autouse=True)
+def reset_proxy_client():
+    """Drop the shared HTTP client between tests.
+
+    It is a module-level singleton bound to the event loop that created it.
+    A test that exercises the proxy would otherwise leave a client behind
+    for the next test's app lifespan to close on a different loop, which
+    fails during teardown.
+    """
+    yield
+    import main
+    main._proxy_client = None
+
+
+@pytest.fixture(autouse=True)
 def reset_room_state():
     """Keep room state from leaking between tests."""
     from connection_manager import manager
