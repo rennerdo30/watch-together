@@ -87,7 +87,10 @@ services:
       - ../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     networks:
       watch_net:
-        aliases: [ nginx, proxy ]
+        # watch-together-proxy is the name the earlier stack used, and a
+        # tunnel's public hostname may still point at it. Keeping it as an
+        # alias means the Cloudflare side needs no change.
+        aliases: [ nginx, proxy, watch-together-proxy ]
     expose: [ "80" ]
     deploy:
       resources:
