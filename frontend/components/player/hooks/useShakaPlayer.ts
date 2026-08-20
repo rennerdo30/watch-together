@@ -6,6 +6,10 @@ import {
     SHAKA_BUFFER_GOAL_SECONDS,
     SHAKA_BUFFER_BEHIND_SECONDS,
     SHAKA_REBUFFER_GOAL_SECONDS,
+    SHAKA_INITIAL_BANDWIDTH_ESTIMATE,
+    SHAKA_SEGMENT_RETRIES,
+    SHAKA_RETRY_BASE_DELAY_MS,
+    SHAKA_REQUEST_TIMEOUT_MS,
 } from '@/lib/constants';
 
 /**
@@ -241,6 +245,22 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
                     bufferingGoal: SHAKA_BUFFER_GOAL_SECONDS,
                     rebufferingGoal: SHAKA_REBUFFER_GOAL_SECONDS,
                     bufferBehind: SHAKA_BUFFER_BEHIND_SECONDS,
+                    // Every segment crosses the viewer -> tunnel -> origin ->
+                    // CDN path, so a request can legitimately take a while and
+                    // an occasional failure is worth retrying rather than
+                    // surfacing as a stall.
+                    retryParameters: {
+                        maxAttempts: SHAKA_SEGMENT_RETRIES,
+                        baseDelay: SHAKA_RETRY_BASE_DELAY_MS,
+                        backoffFactor: 2,
+                        timeout: SHAKA_REQUEST_TIMEOUT_MS,
+                    },
+                },
+                abr: {
+                    // Start from a conservative guess and let measurements
+                    // raise it. Shaka's default opens on the highest rendition,
+                    // which stalls immediately on a long-haul link.
+                    defaultBandwidthEstimate: SHAKA_INITIAL_BANDWIDTH_ESTIMATE,
                 },
             });
 

@@ -39,5 +39,28 @@ export const BACKEND_ORIGIN = process.env.NEXT_PUBLIC_BACKEND_ORIGIN ?? '';
 
 /** Seconds of media Shaka buffers ahead of, and keeps behind, the playhead. */
 export const SHAKA_BUFFER_GOAL_SECONDS = 60;
-export const SHAKA_BUFFER_BEHIND_SECONDS = 60;
-export const SHAKA_REBUFFER_GOAL_SECONDS = 4;
+export const SHAKA_BUFFER_BEHIND_SECONDS = 30;
+
+/**
+ * How much must be buffered before playback starts or resumes.
+ *
+ * Every segment travels viewer -> Cloudflare -> tunnel -> origin -> CDN and
+ * back, so a small cushion is spent before the next segment arrives and the
+ * player stalls again. A larger one turns a stutter into a single wait.
+ */
+export const SHAKA_REBUFFER_GOAL_SECONDS = 12;
+
+/**
+ * Starting bandwidth guess, in bits per second.
+ *
+ * Shaka's default is optimistic enough to open on the highest rendition and
+ * immediately stall on a long-haul link. Starting low costs a few seconds of
+ * lower quality and lets the estimate climb from measurements instead of
+ * from a guess.
+ */
+export const SHAKA_INITIAL_BANDWIDTH_ESTIMATE = 700_000;
+
+/** Segment requests worth retrying before giving up, and the gap between them. */
+export const SHAKA_SEGMENT_RETRIES = 4;
+export const SHAKA_RETRY_BASE_DELAY_MS = 500;
+export const SHAKA_REQUEST_TIMEOUT_MS = 45_000;
