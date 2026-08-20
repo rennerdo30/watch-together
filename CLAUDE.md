@@ -4,6 +4,25 @@
 
 Watch Together is a real-time collaborative video synchronization platform that enables multiple users to watch YouTube, Twitch, and 1800+ other sites simultaneously. It uses WebSocket-based synchronization with sub-second accuracy.
 
+## Project Policy: every fix ships with a regression test
+
+**A bug is not fixed until a test would catch it coming back.** For each
+defect, add the test in the same change, and make sure it fails against the
+old behaviour before you rely on it. No exceptions for "obvious" one-line
+fixes — several of the worst outages here were one-liners.
+
+Reach for the level that actually pins the defect:
+- a unit test when the fault is in a pure function (a cache key, a parser)
+- an endpoint test when it is in request handling (status codes, headers)
+- a source assertion when the fault is a footgun that must not return
+  (a pinned player client, a non-existent yt-dlp option, a missing mkdir)
+- a Playwright test when it is only visible in a browser (overlapping UI,
+  MSE playback)
+
+Prefer a local stub origin over a live service when the assertion is about
+exact bytes or headers: a CDN can compress or rewrite a response and make a
+wrong test pass.
+
 ## Project Policy: latest only, no legacy paths
 
 **Never add or keep a backwards-compatibility path in this project.** There is
