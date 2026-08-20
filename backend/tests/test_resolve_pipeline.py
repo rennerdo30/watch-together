@@ -231,6 +231,30 @@ class TestQualityLadder:
         from services.resolver import _select_quality_ladder
         return [h for h, _ in _select_quality_ladder(self.LADDER, limit)]
 
+    def test_each_codec_family_gets_a_complete_ladder(self):
+        """A player commits to one codec, so gaps in it are unrecoverable.
+
+        Spreading the budget across codecs gave AV1 only 2160p and 1440p, so
+        a player that chose AV1 had nothing lower to drop to — which looks
+        exactly like ABR refusing to switch down.
+        """
+        from services.resolver import _select_quality_ladder
+
+        candidates = []
+        for height in (2160, 1440, 1080, 720, 480, 360, 240, 144):
+            candidates.append((height, {"vcodec": "av01.0.08M.08"}))
+            if height <= 1080:
+                candidates.append((height, {"vcodec": "avc1.640028"}))
+
+        picked = _select_quality_ladder(candidates, 8)
+        per_codec = {}
+        for height, fmt in picked:
+            per_codec.setdefault(fmt["vcodec"].split(".")[0], []).append(height)
+
+        for family, heights in per_codec.items():
+            assert min(heights) <= 360, f"{family} has no low rung: {heights}"
+            assert len(heights) >= 4, f"{family} ladder is too sparse: {heights}"
+
     def test_low_renditions_survive(self):
         heights = self.heights(10)
         assert 360 in heights, "no 360p to fall back to"

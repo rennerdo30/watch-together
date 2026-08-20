@@ -60,6 +60,16 @@ export const SHAKA_REBUFFER_GOAL_SECONDS = 12;
  */
 export const SHAKA_INITIAL_BANDWIDTH_ESTIMATE = 700_000;
 
+/**
+ * Codec preference, most efficient first.
+ *
+ * A player commits to one codec family for the session, so this decides
+ * which ladder it adapts within. AV1 carries the same picture at roughly
+ * half the bitrate of H.264, which is the difference between playing and
+ * buffering on a constrained link.
+ */
+export const SHAKA_PREFERRED_VIDEO_CODECS = ['av01', 'vp09', 'avc1'];
+
 /** Segment requests worth retrying before giving up, and the gap between them. */
 export const SHAKA_SEGMENT_RETRIES = 4;
 export const SHAKA_RETRY_BASE_DELAY_MS = 500;

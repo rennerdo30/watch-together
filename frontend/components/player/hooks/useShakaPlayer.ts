@@ -10,6 +10,7 @@ import {
     SHAKA_SEGMENT_RETRIES,
     SHAKA_RETRY_BASE_DELAY_MS,
     SHAKA_REQUEST_TIMEOUT_MS,
+    SHAKA_PREFERRED_VIDEO_CODECS,
 } from '@/lib/constants';
 
 /**
@@ -262,6 +263,9 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
                     // which stalls immediately on a long-haul link.
                     defaultBandwidthEstimate: SHAKA_INITIAL_BANDWIDTH_ESTIMATE,
                 },
+                // The player adapts within one codec family, so prefer the
+                // one that carries the same picture in the fewest bits.
+                preferredVideoCodecs: [...SHAKA_PREFERRED_VIDEO_CODECS],
             });
 
             instance.addEventListener('error', onErrorEvent);
