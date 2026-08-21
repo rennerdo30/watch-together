@@ -15,3 +15,7 @@ httpx
 aiofiles
 bgutil-ytdlp-pot-provider
 aiosqlite
+# TLS impersonation for yt-dlp. Without it every extraction presents a
+# Python TLS fingerprint, which is one of the signals behind "Sign in to
+# confirm you're not a bot" from a datacentre address.
+curl_cffi

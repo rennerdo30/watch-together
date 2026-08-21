@@ -6,6 +6,9 @@ import os
 # Cache configuration
 CACHE_DIR = "data/cache"
 COOKIES_DIR = "data/cookies"
+# yt-dlp's own cache (player JS, signature timestamps). Kept on the data
+# volume so a container rebuild does not force it to re-fetch everything.
+YTDLP_CACHE_DIR = "data/yt_dlp_cache"
 # Segment cache budget. Once it is reached, nothing new is cached at all
 # until the janitor evicts — so a budget smaller than a viewing session
 # silently turns caching off partway through. An hour of 1080p is a couple
@@ -25,6 +28,14 @@ STALE_TEMP_FILE_SECONDS = 3600
 # every proxied request and measuring it means scanning the whole cache
 # directory, which is thousands of files once the cache is warm.
 CACHE_SIZE_MEASURE_TTL_SECONDS = 10
+
+# googlevideo byte ranges. A `Range` header is served through the throttled
+# progressive path; the `range=` query parameter returns the same bytes at
+# full speed, which is what yt-dlp uses. See services/gvs_range.py.
+GVS_HOST_SUFFIX = ".googlevideo.com"
+# Cap for a range request with no end. yt-dlp fetches in chunks of the same
+# size, and an uncapped request would pull the rest of the file.
+GVS_MAX_RANGE_BYTES = 10 * 1024 * 1024
 
 # In-memory cache configuration for hot segments
 MEMORY_CACHE_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB in-memory LRU cache
@@ -101,6 +112,6 @@ METRICS_SLOW_UPSTREAM_MS = 5000  # Upstream fetches slower than this are counted
 METRICS_DEFAULT_SAMPLE_LIMIT = 50  # Samples returned by the metrics endpoint
 
 # Ensure directories exist
-for directory in [CACHE_DIR, COOKIES_DIR, "data", "data/yt_dlp_cache"]:
+for directory in [CACHE_DIR, COOKIES_DIR, "data", YTDLP_CACHE_DIR]:
     if not os.path.exists(directory):
         os.makedirs(directory)

@@ -246,39 +246,92 @@ fi
 
 # What a seek actually costs. Playing from the start works while jumping
 # an hour in "loads forever", so the question is whether a deep byte range
-# is slower at the origin, slower through the proxy, or neither.
+# is served at all, and whether the media URL carries what googlevideo
+# needs to grant random access.
 if [ -n "$SEEK_URL" ]; then
 	cd "$REMOTE" || exit 1
 	echo "-- ranged read cost by depth --"
-	$COMPOSE exec -T -e WT_URL="$SEEK_URL" backend python - <<'PYEOF'
+	$COMPOSE exec -T -e WT_URL="$SEEK_URL" -e WT_AS="$AS_USER" backend python - <<'PYEOF'
 import asyncio, os, time, logging
 logging.disable(logging.WARNING)
+from urllib.parse import urlparse, parse_qs
 import httpx
-from services.database import get_cached_format
+import yt_dlp
+from core.config import POT_PROVIDER_EXTRACTOR_ARGS, YTDLP_CACHE_DIR
+from core.security import get_user_cookie_path
 from services.upstream import open_upstream_stream
 
 URL = os.environ["WT_URL"]
 HEADERS = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.youtube.com/"}
 # One segment's worth, so the numbers compare to what the player asks for.
-CHUNK = 1024 * 1024
-DEPTHS = (0.0, 0.25, 0.50, 0.75, 0.95)
+CHUNK = 256 * 1024
+DEPTHS = (0.0, 0.02, 0.05, 0.10, 0.25, 0.50, 0.75)
+
+
+def resolve():
+    """Resolve here, in the container, the way the app does.
+
+    Each option set is reported with how many formats it produced and how
+    many of their URLs carry a PO token: without one, googlevideo grants
+    only a small prefix of the file and refuses anything past it, which is
+    exactly what a seek asks for.
+    """
+    base = {"quiet": True, "no_warnings": True, "skip_download": True,
+            "nocheckcertificate": True, "socket_timeout": 30,
+            "ignore_no_formats_error": True,
+            "extractor_args": dict(POT_PROVIDER_EXTRACTOR_ARGS)}
+    as_user = os.environ.get("WT_AS") or ""
+    if as_user:
+        path = get_user_cookie_path(as_user)
+        if path and os.path.exists(path):
+            base["cookiefile"] = path
+            print("using cookies for %s" % as_user)
+        else:
+            print("no cookie file for %s" % as_user)
+
+    attempts = [
+        ("app options", {**base, "cache_dir": YTDLP_CACHE_DIR}),
+        ("without cache_dir", dict(base)),
+        ("remote challenge components",
+         {**base, "cache_dir": YTDLP_CACHE_DIR, "remote_components": "ejs:github"}),
+    ]
+    chosen = None
+    for label, opts in attempts:
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                # process=False: the raw info dict carries every format, and
+                # format selection is not what is being measured.
+                info = ydl.extract_info(URL, download=False, process=False)
+            formats = (info or {}).get("formats") or []
+            with_pot = sum(1 for f in formats if "pot=" in (f.get("url") or ""))
+            print("   %-28s formats=%3d  carrying a PO token=%3d"
+                  % (label, len(formats), with_pot))
+            if formats and chosen is None:
+                chosen = info
+        except Exception as exc:
+            print("   %-28s ERROR %s" % (label, str(exc)[:70]))
+    return chosen or {}
 
 
 async def timed_read(client, url, start, length):
-    """(status, bytes, ms to first byte, ms total) for one ranged read."""
     began = time.monotonic()
     resp, _ = await open_upstream_stream(
         client, url, {**HEADERS, "Range": f"bytes={start}-{start + length - 1}"})
-    first_byte_ms = (time.monotonic() - began) * 1000
+    ttfb = (time.monotonic() - began) * 1000
     try:
         body = await resp.aread()
     finally:
         await resp.aclose()
-    return resp.status_code, len(body), first_byte_ms, (time.monotonic() - began) * 1000
+    return resp.status_code, len(body), ttfb, (time.monotonic() - began) * 1000
 
 
 async def sweep(client, label, url, clen):
-    print("%s  (%.0f MB)" % (label, clen / 1e6))
+    params = parse_qs(urlparse(url).query)
+    # `pot` is the PO token. Without it googlevideo grants only a small
+    # prefix of the file and refuses everything past it, which is a seek.
+    print("%s  %.0f MB  pot=%s  n=%s" % (
+        label, clen / 1e6, "yes" if params.get("pot") else "NO",
+        "yes" if params.get("n") else "no"))
     for fraction in DEPTHS:
         start = int(clen * fraction)
         if start + CHUNK > clen:
@@ -286,33 +339,33 @@ async def sweep(client, label, url, clen):
         try:
             status, got, ttfb, total = await timed_read(client, url, start, CHUNK)
             rate = (got / 1e6) / (total / 1000) if total else 0
-            print("   %5.0f%%  offset %-12d %s  %7.1f KB  ttfb %6.0f ms  "
+            print("   %5.1f%%  offset %-12d %s  %7.1f KB  ttfb %6.0f ms  "
                   "total %7.0f ms  %5.1f MB/s"
                   % (fraction * 100, start, status, got / 1024, ttfb, total, rate))
         except Exception as exc:
-            print("   %5.0f%%  offset %-12d ERROR %s" % (fraction * 100, start, exc))
+            print("   %5.1f%%  offset %-12d ERROR %s"
+                  % (fraction * 100, start, str(exc)[:70]))
 
 
 async def main():
-    cached = await get_cached_format(URL)
-    if not cached:
-        print("not resolved yet - open the video once, then re-run")
+    info = resolve()
+    formats = [f for f in (info.get("formats") or [])
+               if "clen" in (f.get("url") or "")]
+    video = [f for f in formats
+             if f.get("acodec") == "none" and f.get("vcodec", "none") != "none"]
+    audio = [f for f in formats if f.get("vcodec") == "none"]
+    picked = (sorted(video, key=lambda f: f.get("height") or 0)[:1]
+              + sorted(audio, key=lambda f: f.get("abr") or 0)[:1])
+    if not picked:
+        print("no fragmented formats resolved (%d formats total, %d with clen)"
+              % (len(info.get("formats") or []), len(formats)))
         return
     async with httpx.AsyncClient(follow_redirects=False, timeout=120) as client:
-        qualities = (cached.get("available_qualities") or [])[:1]
-        audio = (cached.get("audio_options") or [])[:1]
-        for q in qualities:
-            clen = int(q.get("filesize") or q.get("filesize_approx") or 0)
-            if not clen:
-                print("v:%s  no filesize recorded, skipping" % q.get("format_id"))
-                continue
-            await sweep(client, "video %s" % q.get("format_id"), q.get("video_url"), clen)
-        for a in audio:
-            clen = int(a.get("filesize") or a.get("filesize_approx") or 0)
-            if not clen:
-                print("a:%s  no filesize recorded, skipping" % a.get("format_id"))
-                continue
-            await sweep(client, "audio %s" % a.get("format_id"), a.get("audio_url"), clen)
+        for f in picked:
+            clen = int(parse_qs(urlparse(f["url"]).query)["clen"][0])
+            await sweep(client, "%s %s" % (f.get("format_id"), f.get("format_note") or ""),
+                        f["url"], clen)
+            print()
 
 asyncio.run(main())
 PYEOF

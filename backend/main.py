@@ -26,7 +26,7 @@ import yt_dlp
 
 # Import modules
 from core.config import (
-    CACHE_DIR, COOKIES_DIR, MAX_CACHE_SIZE_BYTES, CACHE_TTL_SECONDS,
+    CACHE_DIR, COOKIES_DIR, YTDLP_CACHE_DIR, MAX_CACHE_SIZE_BYTES, CACHE_TTL_SECONDS,
     MIN_DISK_FREE_BYTES, MAX_CACHEABLE_FILE_BYTES, FORMAT_CACHE_TTL_SECONDS,
     METRICS_DEFAULT_SAMPLE_LIMIT, POT_PROVIDER_EXTRACTOR_ARGS,
     MANIFEST_MAX_VIDEO_REPRESENTATIONS, MANIFEST_MAX_AUDIO_REPRESENTATIONS,
@@ -46,6 +46,7 @@ from services.prefetcher import (
     get_or_create_session, notify_segment_for_url,
     prefetch_initial_segments, prefetch_cleanup_task,
 )
+from services.gvs_range import rewrite_range
 from services.upstream import (
     UnsafeUpstreamError, pin_url, request_kwargs,
     open_upstream_stream, resolve_upstream,
@@ -350,9 +351,7 @@ async def resolve_stream(
     cookie_path = get_user_cookie_path(user_email) if user_email else None
     has_cookies = cookie_path and os.path.exists(cookie_path)
 
-    cache_dir = os.path.join("data", "yt_dlp_cache")
-    if not os.path.exists(cache_dir):
-        os.makedirs(cache_dir)
+    os.makedirs(YTDLP_CACHE_DIR, exist_ok=True)
 
     base_opts = {
         'quiet': False,
@@ -365,7 +364,7 @@ async def resolve_stream(
         },
         'skip_download': True,
         'ignore_no_formats_error': True,
-        'cache_dir': cache_dir,
+        'cache_dir': YTDLP_CACHE_DIR,
         # The PO token provider address must be passed explicitly: the bgutil
         # plugin otherwise looks for it on localhost, gets no token, and
         # YouTube answers "Sign in to confirm you're not a bot" with no
@@ -695,6 +694,22 @@ async def proxy_stream(request: Request, url: str):
             range_header = outgoing_headers.get("Range", "")
             range_start, range_end = parse_range_header(range_header)
 
+            # googlevideo serves a Range header through its throttled
+            # progressive path and the `range=` query parameter at full
+            # speed. Measured on one rendition, 1 MB at the same offset:
+            # 122 ms via the header, 29 ms via the parameter. That gap is
+            # invisible while the buffer is ahead and decisive when it is
+            # empty and has to be refilled before anything can play — a
+            # seek. Declining leaves the request exactly as it was.
+            media_range = rewrite_range(url, range_start, range_end) if range_header else None
+            upstream_url = url
+            if media_range:
+                upstream_url = media_range.url
+                # The response will be a plain 200 of exactly these bytes,
+                # so the range this proxy answers is now fully known.
+                range_start, range_end = media_range.start, media_range.end
+                outgoing_headers.pop("Range", None)
+
             # Notify prefetcher about this segment request (triggers prefetch of next segments)
             await notify_segment_for_url(url)
 
@@ -800,7 +815,8 @@ async def proxy_stream(request: Request, url: str):
 
             # Fetch from upstream
             upstream_started = time.monotonic()
-            r, pinned = await open_upstream_stream(segment_client, url, outgoing_headers)
+            r, pinned = await open_upstream_stream(
+                segment_client, upstream_url, outgoing_headers)
             upstream_ms = (time.monotonic() - upstream_started) * 1000
             upstream_host = pinned.hostname
             expected_bytes = int(r.headers.get("content-length", 0)) or None
@@ -827,6 +843,22 @@ async def proxy_stream(request: Request, url: str):
             for key in ["content-type", "content-length", "content-range"]:
                 if key in r.headers:
                     response_headers[key] = r.headers[key]
+
+            # A range moved into the query comes back as a 200, so the
+            # partial response this proxy owes its caller is described
+            # here. The length the origin actually sent is authoritative:
+            # a 206 whose body and Content-Range disagree is rejected.
+            # Lower-case keys throughout, matching the copy above: HTTP
+            # header names are case-insensitive but dict lookups are not,
+            # and the stored Content-Range is read back by key.
+            status_code = r.status_code
+            if media_range and r.status_code == 200:
+                sent = int(r.headers.get("content-length", 0)) or media_range.length
+                end = media_range.start + sent - 1
+                response_headers["content-range"] = (
+                    f"bytes {media_range.start}-{end}/{media_range.total}")
+                response_headers["content-length"] = str(sent)
+                status_code = 206
 
             # Check if we should cache
             should_cache = r.status_code in (200, 206)
@@ -880,8 +912,13 @@ async def proxy_stream(request: Request, url: str):
                                 "range_end": range_end,
                                 "size": total,
                                 # Replayed verbatim on a hit: a 206 that cannot
-                                # state its range is rejected downstream.
-                                "content_range": r.headers.get("content-range"),
+                                # state its range is rejected downstream. Read
+                                # from the response being sent, not from the
+                                # origin's headers — a range moved into the
+                                # query comes back as a 200 with no
+                                # Content-Range, and the one that matters is
+                                # the one this proxy synthesised.
+                                "content_range": response_headers.get("content-range"),
                                 "content_type": content_type,
                                 "cached_at": time.time(),
                             }
@@ -896,7 +933,7 @@ async def proxy_stream(request: Request, url: str):
                                     full_data,
                                     content_type,
                                     is_audio=is_audio,
-                                    content_range=r.headers.get("content-range"),
+                                    content_range=response_headers.get("content-range"),
                                 )
                                 logger.info(f"Added to memory cache: {url[:60]}... ({total} bytes)")
 
@@ -936,7 +973,7 @@ async def proxy_stream(request: Request, url: str):
                             error=transfer_error,
                         )
 
-                return StreamingResponse(stream_and_cache(), status_code=r.status_code, headers=response_headers)
+                return StreamingResponse(stream_and_cache(), status_code=status_code, headers=response_headers)
             else:
                 async def stream_only():
                     transfer_started = time.monotonic()
@@ -974,7 +1011,7 @@ async def proxy_stream(request: Request, url: str):
                             error=transfer_error,
                         )
 
-                return StreamingResponse(stream_only(), status_code=r.status_code, headers=response_headers)
+                return StreamingResponse(stream_only(), status_code=status_code, headers=response_headers)
 
     except Exception as e:
         logger.error(f"Proxy error for {url}: {e}")
