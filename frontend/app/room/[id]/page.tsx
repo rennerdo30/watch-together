@@ -95,6 +95,11 @@ export default function RoomPage() {
     const [showDebug, setShowDebug] = useState(false);
     const [syncState, setSyncState] = useState({ isPlaying: false, timestamp: 0, lastSync: '' });
     const [loadingQueueIndex, setLoadingQueueIndex] = useState<number | null>(null);
+    // A room video is being re-resolved for fresh stream URLs. Tracked
+    // separately from loadingQueueIndex, which is only set on the client
+    // that clicked: every other member gets `set_video` out of the blue and
+    // must show the spinner too, not an empty room.
+    const [isRestoringVideo, setIsRestoringVideo] = useState(false);
     const [actualPlayerTime, setActualPlayerTime] = useState(0); // Real player time for badge display
     const [isPermanent, setIsPermanent] = useState(false); // Room permanent status
 
@@ -102,7 +107,7 @@ export default function RoomPage() {
     // queue. The empty state is hidden while this is true: both used to
     // render at once, and the spinner's translucent backdrop let the
     // "Nothing playing yet" text show through it.
-    const isResolving = loading || loadingQueueIndex !== null;
+    const isResolving = loading || loadingQueueIndex !== null || isRestoringVideo;
 
     // The WebSocket handler is created once, so reading videoData from its
     // closure always saw the value from mount. Every `sync` therefore looked
@@ -377,6 +382,7 @@ export default function RoomPage() {
                         // New video or first load: Re-resolve for fresh stream URLs
                         if (syncVideoData.original_url) {
                             console.log('[Room] Sync: Re-resolving video for fresh stream URLs...');
+                            setIsRestoringVideo(true);
                             resolveUrl(syncVideoData.original_url)
                                 .then((freshData) => {
                                     console.log('[Room] Sync: Got fresh stream:', freshData.stream_type, freshData.quality);
@@ -385,7 +391,8 @@ export default function RoomPage() {
                                 .catch((err) => {
                                     console.warn('[Room] Sync: Re-resolve failed, using cached data:', err.message);
                                     setVideoData(syncVideoData);
-                                });
+                                })
+                                .finally(() => setIsRestoringVideo(false));
                         } else {
                             setVideoData(syncVideoData);
                         }
@@ -419,7 +426,6 @@ export default function RoomPage() {
             case 'user_joined': if (payload.members) setMembers(payload.members); break;
             case 'user_left': if (payload.members) setMembers(payload.members); break;
             case 'set_video':
-                setLoadingQueueIndex(null); // Clear loading state
                 // Reset sync state for new video
                 setSyncState(prev => ({ ...prev, timestamp: 0, isPlaying: true }));
 
@@ -428,8 +434,14 @@ export default function RoomPage() {
                 if (payload.video_data?.original_url) {
                     const queuedVideoData = payload.video_data;
                     console.log('[Room] Re-resolving video for fresh stream URLs...');
-                    // Show cached data immediately as placeholder
-                    setVideoData(queuedVideoData);
+                    // The queued copy is *not* shown while this runs. Its
+                    // stream URLs are however old the queue entry is, and
+                    // mounting the player on them makes it ask for a
+                    // manifest built from expired URLs — which fails, and
+                    // the failure is what the viewer sees even once the
+                    // fresh URLs arrive. The spinner stays up instead.
+                    setVideoData(null);
+                    setIsRestoringVideo(true);
 
                     resolveUrl(queuedVideoData.original_url)
                         .then((freshData) => {
@@ -438,10 +450,20 @@ export default function RoomPage() {
                         })
                         .catch((err) => {
                             console.warn('[Room] Re-resolve failed:', err.message);
-                            // Keep showing cached data, might still work if not expired
+                            // Fall back to the queued copy: an entry added
+                            // moments ago still has usable URLs, and showing
+                            // something beats showing nothing.
+                            setVideoData(queuedVideoData);
+                        })
+                        .finally(() => {
+                            setIsRestoringVideo(false);
+                            setLoadingQueueIndex(null);
                         });
                 } else if (payload.video_data) {
                     setVideoData(payload.video_data);
+                    setLoadingQueueIndex(null);
+                } else {
+                    setLoadingQueueIndex(null);
                 }
                 break;
             case 'play':

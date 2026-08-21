@@ -206,6 +206,83 @@ class TestResolveCachesItsResult:
         assert manifest.headers["content-type"].startswith("application/dash+xml")
 
 
+class TestManifestResolvesOnDemand:
+    """A room's queue outlives the resolved formats behind it.
+
+    Stream URLs expire after a couple of hours and the format cache lives
+    in process memory, so pressing play on an older queue item — or on
+    anything at all after a restart — reaches the manifest endpoint with
+    nothing cached. It used to answer
+
+        404 {"detail": "Video has not been resolved yet. Call /api/resolve first."}
+
+    which the player reported as "the video could not be loaded" (Shaka
+    1001). The page does re-resolve, but the manifest was requested before
+    that finished, and the failure stuck.
+    """
+
+    @pytest.fixture
+    def stub_manifest(self, monkeypatch):
+        import main as main_module
+
+        async def fake_build(client_, duration_seconds, video_formats, audio_formats,
+                             proxy_base, headers=None):
+            return "<MPD/>"
+
+        monkeypatch.setattr(main_module, "build_manifest_for_formats", fake_build)
+
+    async def test_manifest_resolves_a_video_nobody_resolved(
+            self, client, captured_options, stub_manifest):
+        url = "https://youtu.be/never-resolved"
+        from services.database import get_cached_format
+        assert await get_cached_format(url) is None
+
+        manifest = client.get("/api/dash-manifest",
+                              params={"url": url, "user": "a@example.com"})
+
+        assert manifest.status_code == 200
+        assert manifest.headers["content-type"].startswith("application/dash+xml")
+        assert captured_options, "the manifest endpoint did not resolve anything"
+
+    async def test_the_resolve_it_triggers_is_cached(
+            self, client, captured_options, stub_manifest):
+        """Otherwise every segment request re-resolves the whole video."""
+        url = "https://youtu.be/cache-me-too"
+        client.get("/api/dash-manifest", params={"url": url, "user": "a@example.com"})
+
+        from services.database import get_cached_format
+        assert await get_cached_format(url) is not None
+
+    async def test_a_cached_video_is_not_resolved_again(
+            self, client, captured_options, stub_manifest):
+        url = "https://youtu.be/already-resolved"
+        client.get("/api/resolve", params={"url": url, "user": "a@example.com"})
+        attempts_after_resolve = len(captured_options)
+
+        client.get("/api/dash-manifest", params={"url": url, "user": "a@example.com"})
+
+        assert len(captured_options) == attempts_after_resolve
+
+    async def test_an_unresolvable_video_still_reports_the_real_reason(
+            self, client, monkeypatch, stub_manifest):
+        """A 404 saying "call /api/resolve first" is not actionable."""
+        import main as main_module
+
+        def no_formats(url, ydl_opts):
+            return {"title": "Gone", "formats": []}
+
+        monkeypatch.setattr(main_module, "_extract_with_options", no_formats)
+
+        response = client.get("/api/dash-manifest",
+                              params={"url": "https://youtu.be/gone",
+                                      "user": "a@example.com"})
+
+        # 400 with the resolver's own reason, not a 404 telling the caller
+        # to do something it just did on their behalf.
+        assert response.status_code == 400
+        assert "playable" in response.json()["detail"].lower()
+
+
 class TestQualityLadder:
     """A viewer on a slow link needs the low rungs most.
 
