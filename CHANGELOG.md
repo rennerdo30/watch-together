@@ -17,6 +17,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   broadcast a real `play` — so a paused room resumed itself. Both values are now read at
   load time and the engine is keyed on the stream alone.
 
+- **Seeking Far Into A Video**: jumping an hour in stalled for a long time
+  while playing from the start did not. googlevideo accepts a byte range two
+  ways and they are not equivalent: a `Range` header goes through its throttled
+  progressive path, while the `range=start-end` query parameter — what yt-dlp
+  uses — returns the same bytes at full speed (measured on one 720p rendition,
+  1 MB at the same offset: 122 ms via the header, 29 ms via the parameter). The
+  proxy now uses the parameter and synthesises the 206 it owes its caller, since
+  the response comes back as a plain 200. Alongside it, Shaka's rebuffering goal
+  drops from 12s to 4s: that goal is paid in full on every seek with an empty
+  buffer, and it had been raised against stalling that turned out to be the
+  player reloading itself.
+- **Cached Entries Are Whole Or Absent**: the janitor aged and evicted each file
+  on its own, so a cached body could outlive its metadata sidecar or the
+  reverse — leaving something that can never be served but still counts against
+  the budget. Sidecars now expire and are evicted with their body, and orphans
+  of either kind are swept.
+
 ### Performance
 
 - **Ranged Segments Are Cached On Disk Again**: every request the MSE engine makes carries

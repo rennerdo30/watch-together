@@ -44,11 +44,19 @@ export const SHAKA_BUFFER_BEHIND_SECONDS = 30;
 /**
  * How much must be buffered before playback starts or resumes.
  *
- * Every segment travels viewer -> Cloudflare -> tunnel -> origin -> CDN and
- * back, so a small cushion is spent before the next segment arrives and the
- * player stalls again. A larger one turns a stutter into a single wait.
+ * This is paid in full on every seek: the buffer is empty at the new
+ * position, so nothing is displayed until the goal is met. It was raised to
+ * 12s while playback was stalling constantly, but that turned out to be the
+ * player being torn down and reloaded every few seconds, not a thin
+ * cushion. With that fixed, and the origin serving a ranged read at any
+ * depth in about 20ms, a large goal buys little and costs a long stare at a
+ * spinner after every jump.
+ *
+ * `SHAKA_BUFFER_GOAL_SECONDS` still fills well ahead once playing, so a
+ * stutter is protected against by the buffer that accumulates during
+ * playback rather than by delaying its start.
  */
-export const SHAKA_REBUFFER_GOAL_SECONDS = 12;
+export const SHAKA_REBUFFER_GOAL_SECONDS = 4;
 
 /**
  * Starting bandwidth guess, in bits per second.
