@@ -1,6 +1,7 @@
 """
 Services module exports.
 """
+from services.gvs_range import rewrite_range, MediaRange
 from services.cache import (
     parse_range_header,
     get_segment_disk_key,
@@ -20,6 +21,8 @@ __all__ = [
     "parse_range_header",
     "get_segment_disk_key",
     "stream_identity",
+    "rewrite_range",
+    "MediaRange",
     "measure_cache_size",
     "check_disk_space",
     "get_current_cache_size",
