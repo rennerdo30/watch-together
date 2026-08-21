@@ -345,6 +345,17 @@ async def resolve_stream(
     """
     Uses yt-dlp to resolve the input URL to a playable stream URL.
     """
+    return await resolve_video(request, url, user_agent)
+
+
+async def resolve_video(request: Request, url: str, user_agent: str = None) -> dict:
+    """Resolve a URL to playable streams and cache the result.
+
+    Shared by `/api/resolve` and `/api/dash-manifest`: the manifest cannot
+    be built without resolved formats, and requiring the caller to have
+    resolved first turns an expired cache entry or a restarted backend into
+    a dead end for anything already in a room's queue.
+    """
     user_email = get_user_from_request(request)
     logger.info(f"Resolving URL: {url} (User: {user_email or 'anonymous'})")
 
@@ -505,10 +516,16 @@ async def dash_manifest(request: Request, url: str):
 
     cached = await get_cached_format(url)
     if not cached:
-        raise HTTPException(
-            status_code=404,
-            detail="Video has not been resolved yet. Call /api/resolve first.",
-        )
+        # Resolve it now rather than refusing. Stream URLs expire after a
+        # couple of hours and the cache is in process memory, so anything
+        # left in a room's queue — or any video after a restart — arrives
+        # here with nothing cached. Refusing made pressing play on an older
+        # queue item a permanent failure: the player asked for the manifest
+        # before the page's own re-resolve had finished, got a 404, and
+        # reported "the video could not be loaded".
+        logger.info(f"Manifest requested for an unresolved video, resolving: {url}")
+        cached = await resolve_video(request, url,
+                                     request.headers.get("user-agent"))
 
     duration = cached.get("duration")
     if not duration:

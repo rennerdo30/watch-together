@@ -192,6 +192,38 @@ class TestPlaybackEngineIsNotKeyedOnRoomState:
         assert "callbackRefs.current.autoPlay" in text
 
 
+class TestQueuedVideosAreNotPlayedFromStaleUrls:
+    """A queue entry's stream URLs are as old as the entry.
+
+    `set_video` used to show the queued copy immediately as a placeholder
+    and re-resolve behind it. The player mounted on those expired URLs and
+    asked for a manifest built from them; the request failed, and the
+    failure is what the viewer kept seeing even after fresh URLs arrived.
+    The spinner is shown instead until the re-resolve lands.
+    """
+
+    ROOM_PAGE = REPO_ROOT / "frontend" / "app" / "room" / "[id]" / "page.tsx"
+
+    def test_the_queued_copy_is_not_shown_while_re_resolving(self):
+        text = self.ROOM_PAGE.read_text()
+        set_video = text.split("case 'set_video':")[1].split("case '")[0]
+        assert "setVideoData(null);" in set_video
+        assert "setVideoData(queuedVideoData);" in set_video, (
+            "a resolve failure should still fall back to the queued copy"
+        )
+        # The fallback must be in the failure path, not the happy one.
+        assert set_video.index("setVideoData(null);") < \
+            set_video.index("setVideoData(queuedVideoData);")
+
+    def test_every_member_sees_the_spinner_not_an_empty_room(self):
+        """`loadingQueueIndex` is only set on the client that clicked."""
+        text = self.ROOM_PAGE.read_text()
+        assert "isRestoringVideo" in text
+        assert "|| isRestoringVideo" in text, (
+            "the re-resolve state must feed the resolving indicator"
+        )
+
+
 class TestPlayerIsNotRemountedOnReResolve:
     """Re-resolving the same video must not restart playback.
 

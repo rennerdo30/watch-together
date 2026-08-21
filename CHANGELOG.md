@@ -17,6 +17,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   broadcast a real `play` — so a paused room resumed itself. Both values are now read at
   load time and the engine is keyed on the stream alone.
 
+- **Playing An Older Video From A Room's Queue**: `/api/dash-manifest` answered
+  `404 "Video has not been resolved yet. Call /api/resolve first."`, which the
+  player reported as "the video could not be loaded" (Shaka 1001). Stream URLs
+  expire after a couple of hours and the format cache lives in process memory,
+  so anything left in a queue — or anything at all after a restart — arrived
+  there with nothing cached. The endpoint now resolves on demand and caches the
+  result, sharing one code path with `/api/resolve`. The room page also stopped
+  mounting the player on the queued copy's expired URLs while its own re-resolve
+  was still running, which is what made the failure stick; every member now sees
+  the resolving indicator instead of an empty room.
+
 - **Seeking Far Into A Video**: jumping an hour in stalled for a long time
   while playing from the start did not. googlevideo accepts a byte range two
   ways and they are not equivalent: a `Range` header goes through its throttled
