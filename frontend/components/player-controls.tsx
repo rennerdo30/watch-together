@@ -104,7 +104,7 @@ export function PlayerControls({
                         <div className="absolute inset-0 bg-white/20 rounded-full overflow-hidden">
                             {/* Progress Fill */}
                             <div
-                                className="h-full bg-violet-500 rounded-full transition-all duration-100"
+                                className="h-full bg-[color:var(--accent-primary)] rounded-full transition-all duration-100"
                                 style={{ width: `${progress}%` }}
                             />
                         </div>
@@ -215,7 +215,7 @@ export function PlayerControls({
                                 className={cn(
                                     "w-8 h-8 rounded-full flex items-center justify-center transition-all",
                                     normalizationActive
-                                        ? "bg-violet-500/20 text-violet-400"
+                                        ? "bg-[color:var(--accent-glow)] text-[color:var(--accent-primary)]"
                                         : "hover:bg-white/10 text-white/60 hover:text-white"
                                 )}
                             >
@@ -294,7 +294,7 @@ export function PlayerControls({
                         {normalizationActive && onNormalizationGainChange && typeof normalizationGain === 'number' && (
                             <div className="px-3 py-2 border-b border-white/5 mb-2">
                                 <div className="flex justify-between items-center mb-2">
-                                    <span className="text-[10px] font-medium text-violet-400 flex items-center gap-1">
+                                    <span className="text-[10px] font-medium text-[color:var(--accent-primary)] flex items-center gap-1">
                                         <Ear className="w-3 h-3" /> Gain
                                     </span>
                                     <span className="text-[10px] text-zinc-400">
@@ -309,7 +309,7 @@ export function PlayerControls({
                                     aria-label="Normalization gain"
                                     value={normalizationGain}
                                     onChange={(e) => onNormalizationGainChange(parseFloat(e.target.value))}
-                                    className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-violet-500"
+                                    className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-[color:var(--accent-primary)]"
                                 />
                             </div>
                         )}
@@ -346,7 +346,7 @@ export function PlayerControls({
                             className={cn(
                                 "w-full px-3 py-2 rounded-lg text-left text-xs font-medium transition-all",
                                 currentQuality === -1
-                                    ? "bg-violet-500/20 text-violet-400"
+                                    ? "bg-[color:var(--accent-glow)] text-[color:var(--accent-primary)]"
                                     : "text-zinc-400 hover:bg-white/5 hover:text-white"
                             )}
                         >
@@ -361,14 +361,14 @@ export function PlayerControls({
                                 className={cn(
                                     "w-full px-3 py-2 rounded-lg text-left text-xs font-medium transition-all flex items-center justify-between",
                                     currentQuality === q.index
-                                        ? "bg-violet-500/20 text-violet-400"
+                                        ? "bg-[color:var(--accent-glow)] text-[color:var(--accent-primary)]"
                                         : "text-zinc-400 hover:bg-white/5 hover:text-white"
                                 )}
                             >
                                 <div className="flex items-center gap-2">
                                     <span>{q.height ? `${q.height}p` : `Level ${q.index}`}</span>
                                     {q.vcodec && (
-                                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/5 text-zinc-500 uppercase">
+                                        <span className="ui-label px-1.5 py-0.5 rounded bg-white/5">
                                             {q.vcodec.includes('vp9') ? 'VP9' : q.vcodec.includes('av01') ? 'AV1' : q.vcodec.includes('avc') ? 'H264' : q.vcodec.split('.')[0]}
                                         </span>
                                     )}

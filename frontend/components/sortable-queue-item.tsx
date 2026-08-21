@@ -14,7 +14,7 @@ interface ResolveResponse {
 }
 
 const LIVE_BADGE_CLASSES =
-    'absolute top-1 left-1 px-1 py-0.5 bg-red-600 text-[8px] font-bold on-accent-light rounded uppercase';
+    'absolute top-1 left-1 px-1.5 py-0.5 bg-[color:var(--accent-primary)] text-[10px] font-semibold on-accent-light rounded';
 
 /** Host name for display, tolerating anything the resolver hands back. */
 function displayHost(url: string): string {

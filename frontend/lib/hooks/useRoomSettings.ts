@@ -16,7 +16,8 @@ import {
     getThemeById,
     loadCustomTheme,
     saveCustomTheme,
-    createCustomTheme
+    createCustomTheme,
+    getThemeCSSVars
 } from '@/lib/themes';
 import toast from 'react-hot-toast';
 
@@ -62,8 +63,8 @@ export interface UseRoomSettingsReturn {
 export function useRoomSettings(): UseRoomSettingsReturn {
     // Theme state
     const [activeTheme, setActiveThemeState] = useState<Theme>(DEFAULT_THEME);
-    const [customBgColor, setCustomBgColor] = useState('#09090b');
-    const [customAccentColor, setCustomAccentColor] = useState('#8b5cf6');
+    const [customBgColor, setCustomBgColor] = useState(DEFAULT_THEME.colors.bg);
+    const [customAccentColor, setCustomAccentColor] = useState(DEFAULT_THEME.colors.accent);
     const [showCustomTheme, setShowCustomTheme] = useState(false);
 
     // Display state
@@ -126,6 +127,27 @@ export function useRoomSettings(): UseRoomSettingsReturn {
             setSyncThresholdState(parseFloat(savedThreshold));
         }
     }, []);
+
+    // Paint the active theme onto the document as tokens.
+    //
+    // The theme's classes are static lookups of `--accent-primary` and the
+    // surface variables, because Tailwind can only generate utilities it can
+    // read in the source and an interpolated colour is invisible to it. The
+    // colours themselves therefore have to arrive this way. Written on <html>
+    // rather than on the shell so overlays rendered in a portal — dialogs,
+    // toasts — inherit them too.
+    useEffect(() => {
+        const root = document.documentElement;
+        const vars = getThemeCSSVars(activeTheme);
+        for (const [name, value] of Object.entries(vars)) {
+            root.style.setProperty(name, value);
+        }
+        return () => {
+            for (const name of Object.keys(vars)) {
+                root.style.removeProperty(name);
+            }
+        };
+    }, [activeTheme]);
 
     // Setters with persistence
     const setActiveTheme = useCallback((theme: Theme) => {

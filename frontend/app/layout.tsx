@@ -1,15 +1,22 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Inter_Tight, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { COLOR_MODE_BOOTSTRAP_SCRIPT } from "@/lib/color-mode";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+/**
+ * Geist + a violet accent is the default look of a particular starter stack,
+ * which is most of why the app read as generated. Inter Tight is the same
+ * class of neutral grotesque with tighter spacing and a little more character
+ * at the small sizes this UI is mostly made of, and it carries the 550 weight
+ * the type scale asks for.
+ */
+const uiSans = Inter_Tight({
+  variable: "--font-ui-sans",
   subsets: ["latin"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const uiMono = JetBrains_Mono({
+  variable: "--font-ui-mono",
   subsets: ["latin"],
 });
 
@@ -24,8 +31,8 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
-    { media: "(prefers-color-scheme: dark)", color: "#09090b" },
+    { media: "(prefers-color-scheme: light)", color: "#f8f9fa" },
+    { media: "(prefers-color-scheme: dark)", color: "#0a0b0d" },
   ],
 };
 
@@ -49,7 +56,7 @@ export default function RootLayout({
         />
       </head>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${uiSans.variable} ${uiMono.variable} antialiased`}
       >
         {children}
       </body>

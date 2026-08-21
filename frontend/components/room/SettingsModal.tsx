@@ -128,7 +128,7 @@ export function SettingsModal({
                         <button
                             onClick={() => setShowCustomTheme(!showCustomTheme)}
                             className={`w-full p-2 rounded-lg border text-[10px] font-bold transition-all flex items-center justify-between ${showCustomTheme
-                                    ? 'bg-violet-500/10 border-violet-500/20 text-violet-400'
+                                    ? 'bg-[color:var(--accent-glow)] border-[color:var(--accent-primary)] text-[color:var(--accent-primary)]'
                                     : 'bg-white/5 border-white/5 text-zinc-500 hover:border-white/10'
                                 }`}
                         >
@@ -141,7 +141,7 @@ export function SettingsModal({
                             <div className="space-y-3 p-3 rounded-lg bg-white/5 border border-white/5">
                                 <div className="flex items-center gap-3">
                                     <div className="flex-1">
-                                        <label className="text-[9px] text-zinc-500 uppercase">Background</label>
+                                        <label className="ui-label">Background</label>
                                         <div className="flex items-center gap-2 mt-1">
                                             <input
                                                 type="color"
@@ -153,12 +153,12 @@ export function SettingsModal({
                                                 type="text"
                                                 value={customBgColor}
                                                 onChange={(e) => setCustomBgColor(e.target.value)}
-                                                className="flex-1 h-8 bg-white/5 border border-white/10 rounded-lg px-2 text-[10px] font-mono text-white focus:outline-none focus:border-violet-500/50"
+                                                className="flex-1 h-8 bg-white/5 border border-white/10 rounded-lg px-2 text-[10px] font-mono text-white focus:outline-none focus:border-[color:var(--accent-primary)]"
                                             />
                                         </div>
                                     </div>
                                     <div className="flex-1">
-                                        <label className="text-[9px] text-zinc-500 uppercase">Accent</label>
+                                        <label className="ui-label">Accent</label>
                                         <div className="flex items-center gap-2 mt-1">
                                             <input
                                                 type="color"
@@ -170,14 +170,14 @@ export function SettingsModal({
                                                 type="text"
                                                 value={customAccentColor}
                                                 onChange={(e) => setCustomAccentColor(e.target.value)}
-                                                className="flex-1 h-8 bg-white/5 border border-white/10 rounded-lg px-2 text-[10px] font-mono text-white focus:outline-none focus:border-violet-500/50"
+                                                className="flex-1 h-8 bg-white/5 border border-white/10 rounded-lg px-2 text-[10px] font-mono text-white focus:outline-none focus:border-[color:var(--accent-primary)]"
                                             />
                                         </div>
                                     </div>
                                 </div>
                                 <button
                                     onClick={handleApplyCustomTheme}
-                                    className="w-full h-8 bg-violet-600 hover:bg-violet-500 text-white text-[10px] font-bold rounded-lg transition-colors"
+                                    className="w-full h-8 bg-[color:var(--accent-primary)] hover:brightness-110 text-white text-[10px] font-bold rounded-lg transition-colors"
                                 >
                                     Apply Custom Theme
                                 </button>
@@ -200,21 +200,21 @@ export function SettingsModal({
                                 setFontSize(val);
                                 localStorage.setItem('wt_font_size', val.toString());
                             }}
-                            className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-violet-500"
+                            className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-[color:var(--accent-primary)]"
                         />
                     </div>
 
                     {/* Proxy Toggle */}
                     <button
                         onClick={() => { setUseProxy(!useProxy); localStorage.setItem('wt_proxy', String(!useProxy)); }}
-                        className={`w-full p-4 rounded-xl border flex items-center justify-between transition-all ${useProxy ? 'bg-violet-500/10 border-violet-500/20' : 'bg-zinc-800/30 border-zinc-800'
+                        className={`w-full p-4 rounded-xl border flex items-center justify-between transition-all ${useProxy ? 'bg-[color:var(--accent-glow)] border-[color:var(--accent-primary)]' : 'bg-zinc-800/30 border-zinc-800'
                             }`}
                     >
                         <div className="text-left">
                             <span className="font-medium text-white text-sm">Proxy Mode</span>
                             <p className="text-xs text-zinc-500 mt-0.5">Bypass regional restrictions</p>
                         </div>
-                        <div className={`w-10 h-5 rounded-full transition-all flex items-center px-0.5 ${useProxy ? 'bg-violet-500' : 'bg-zinc-700'}`}>
+                        <div className={`w-10 h-5 rounded-full transition-all flex items-center px-0.5 ${useProxy ? 'bg-[color:var(--accent-primary)]' : 'bg-zinc-700'}`}>
                             <div className={`w-4 h-4 bg-white rounded-full transition-all shadow-sm ${useProxy ? 'translate-x-5' : 'translate-x-0'}`} />
                         </div>
                     </button>
@@ -230,7 +230,7 @@ export function SettingsModal({
                             </p>
                             <textarea
                                 placeholder={isLoadingCookies ? 'Loading saved cookies...' : '# Netscape HTTP Cookie File...'}
-                                className="w-full h-48 bg-zinc-900 border border-zinc-700 rounded-lg p-3 text-xs font-mono text-zinc-300 focus:outline-none focus:border-violet-500/50 resize-y placeholder:text-zinc-600"
+                                className="w-full h-48 bg-zinc-900 border border-zinc-700 rounded-lg p-3 text-xs font-mono text-zinc-300 focus:outline-none focus:border-[color:var(--accent-primary)] resize-y placeholder:text-zinc-600"
                                 value={cookieContent}
                                 onChange={(e) => setCookieContent(e.target.value)}
                                 disabled={isLoadingCookies}
