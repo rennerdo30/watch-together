@@ -124,14 +124,29 @@ class TestPlayerToleratesHighLatency:
         text = self.PLAYER_CONSTANTS.read_text()
         assert "SHAKA_INITIAL_BANDWIDTH_ESTIMATE" in text
 
-    def test_rebuffer_goal_leaves_a_real_cushion(self):
-        """A small cushion is spent before the next segment lands."""
+    def test_rebuffer_goal_is_a_cushion_not_a_wait(self):
+        """The goal is paid in full on every seek, with an empty buffer.
+
+        It was once raised to 12s against constant stalling, which turned
+        out to be the player reloading itself rather than a thin cushion.
+        A goal that large is a long spinner after every jump; too small a
+        one is spent before the next segment lands. `bufferingGoal` is
+        what protects steady playback.
+        """
         import re
 
         text = self.PLAYER_CONSTANTS.read_text()
         match = re.search(r"SHAKA_REBUFFER_GOAL_SECONDS = (\d+)", text)
         assert match, "the rebuffering goal is no longer defined"
-        assert int(match.group(1)) >= 8
+        goal = int(match.group(1))
+        assert 2 <= goal <= 6, (
+            f"{goal}s is either too thin to survive one late segment or "
+            "long enough to be felt on every seek"
+        )
+        ahead = re.search(r"SHAKA_BUFFER_GOAL_SECONDS = (\d+)", text)
+        assert ahead and int(ahead.group(1)) > goal * 4, (
+            "playback must fill well beyond the point where it resumes"
+        )
 
     def test_segment_requests_are_retried(self):
         text = self.PLAYER_CONSTANTS.read_text()
