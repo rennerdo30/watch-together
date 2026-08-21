@@ -8,6 +8,7 @@
 #   ./deploy/host-status.sh --logs=backend      # tail one service's log
 #   ./deploy/host-status.sh --logs=backend --tail=200
 #   ./deploy/host-status.sh --probe=/api/rooms   # ask the backend from inside
+#   ./deploy/host-status.sh --probe=frontend:3000/  # or any service:port/path
 #   ./deploy/host-status.sh --diag               # yt-dlp / PO provider diagnostics
 #   ./deploy/host-status.sh --clients=<video-url> [--as=<email>]
 #                                                 # which clients resolve, optionally
@@ -117,8 +118,15 @@ fi
 # browser session.
 if [ -n "$PROBE_PATH" ]; then
 	cd "$REMOTE" || exit 1
-	echo "── GET http://backend:8000${PROBE_PATH} ──────────"
-	$COMPOSE exec -T nginx sh -c "wget -q -T 120 -O - 'http://backend:8000${PROBE_PATH}' 2>&1 || echo '(request failed)'"
+	# A leading slash means the backend, which is the usual subject. Anything
+	# else is taken as service:port/path, so the frontend — the only way to
+	# see what a browser is actually served — is reachable too.
+	case "$PROBE_PATH" in
+		/*) TARGET="http://backend:8000${PROBE_PATH}" ;;
+		*)  TARGET="http://${PROBE_PATH}" ;;
+	esac
+	echo "── GET ${TARGET} ──────────"
+	$COMPOSE exec -T nginx sh -c "wget -q -T 120 -O - '${TARGET}' 2>&1 || echo '(request failed)'"
 	exit 0
 fi
 
