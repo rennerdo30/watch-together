@@ -615,3 +615,145 @@ class TestCacheBudgetDoesNotSilentlyDisableCaching:
         (tmp_path / "seg_abc_0-99.123.tmp").write_bytes(b"z" * 999)
 
         assert cache_module.measure_cache_size() == 100
+
+
+class TestStaleCacheEntriesAreRemoved:
+    """What the janitor must clear, and what it must never half-clear.
+
+    A body and its `.meta` sidecar are one entry: the read path needs both,
+    so expiring or evicting one half leaves something that can never be
+    served but still counts against the budget. Partial downloads left by a
+    crash are dead weight for the same reason.
+    """
+
+    @pytest.fixture
+    def cache_dir(self, tmp_path, monkeypatch):
+        import services.cache as cache_module
+
+        monkeypatch.setattr(cache_module, "CACHE_DIR", str(tmp_path))
+        monkeypatch.setattr(cache_module, "_cache_size_measurement", (0, 0.0))
+        return tmp_path
+
+    def write_entry(self, cache_dir, name, size=100, age_seconds=0, with_meta=True):
+        import os
+        import time as _time
+
+        body = cache_dir / name
+        body.write_bytes(b"x" * size)
+        if with_meta:
+            (cache_dir / f"{name}.meta").write_text('{"size": %d}' % size)
+        if age_seconds:
+            when = _time.time() - age_seconds
+            os.utime(body, (when, when))
+            if with_meta:
+                os.utime(cache_dir / f"{name}.meta", (when, when))
+        return body
+
+    async def test_expired_entries_and_their_metadata_go_together(
+            self, cache_dir, monkeypatch):
+        import services.cache as cache_module
+        from core.config import CACHE_TTL_SECONDS
+
+        monkeypatch.setattr(cache_module, "is_content_active", lambda h: False)
+        fresh = self.write_entry(cache_dir, "seg_aaa_0-99", age_seconds=0)
+        stale = self.write_entry(cache_dir, "seg_bbb_0-99",
+                                 age_seconds=CACHE_TTL_SECONDS + 60)
+
+        await self.run_one_pass(monkeypatch, cache_module)
+
+        assert fresh.exists()
+        assert (cache_dir / "seg_aaa_0-99.meta").exists()
+        assert not stale.exists()
+        assert not (cache_dir / "seg_bbb_0-99.meta").exists(), (
+            "metadata outlived its body, leaving an unusable entry")
+
+    async def test_orphaned_metadata_is_removed(self, cache_dir, monkeypatch):
+        import services.cache as cache_module
+
+        monkeypatch.setattr(cache_module, "is_content_active", lambda h: False)
+        (cache_dir / "seg_ccc_0-99.meta").write_text('{"size": 100}')
+
+        await self.run_one_pass(monkeypatch, cache_module)
+
+        assert not (cache_dir / "seg_ccc_0-99.meta").exists()
+
+    async def test_body_without_metadata_is_removed(self, cache_dir, monkeypatch):
+        """It cannot state its own range, so it can never answer a request."""
+        import services.cache as cache_module
+
+        monkeypatch.setattr(cache_module, "is_content_active", lambda h: False)
+        body = self.write_entry(cache_dir, "seg_ddd_0-99", with_meta=False)
+
+        await self.run_one_pass(monkeypatch, cache_module)
+
+        assert not body.exists()
+
+    async def test_abandoned_partial_downloads_are_removed(
+            self, cache_dir, monkeypatch):
+        import os
+        import time as _time
+        import services.cache as cache_module
+        from core.config import STALE_TEMP_FILE_SECONDS
+
+        monkeypatch.setattr(cache_module, "is_content_active", lambda h: False)
+        recent = cache_dir / "seg_eee_0-99.1.tmp"
+        recent.write_bytes(b"z" * 10)
+        old = cache_dir / "seg_fff_0-99.2.tmp"
+        old.write_bytes(b"z" * 10)
+        when = _time.time() - (STALE_TEMP_FILE_SECONDS + 60)
+        os.utime(old, (when, when))
+
+        await self.run_one_pass(monkeypatch, cache_module)
+
+        assert recent.exists(), "a download still in progress must not be deleted"
+        assert not old.exists()
+
+    async def test_oversized_cache_is_evicted_oldest_first(
+            self, cache_dir, monkeypatch):
+        import services.cache as cache_module
+
+        monkeypatch.setattr(cache_module, "is_content_active", lambda h: False)
+        monkeypatch.setattr(cache_module, "MAX_CACHE_SIZE_BYTES", 250)
+        oldest = self.write_entry(cache_dir, "seg_111_0-99", size=100, age_seconds=300)
+        middle = self.write_entry(cache_dir, "seg_222_0-99", size=100, age_seconds=200)
+        newest = self.write_entry(cache_dir, "seg_333_0-99", size=100, age_seconds=100)
+
+        await self.run_one_pass(monkeypatch, cache_module)
+
+        assert not oldest.exists()
+        assert not (cache_dir / "seg_111_0-99.meta").exists()
+        assert middle.exists()
+        assert newest.exists()
+
+    async def test_the_published_size_matches_a_fresh_measurement(
+            self, cache_dir, monkeypatch):
+        """The proxy reads the published figure; a wrong one stops caching."""
+        import services.cache as cache_module
+
+        monkeypatch.setattr(cache_module, "is_content_active", lambda h: False)
+        self.write_entry(cache_dir, "seg_444_0-99", size=100)
+        self.write_entry(cache_dir, "seg_555_0-99", size=50)
+
+        await self.run_one_pass(monkeypatch, cache_module)
+
+        assert cache_module.get_current_cache_size() == \
+            cache_module.measure_cache_size()
+
+    async def run_one_pass(self, monkeypatch, cache_module):
+        """Run the janitor's body once, without waiting out its interval."""
+        import asyncio
+
+        calls = {"n": 0}
+        real_sleep = asyncio.sleep
+
+        async def sleep_once(_seconds):
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise asyncio.CancelledError
+            await real_sleep(0)
+
+        monkeypatch.setattr(cache_module.asyncio, "sleep", sleep_once)
+        try:
+            await cache_module.cache_cleanup_task()
+        except asyncio.CancelledError:
+            pass

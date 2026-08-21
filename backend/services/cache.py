@@ -21,6 +21,7 @@ from core.config import (
     MIN_DISK_FREE_BYTES,
     MAX_CACHEABLE_FILE_BYTES,
     CACHE_SIZE_MEASURE_TTL_SECONDS,
+    STALE_TEMP_FILE_SECONDS,
     FORMAT_CACHE_TTL_SECONDS,
     MEMORY_CACHE_SIZE_BYTES,
     MEMORY_CACHE_MAX_ITEM_PERCENT,
@@ -449,22 +450,39 @@ async def cache_cleanup_task():
             # 1. Scan files and remove expired
             if os.path.exists(CACHE_DIR):
                 for f in os.listdir(CACHE_DIR):
-                    if f.endswith(".tmp"):  # Clean up stale temp files
-                        path = os.path.join(CACHE_DIR, f)
-                        if current_time - os.path.getmtime(path) > 3600:
-                            os.remove(path)
-                        continue
-                        
                     path = os.path.join(CACHE_DIR, f)
+
+                    if f.endswith(".tmp"):  # Clean up stale temp files
+                        if current_time - os.path.getmtime(path) > STALE_TEMP_FILE_SECONDS:
+                            os.remove(path)
+                            logger.info(f"Removed abandoned partial download: {f}")
+                        continue
+
+                    # Sidecars are handled with the body they describe, never
+                    # on their own: expiring or evicting one half leaves an
+                    # entry that can never be served but still takes space.
+                    if f.endswith(".meta"):
+                        if not os.path.exists(path[:-len(".meta")]):
+                            os.remove(path)
+                            logger.info(f"Removed orphaned cache metadata: {f}")
+                        continue
+
                     if not os.path.isfile(path):
                         continue
-                        
+
                     stat = os.stat(path)
 
-                    # Extract URL hash from filename for adaptive TTL
-                    # Filename format: bucket_<hash>_<num> or seg_<hash>_<pos>
+                    # A body whose metadata is gone cannot describe its own
+                    # range, so the read path will not use it.
+                    if not os.path.exists(path + ".meta"):
+                        os.remove(path)
+                        logger.info(f"Removed cache body with no metadata: {f}")
+                        continue
+
+                    # Extract URL hash from filename for adaptive TTL.
+                    # Filename format: seg_<hash>_<range>[_u<identity>]
                     url_hash = None
-                    if f.startswith('bucket_') or f.startswith('seg_'):
+                    if f.startswith('seg_'):
                         parts = f.split('_')
                         if len(parts) >= 2:
                             url_hash = parts[1]
