@@ -250,3 +250,86 @@ class TestPlayerIsNotRemountedOnReResolve:
         assert "videoDataRef" in text
         assert "const current = videoDataRef.current;" in text
         assert "const isSameVideo = videoData?.original_url" not in text
+
+
+class TestVisualLanguage:
+    """The parts of the styling that were actively working against readability.
+
+    The whole app shell carried `uppercase`, so every string in the UI was
+    set in capitals and each one that needed to read normally had to opt
+    back out. At the 9-11px the labels used, with `font-black` and wide
+    letter-spacing on top, capitals cost the ascenders and descenders a
+    reader uses to tell words apart.
+
+    The stylesheet also carried a set of decorative rules — frosted glass,
+    a violet-to-pink gradient text fill, a pulsing glow, a float — that
+    nothing used. Dead code that only has to be looked at is still dead.
+    """
+
+    GLOBALS = REPO_ROOT / "frontend" / "app" / "globals.css"
+    ROOM_PAGE = REPO_ROOT / "frontend" / "app" / "room" / "[id]" / "page.tsx"
+    FRONTEND = REPO_ROOT / "frontend"
+
+    def source_files(self):
+        for pattern in ("app/**/*.tsx", "components/**/*.tsx"):
+            yield from self.FRONTEND.glob(pattern)
+
+    def test_the_app_shell_does_not_capitalise_everything(self):
+        text = self.ROOM_PAGE.read_text()
+        shell = text.split("<main", 1)[1].split(">", 1)[0]
+        assert "uppercase" not in shell, (
+            "the shell capitalises the entire UI again"
+        )
+        assert "normal-case" not in text, (
+            "an opt-out only exists because something opted everything in"
+        )
+
+    def test_no_component_shouts_by_default(self):
+        """`LIVE` on a live stream is the one place capitals earn it."""
+        offenders = []
+        for path in self.source_files():
+            for number, line in enumerate(path.read_text().splitlines(), 1):
+                if "uppercase" in line:
+                    offenders.append(f"{path.name}:{number}")
+        assert not offenders, f"uppercase is back in {offenders}"
+
+    def test_the_heaviest_weight_is_not_used_for_small_labels(self):
+        offenders = []
+        for path in self.source_files():
+            for number, line in enumerate(path.read_text().splitlines(), 1):
+                if "font-black" in line:
+                    offenders.append(f"{path.name}:{number}")
+        assert not offenders, f"font-black is back in {offenders}"
+
+    def test_the_decorative_dead_rules_are_gone(self):
+        css = self.GLOBALS.read_text()
+        for dead in ("gradient-text", "pulse-glow", "animate-float",
+                     "shadow-glow", ".glass"):
+            assert dead not in css, f"{dead} is back and still unused"
+
+    def test_the_type_scale_exists_and_is_used(self):
+        css = self.GLOBALS.read_text()
+        for step in (".ui-label", ".ui-meta", ".ui-title", ".ui-heading"):
+            assert step in css, f"{step} is missing from the type scale"
+
+        used = sum(
+            path.read_text().count("ui-label") + path.read_text().count("ui-title")
+            for path in self.source_files()
+        )
+        assert used > 10, "the type scale is defined but the UI does not use it"
+
+    def test_accent_colours_come_from_the_token(self):
+        """A hard-coded accent does not follow the chosen theme.
+
+        Only a handful of places read `activeTheme.accent`, so every
+        hard-coded violet stayed violet whatever theme was picked.
+        """
+        offenders = []
+        for path in self.source_files():
+            for number, line in enumerate(path.read_text().splitlines(), 1):
+                # Class names, not prose: "-violet-" appears in
+                # `bg-violet-500` but not in a comment explaining why it
+                # is gone.
+                if "-violet-" in line or "-fuchsia-" in line:
+                    offenders.append(f"{path.name}:{number}")
+        assert not offenders, f"a hard-coded accent is back in {offenders}"

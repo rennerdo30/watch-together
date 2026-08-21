@@ -72,7 +72,7 @@ export default function Home() {
         <div className="flex items-center gap-3">
           <span
             aria-hidden="true"
-            className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-600"
+            className="flex h-9 w-9 items-center justify-center rounded-xl bg-[color:var(--accent-primary)]"
           >
             <Tv className="h-5 w-5 on-accent-light" />
           </span>
@@ -121,7 +121,7 @@ export default function Home() {
                     placeholder="Room name (optional)"
                     autoComplete="off"
                     aria-describedby="room-name-hint"
-                    className="h-14 w-full rounded-xl border border-neutral-700 bg-neutral-900 pl-12 pr-4 text-base placeholder:text-neutral-500 hover:border-neutral-600 focus:border-violet-500"
+                    className="h-14 w-full rounded-xl border border-neutral-700 bg-neutral-900 pl-12 pr-4 text-base placeholder:text-neutral-500 hover:border-neutral-600 focus:border-[color:var(--accent-primary)]"
                   />
                 </div>
                 <p id="room-name-hint" className="mt-2 text-xs text-neutral-500">
@@ -130,7 +130,7 @@ export default function Home() {
               </div>
               <button
                 type="submit"
-                className="flex h-14 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 text-base font-semibold on-accent-light shadow-lg shadow-violet-600/20 hover:bg-violet-500"
+                className="flex h-14 w-full items-center justify-center gap-2 rounded-xl bg-[color:var(--accent-primary)] text-base font-semibold on-accent-light shadow-md hover:brightness-110"
               >
                 Create room
                 <ArrowRight aria-hidden="true" className="h-5 w-5" />
@@ -155,7 +155,7 @@ export default function Home() {
             </h2>
             <div className="flex items-center gap-2">
               {!loading && !loadError && (
-                <span className="text-sm text-violet-400">
+                <span className="text-sm text-[color:var(--accent-primary)]">
                   {numberFormatter.format(rooms.length)}
                 </span>
               )}
@@ -214,7 +214,7 @@ export default function Home() {
                     >
                       <span
                         aria-hidden="true"
-                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white/10 group-hover:bg-violet-600"
+                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white/10 group-hover:bg-[color:var(--accent-primary)]"
                       >
                         <Play className="icon-on-surface h-4 w-4" />
                       </span>

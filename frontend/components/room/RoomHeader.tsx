@@ -51,11 +51,11 @@ export function RoomHeader({
                 </button>
                 <div className="flex items-center gap-2">
                     <span className={`w-2 h-2 rounded-full ${connected ? 'bg-emerald-500 shadow-lg shadow-emerald-500/20' : 'bg-red-500'}`} />
-                    <span className="text-[10px] font-black text-neutral-500 uppercase tracking-[0.2em]">
+                    <span className="ui-label font-mono">
                         {roomId}
                     </span>
                     {isPermanent && (
-                        <span className="flex items-center gap-1 text-[9px] font-bold text-amber-500 bg-amber-500/10 px-1.5 py-0.5 rounded">
+                        <span className="flex items-center gap-1 ui-label text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded">
                             <Infinity className="w-3 h-3" />
                             Permanent
                         </span>
@@ -66,8 +66,8 @@ export function RoomHeader({
             <div className="flex items-center gap-2">
                 {videoData && (
                     <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg ${activeTheme.accent} bg-opacity-10`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${isPlaying ? 'bg-green-400 animate-pulse' : 'bg-neutral-500'}`} />
-                        <span className={`text-[10px] font-black ${activeTheme.text} uppercase tracking-wider`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${isPlaying ? 'bg-emerald-400' : 'bg-neutral-500'}`} />
+                        <span className={`text-xs font-medium ui-numeric ${activeTheme.text}`}>
                             {isPlaying ? 'Playing' : 'Paused'} {formatTime(actualPlayerTime)}
                         </span>
                     </div>

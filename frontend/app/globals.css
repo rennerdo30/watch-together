@@ -1,12 +1,24 @@
 @import "tailwindcss";
 
+@theme inline {
+  --font-sans: var(--font-ui-sans), system-ui, -apple-system, sans-serif;
+  --font-mono: var(--font-ui-mono), ui-monospace, SFMono-Regular, monospace;
+}
+
 /* =============================================================================
    Design tokens
    -----------------------------------------------------------------------------
+   The palette is a cool slate with one signal-red accent. Red already means
+   "live" next to a video, so it carries the primary action and the recording
+   dot without needing a second hue; everything else is neutral, and the only
+   saturated colour on screen is the video itself.
+
    The UI is painted almost entirely with Tailwind's `neutral` / `zinc` scales
    plus `white` / `black`. Tailwind v4 compiles every colour utility down to a
    `var(--color-*)` lookup, so a colour scheme can be swapped wholesale by
    re-pointing those variables instead of annotating hundreds of class names.
+   Both scales are re-pointed here at cool greys, so `neutral-400` and
+   `zinc-400` read as the same family whichever a component reached for.
 
    - `:root`                    -> dark scheme (the default)
    - `html[data-theme="light"]` -> light scheme
@@ -19,40 +31,40 @@
   color-scheme: dark;
 
   /* Surfaces */
-  --bg-primary: #09090b;
-  --bg-secondary: #0f0f12;
-  --bg-tertiary: #18181b;
-  --bg-elevated: #1f1f23;
+  --bg-primary: #0a0b0d;
+  --bg-secondary: #101216;
+  --bg-tertiary: #14161a;
+  --bg-elevated: #1a1d22;
 
   /* Text */
-  --text-primary: #fafafa;
-  --text-secondary: #a1a1aa;
-  --text-muted: #71717a;
+  --text-primary: #f2f4f7;
+  --text-secondary: #9ba3ae;
+  --text-muted: #6c7480;
 
   /* Accent */
-  --accent-primary: #8b5cf6;
-  --accent-secondary: #a78bfa;
-  --accent-glow: rgba(139, 92, 246, 0.15);
+  --accent-primary: #d93a3a;
+  --accent-secondary: #e4605f;
+  --accent-glow: rgba(217, 58, 58, 0.16);
 
   /* Foreground colours for filled accent surfaces. These never flip with the
      colour scheme because the surface underneath them never flips either. */
   --on-accent-light: #ffffff;
   --on-accent-dark: #0a0a0a;
 
-  /* Borders */
-  --border-subtle: rgba(255, 255, 255, 0.06);
-  --border-default: rgba(255, 255, 255, 0.1);
-  --border-strong: rgba(255, 255, 255, 0.15);
+  /* Borders. Tinted rather than pure white so an edge reads as part of the
+     slate instead of as a lighter film laid over it. */
+  --border-subtle: rgba(180, 196, 218, 0.08);
+  --border-default: rgba(180, 196, 218, 0.14);
+  --border-strong: rgba(180, 196, 218, 0.22);
 
   /* Shadows */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
-  --shadow-glow: 0 0 40px var(--accent-glow);
 
   /* Scrollbars */
-  --scrollbar-thumb: rgba(255, 255, 255, 0.08);
-  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.15);
+  --scrollbar-thumb: rgba(180, 196, 218, 0.12);
+  --scrollbar-thumb-hover: rgba(180, 196, 218, 0.24);
   --scrollbar-width: 6px;
   --scrollbar-width-slim: 4px;
 
@@ -62,9 +74,9 @@
   --focus-ring-color: var(--accent-primary);
 
   /* Toasts (react-hot-toast is styled from JS, so it reads these) */
-  --toast-bg: #171717;
-  --toast-fg: #fafafa;
-  --toast-border: #262626;
+  --toast-bg: #14161a;
+  --toast-fg: #f2f4f7;
+  --toast-border: #262a31;
 
   /* Motion */
   --duration-fast: 0.15s;
@@ -81,73 +93,79 @@
 html[data-theme="light"] {
   color-scheme: light;
 
-  --bg-primary: #ffffff;
-  --bg-secondary: #fafafa;
-  --bg-tertiary: #f4f4f5;
+  /* Not pure white. A page at #fff leaves no room for a card to sit *on*
+     it, so every surface had to be distinguished by its border alone — and
+     with a 8% border that reads as unfinished rather than as clean. */
+  --bg-primary: #f8f9fa;
+  --bg-secondary: #edeff2;
+  --bg-tertiary: #e4e7eb;
   --bg-elevated: #ffffff;
 
-  --text-primary: #18181b;
-  --text-secondary: #52525b;
-  --text-muted: #71717a;
+  --text-primary: #15181c;
+  --text-secondary: #4a525c;
+  --text-muted: #6c7480;
 
-  --accent-primary: #7c3aed;
-  --accent-secondary: #6d28d9;
-  --accent-glow: rgba(124, 58, 237, 0.18);
+  --accent-primary: #c62f2f;
+  --accent-secondary: #a82525;
+  --accent-glow: rgba(198, 47, 47, 0.16);
 
-  --border-subtle: rgba(9, 9, 11, 0.08);
-  --border-default: rgba(9, 9, 11, 0.12);
-  --border-strong: rgba(9, 9, 11, 0.18);
+  /* Appreciably stronger than the dark scheme's: a dark edge on a light
+     surface carries far less apparent weight than a light edge on a dark
+     one, so matching the numbers would leave the light scheme edgeless. */
+  --border-subtle: rgba(16, 20, 26, 0.10);
+  --border-default: rgba(16, 20, 26, 0.16);
+  --border-strong: rgba(16, 20, 26, 0.26);
 
-  --shadow-sm: 0 1px 2px rgba(9, 9, 11, 0.06);
-  --shadow-md: 0 4px 12px rgba(9, 9, 11, 0.08);
-  --shadow-lg: 0 8px 24px rgba(9, 9, 11, 0.12);
+  --shadow-sm: 0 1px 2px rgba(16, 20, 26, 0.06);
+  --shadow-md: 0 4px 12px rgba(16, 20, 26, 0.09);
+  --shadow-lg: 0 8px 24px rgba(16, 20, 26, 0.13);
 
-  --scrollbar-thumb: rgba(9, 9, 11, 0.16);
-  --scrollbar-thumb-hover: rgba(9, 9, 11, 0.28);
+  --scrollbar-thumb: rgba(16, 20, 26, 0.18);
+  --scrollbar-thumb-hover: rgba(16, 20, 26, 0.32);
 
   --toast-bg: #ffffff;
-  --toast-fg: #18181b;
-  --toast-border: #e4e4e7;
+  --toast-fg: #15181c;
+  --toast-border: #d6dae0;
 
   /* "white" means primary ink, "black" means the page beneath it. Overlay
      utilities such as `bg-white/5` and `border-white/10` therefore keep
      working as subtle tints instead of disappearing. */
-  --color-white: #18181b;
-  --color-black: #ffffff;
+  --color-white: #15181c;
+  --color-black: #f8f9fa;
 
-  --color-neutral-50: #18181b;
-  --color-neutral-100: #1f1f22;
-  --color-neutral-200: #27272a;
-  --color-neutral-300: #3f3f46;
-  --color-neutral-400: #52525b;
-  --color-neutral-500: #63636c;
-  --color-neutral-600: #71717a;
-  --color-neutral-700: #d4d4d8;
-  --color-neutral-800: #e4e4e7;
-  --color-neutral-900: #f4f4f5;
-  --color-neutral-950: #fafafa;
+  --color-neutral-50: #15181c;
+  --color-neutral-100: #1b1f24;
+  --color-neutral-200: #23282f;
+  --color-neutral-300: #39414b;
+  --color-neutral-400: #4a525c;
+  --color-neutral-500: #5c6570;
+  --color-neutral-600: #6c7480;
+  --color-neutral-700: #ced4dc;
+  --color-neutral-800: #e0e4ea;
+  --color-neutral-900: #edeff2;
+  --color-neutral-950: #f8f9fa;
 
-  --color-zinc-50: #18181b;
-  --color-zinc-100: #1f1f22;
-  --color-zinc-200: #27272a;
-  --color-zinc-300: #3f3f46;
-  --color-zinc-400: #52525b;
-  --color-zinc-500: #63636c;
-  --color-zinc-600: #71717a;
-  --color-zinc-700: #d4d4d8;
-  --color-zinc-800: #e4e4e7;
-  --color-zinc-900: #f4f4f5;
-  --color-zinc-950: #fafafa;
+  --color-zinc-50: #15181c;
+  --color-zinc-100: #1b1f24;
+  --color-zinc-200: #23282f;
+  --color-zinc-300: #39414b;
+  --color-zinc-400: #4a525c;
+  --color-zinc-500: #5c6570;
+  --color-zinc-600: #6c7480;
+  --color-zinc-700: #ced4dc;
+  --color-zinc-800: #e0e4ea;
+  --color-zinc-900: #edeff2;
+  --color-zinc-950: #f8f9fa;
 
-  --color-violet-400: #6d28d9;
-  --color-emerald-400: #047857;
+  --color-violet-400: #5b5fd0;
+  --color-emerald-400: #0f766e;
   --color-green-400: #15803d;
-  --color-amber-400: #b45309;
-  --color-yellow-400: #a16207;
-  --color-red-400: #b91c1c;
-  --color-rose-400: #be123c;
-  --color-blue-400: #1d4ed8;
-  --color-purple-400: #7e22ce;
+  --color-amber-400: #a35a1e;
+  --color-yellow-400: #8f6410;
+  --color-red-400: #b52b2b;
+  --color-rose-400: #b52b2b;
+  --color-blue-400: #1e5fd0;
+  --color-purple-400: #5b5fd0;
 }
 
 /* Subtrees that stay dark in every colour scheme. */
@@ -157,39 +175,39 @@ html[data-theme="light"] {
   --color-white: #ffffff;
   --color-black: #000000;
 
-  --color-neutral-50: #fafafa;
-  --color-neutral-100: #f5f5f5;
-  --color-neutral-200: #e5e5e5;
-  --color-neutral-300: #d4d4d4;
-  --color-neutral-400: #a3a3a3;
-  --color-neutral-500: #737373;
-  --color-neutral-600: #525252;
-  --color-neutral-700: #404040;
-  --color-neutral-800: #262626;
-  --color-neutral-900: #171717;
-  --color-neutral-950: #0a0a0a;
+  --color-neutral-50: #f2f4f7;
+  --color-neutral-100: #e6e9ee;
+  --color-neutral-200: #d3d8e0;
+  --color-neutral-300: #b6bdc8;
+  --color-neutral-400: #9ba3ae;
+  --color-neutral-500: #7b8492;
+  --color-neutral-600: #5b6472;
+  --color-neutral-700: #3d4451;
+  --color-neutral-800: #262a31;
+  --color-neutral-900: #14161a;
+  --color-neutral-950: #0a0b0d;
 
-  --color-zinc-50: #fafafa;
-  --color-zinc-100: #f4f4f5;
-  --color-zinc-200: #e4e4e7;
-  --color-zinc-300: #d4d4d8;
-  --color-zinc-400: #a1a1aa;
-  --color-zinc-500: #71717a;
-  --color-zinc-600: #52525b;
-  --color-zinc-700: #3f3f46;
-  --color-zinc-800: #27272a;
-  --color-zinc-900: #18181b;
-  --color-zinc-950: #09090b;
+  --color-zinc-50: #f2f4f7;
+  --color-zinc-100: #e6e9ee;
+  --color-zinc-200: #d3d8e0;
+  --color-zinc-300: #b6bdc8;
+  --color-zinc-400: #9ba3ae;
+  --color-zinc-500: #7b8492;
+  --color-zinc-600: #5b6472;
+  --color-zinc-700: #3d4451;
+  --color-zinc-800: #262a31;
+  --color-zinc-900: #14161a;
+  --color-zinc-950: #0a0b0d;
 
-  --color-violet-400: #a78bfa;
-  --color-emerald-400: #34d399;
-  --color-green-400: #4ade80;
-  --color-amber-400: #fbbf24;
-  --color-yellow-400: #facc15;
-  --color-red-400: #f87171;
-  --color-rose-400: #fb7185;
-  --color-blue-400: #60a5fa;
-  --color-purple-400: #c084fc;
+  --color-violet-400: #8f92e8;
+  --color-emerald-400: #45c4b0;
+  --color-green-400: #5ccb7f;
+  --color-amber-400: #e0a341;
+  --color-yellow-400: #dcc04a;
+  --color-red-400: #e4605f;
+  --color-rose-400: #e4605f;
+  --color-blue-400: #6b9df5;
+  --color-purple-400: #8f92e8;
 }
 
 /* The colour themes in `lib/themes.ts` pin an explicit dark background. In the
@@ -266,7 +284,7 @@ html {
 body {
   background: var(--bg-primary);
   color: var(--text-primary);
-  font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
+  font-family: var(--font-ui-sans), system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -348,30 +366,6 @@ textarea:focus {
   }
 }
 
-@keyframes pulse-glow {
-
-  0%,
-  100% {
-    box-shadow: 0 0 20px var(--accent-glow);
-  }
-
-  50% {
-    box-shadow: 0 0 40px var(--accent-glow), 0 0 60px var(--accent-glow);
-  }
-}
-
-@keyframes float {
-
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-
-  50% {
-    transform: translateY(-5px);
-  }
-}
-
 .animate-fade-in {
   animation: fadeIn var(--duration-base) ease-out;
 }
@@ -382,14 +376,6 @@ textarea:focus {
 
 .animate-slide-down {
   animation: slideDown var(--duration-slow) ease-out;
-}
-
-.animate-pulse-glow {
-  animation: pulse-glow 2s ease-in-out infinite;
-}
-
-.animate-float {
-  animation: float 3s ease-in-out infinite;
 }
 
 /* Respect the OS "reduce motion" setting. */
@@ -414,29 +400,65 @@ textarea:focus {
 }
 
 /* =============================================================================
-   Utilities
+   Type scale
+   -----------------------------------------------------------------------------
+   Small text used to be set in 9-11px `font-black uppercase tracking-widest`,
+   which is a lot of shouting for a field name and unreadable besides: at that
+   size, capitals lose the ascenders and descenders a reader uses to tell words
+   apart, and the heaviest weight closes up the counters.
+
+   These four steps replace it. Size and weight carry the hierarchy; case and
+   letter-spacing are left alone.
    ========================================================================== */
 
-.glass {
-  background: color-mix(in srgb, var(--color-white) 3%, transparent);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid var(--border-subtle);
+/* Field names, section headers, the label on a control. */
+.ui-label {
+  font-size: 0.6875rem;
+  /* 11px */
+  line-height: 1.3;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--text-secondary);
 }
 
-.glass-strong {
-  background: color-mix(in srgb, var(--color-white) 6%, transparent);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid var(--border-default);
+/* Secondary values: counts, timestamps, "no video playing". */
+.ui-meta {
+  font-size: 0.75rem;
+  /* 12px */
+  line-height: 1.4;
+  font-weight: 400;
+  color: var(--text-muted);
 }
 
-.gradient-text {
-  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary), #f472b6);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+/* Row titles, tab names, anything a reader scans for. */
+.ui-title {
+  font-size: 0.8125rem;
+  /* 13px */
+  line-height: 1.4;
+  font-weight: 550;
+  color: var(--text-primary);
 }
+
+/* Panel and dialog headings. */
+.ui-heading {
+  font-size: 0.875rem;
+  /* 14px */
+  line-height: 1.35;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--text-primary);
+}
+
+/* Numbers that should line up in a column, and byte ranges in the debug
+   panel. Tabular figures stop a counter from jittering as it ticks. */
+.ui-numeric {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* =============================================================================
+   Utilities
+   ========================================================================== */
 
 .custom-scrollbar::-webkit-scrollbar {
   width: var(--scrollbar-width-slim);

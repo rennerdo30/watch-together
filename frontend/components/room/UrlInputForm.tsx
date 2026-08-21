@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { Loader2, Plus, Play } from 'lucide-react';
 import { resolveUrl, type ResolveResponse } from '@/lib/api';
+import { ON_ACCENT_LIGHT } from '@/lib/themes';
 import toast from 'react-hot-toast';
 
 interface UrlInputFormProps {
@@ -74,7 +75,7 @@ export function UrlInputForm({
             <button
                 type="submit"
                 disabled={!inputUrl || loading || disabled}
-                className={`h-10 px-4 text-xs font-bold uppercase tracking-wider rounded-xl transition-all flex items-center gap-2 ${accentColor} text-white disabled:opacity-40`}
+                className={`h-10 px-4 text-sm font-medium rounded-xl transition-all flex items-center gap-2 ${accentColor} ${ON_ACCENT_LIGHT} disabled:opacity-40`}
             >
                 {loading ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -88,7 +89,7 @@ export function UrlInputForm({
                 type="button"
                 onClick={handleAddToQueue}
                 disabled={!inputUrl || loading || disabled}
-                className="h-10 px-3 bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-white text-xs font-bold uppercase tracking-wider rounded-xl transition-all flex items-center gap-1 disabled:opacity-40"
+                className="h-10 px-3 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white text-sm font-medium rounded-xl transition-all flex items-center gap-1 disabled:opacity-40"
             >
                 <Plus className="w-4 h-4" />
             </button>

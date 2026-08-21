@@ -648,16 +648,14 @@ export default function RoomPage() {
     };
 
     return (
-        <main className={`app-shell h-dvh w-full flex flex-col ${activeTheme.bg} text-neutral-300 overflow-hidden font-sans uppercase tracking-tight`}>
+        <main className={`app-shell h-dvh w-full flex flex-col ${activeTheme.bg} text-neutral-300 overflow-hidden font-sans`}>
             <Toaster position="bottom-center" toastOptions={{
                 style: {
                     background: 'var(--toast-bg)',
                     color: 'var(--toast-fg)',
                     border: '1px solid var(--toast-border)',
                     fontSize: `${fontSize - 1}px`,
-                    fontWeight: 'bold',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.05em'
+                    fontWeight: 500
                 }
             }} />
             {/* Header */}
@@ -673,9 +671,9 @@ export default function RoomPage() {
                         <Home aria-hidden="true" className="w-4 h-4 text-neutral-400" />
                     </button>
                     <div className="flex flex-col pl-1 min-w-0">
-                        <h1 className="font-bold text-white leading-none text-sm normal-case tracking-normal truncate">{APP_NAME}</h1>
+                        <h1 className="font-bold text-white leading-none text-sm truncate">{APP_NAME}</h1>
                         <div className="flex items-center gap-1.5 mt-0.5">
-                            <span className="font-medium text-neutral-400 text-xs normal-case truncate">{roomId}</span>
+                            <span className="font-medium text-neutral-400 text-xs truncate">{roomId}</span>
                             <span
                                 role="status"
                                 aria-label={connected ? 'Connected to the room' : 'Disconnected from the room'}
@@ -690,8 +688,8 @@ export default function RoomPage() {
                     {/* Playback State Indicator */}
                     {videoData && (
                         <div className="hidden sm:flex items-center gap-2 px-2.5 py-1 bg-neutral-800/80 rounded-md border border-neutral-700/50">
-                            <div className={`w-2 h-2 rounded-full ${syncState.isPlaying ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
-                            <span className="text-[10px] font-bold text-neutral-300 uppercase">
+                            <div className={`w-2 h-2 rounded-full ${syncState.isPlaying ? 'bg-emerald-400' : 'bg-neutral-500'}`} />
+                            <span className="ui-label">
                                 {syncState.isPlaying ? 'Playing' : 'Paused'}
                             </span>
                             <span className="text-[10px] font-mono text-neutral-500">
@@ -701,7 +699,7 @@ export default function RoomPage() {
                     )}
                     <div className="hidden sm:flex items-center gap-1.5 px-2 py-1 bg-neutral-800 rounded-md">
                         <Users className="w-3 h-3 text-neutral-500" />
-                        <span className="text-[11px] font-black text-neutral-400">{members.length}</span>
+                        <span className="text-xs font-medium ui-numeric text-neutral-300">{members.length}</span>
                     </div>
                     <ColorModeToggle className="h-7 w-7 text-neutral-400 hover:bg-neutral-800 hover:text-white" />
                     <button
@@ -709,7 +707,7 @@ export default function RoomPage() {
                         onClick={() => setShowDebug(!showDebug)}
                         aria-pressed={showDebug}
                         aria-label="Diagnostics panel"
-                        className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${showDebug ? 'bg-emerald-500/20 text-emerald-400' : 'hover:bg-neutral-800 text-neutral-400 hover:text-white'}`}
+                        className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${showDebug ? 'bg-[color:var(--accent-glow)] text-[color:var(--accent-primary)]' : 'hover:bg-neutral-800 text-neutral-400 hover:text-white'}`}
                         title="Diagnostics panel"
                     >
                         <Bug aria-hidden="true" className="w-4 h-4" />
@@ -739,7 +737,7 @@ export default function RoomPage() {
                         {isResolving && (
                             <div className="absolute inset-0 z-10 bg-black/70 flex flex-col items-center justify-center gap-2 animate-in fade-in duration-300">
                                 <Loader2 className="w-5 h-5 text-white animate-spin opacity-80" />
-                                <span className="text-[10px] font-black text-white/80 uppercase tracking-widest">Resolving...</span>
+                                <span className="ui-label text-neutral-200">Resolving...</span>
                             </div>
                         )}
                         {videoData ? (
@@ -807,7 +805,7 @@ export default function RoomPage() {
                                 <div className="w-12 h-12 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center">
                                     <Play aria-hidden="true" className="w-5 h-5 text-neutral-400" />
                                 </div>
-                                <div className="normal-case tracking-normal">
+                                <div className="tracking-normal">
                                     <h2 className="text-sm font-semibold text-neutral-200">Nothing playing yet</h2>
                                     <p className="text-xs text-neutral-400 mt-1 max-w-xs">
                                         Paste a video link below to start watching, or add one to the queue.
@@ -819,7 +817,7 @@ export default function RoomPage() {
 
                     {/* Debug Panel */}
                     {showDebug && (
-                        <section aria-label="Diagnostics" className="bg-black/80 backdrop-blur-xl border border-emerald-500/20 rounded-lg p-3 font-mono text-[10px] text-emerald-400 shrink-0 relative group/debug">
+                        <section aria-label="Diagnostics" className="bg-[color:var(--bg-tertiary)]/90 backdrop-blur-xl border border-[color:var(--border-default)] rounded-lg p-3 font-mono text-[11px] text-neutral-300 shrink-0 relative group/debug">
                             <button
                                 onClick={() => {
                                     const debugInfo = {
@@ -844,71 +842,71 @@ export default function RoomPage() {
                                 aria-label="Copy diagnostics to the clipboard"
                             >
                                 {isCopyingDebug ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                                <span className="text-[9px] font-black uppercase tracking-widest">{isCopyingDebug ? 'COPIED' : 'COPY ALL'}</span>
+                                <span className="ui-label">{isCopyingDebug ? 'COPIED' : 'COPY ALL'}</span>
                             </button>
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                                 <div>
-                                    <span className="text-neutral-500 uppercase tracking-wider">WebSocket</span>
+                                    <span className="ui-label">WebSocket</span>
                                     <div className={`font-bold ${connected ? 'text-emerald-400' : 'text-red-400'}`}>
                                         {connected ? 'CONNECTED' : 'DISCONNECTED'}
                                     </div>
                                 </div>
                                 <div>
-                                    <span className="text-neutral-500 uppercase tracking-wider">Playback</span>
+                                    <span className="ui-label">Playback</span>
                                     <div className="font-bold text-white">
                                         {syncState.isPlaying ? '▶ PLAYING' : '⏸ PAUSED'}
                                     </div>
                                 </div>
                                 <div>
-                                    <span className="text-neutral-500 uppercase tracking-wider">Timestamp</span>
+                                    <span className="ui-label">Timestamp</span>
                                     <div className="font-bold text-white">
                                         {syncState.timestamp.toFixed(2)}s
                                     </div>
                                 </div>
                                 <div>
-                                    <span className="text-neutral-500 uppercase tracking-wider">Last Sync</span>
+                                    <span className="ui-label">Last Sync</span>
                                     <div className="font-bold text-white">
                                         {syncState.lastSync || 'N/A'}
                                     </div>
                                 </div>
                                 <div>
-                                    <span className="text-neutral-500 uppercase tracking-wider">Queue</span>
+                                    <span className="ui-label">Queue</span>
                                     <div className="font-bold text-white">
                                         {queue.length} items (#{playingIndex + 1})
                                     </div>
                                 </div>
                                 <div>
-                                    <span className="text-neutral-500 uppercase tracking-wider">Video</span>
+                                    <span className="ui-label">Video</span>
                                     <div className="font-bold text-white truncate" title={videoData?.title}>
                                         {videoData?.title?.slice(0, 20) || 'None'}...
                                     </div>
                                 </div>
                                 <div>
-                                    <span className="text-neutral-500 uppercase tracking-wider">Proxy</span>
+                                    <span className="ui-label">Proxy</span>
                                     <div className={`font-bold ${useProxy ? 'text-emerald-400' : 'text-neutral-500'}`}>
                                         {useProxy ? 'ENABLED' : 'DISABLED'}
                                     </div>
                                 </div>
                                 <div>
-                                    <span className="text-neutral-500 uppercase tracking-wider">Stream Type</span>
-                                    <div className={`font-bold ${videoData?.stream_type === 'dash' ? 'text-purple-400' : 'text-emerald-400'}`}>
+                                    <span className="ui-label">Stream Type</span>
+                                    <div className={`font-bold ${videoData?.stream_type === 'dash' ? 'text-[color:var(--accent-primary)]' : 'text-emerald-400'}`}>
                                         {videoData?.stream_type?.toUpperCase() || 'N/A'} {videoData?.quality && `(${videoData.quality})`}
                                     </div>
                                 </div>
                                 <div>
-                                    <span className="text-neutral-500 uppercase tracking-wider">Qualities</span>
+                                    <span className="ui-label">Qualities</span>
                                     <div className="font-bold text-white">
                                         {videoData?.available_qualities?.length || 0} options
                                     </div>
                                 </div>
                                 <div>
-                                    <span className="text-neutral-500 uppercase tracking-wider">DASH URLs</span>
+                                    <span className="ui-label">DASH URLs</span>
                                     <div className={`font-bold ${videoData?.video_url && videoData?.audio_url ? 'text-emerald-400' : 'text-red-400'}`}>
                                         {videoData?.video_url && videoData?.audio_url ? 'V+A OK' : 'N/A'}
                                     </div>
                                 </div>
                                 <div>
-                                    <span className="text-neutral-500 uppercase tracking-wider">Members</span>
+                                    <span className="ui-label">Members</span>
                                     <div className="font-bold text-white">
                                         {members.length} online
                                     </div>
@@ -937,19 +935,19 @@ export default function RoomPage() {
                             type="submit"
                             disabled={loading || !inputUrl}
                             aria-busy={loading}
-                            className={`px-4 h-9 ${activeTheme.text} font-black rounded-lg text-[11px] transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 ${activeTheme.accent} shadow-lg hover:brightness-110`}
+                            className={`px-4 h-9 ${activeTheme.text} font-medium rounded-lg text-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 ${activeTheme.accent} shadow-lg hover:brightness-110`}
                         >
                             {loading ? <Loader2 aria-hidden="true" className="animate-spin w-3 h-3" /> : <Play aria-hidden="true" className="w-3 h-3 fill-current" />}
-                            PLAY
+                            Play
                         </button>
                         <button
                             type="button"
                             onClick={handleAddToQueue}
                             disabled={loading || !inputUrl}
-                            className={`px-4 h-9 bg-neutral-800/50 hover:bg-neutral-800 text-white font-black rounded-lg text-[11px] border ${activeTheme.border} disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors`}
+                            className={`px-4 h-9 bg-neutral-800/50 hover:bg-neutral-800 text-neutral-100 font-medium rounded-lg text-sm border ${activeTheme.border} disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors`}
                         >
                             <Plus aria-hidden="true" className="w-3 h-3" />
-                            QUEUE
+                            Queue
                         </button>
                     </form>
                 </div>
@@ -977,7 +975,7 @@ export default function RoomPage() {
                             role="tab"
                             aria-selected={sidebarTab === 'queue'}
                             onClick={() => setSidebarTab('queue')}
-                            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-[11px] font-black transition-all ${sidebarTab === 'queue'
+                            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-[13px] font-medium transition-all ${sidebarTab === 'queue'
                                 ? "bg-neutral-800 text-white"
                                 : "text-neutral-400 hover:bg-white/5 hover:text-neutral-200"
                                 }`}
@@ -990,7 +988,7 @@ export default function RoomPage() {
                             role="tab"
                             aria-selected={sidebarTab === 'users'}
                             onClick={() => setSidebarTab('users')}
-                            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-[11px] font-black transition-all ${sidebarTab === 'users'
+                            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-[13px] font-medium transition-all ${sidebarTab === 'users'
                                 ? "bg-neutral-800 text-white"
                                 : "text-neutral-400 hover:bg-white/5 hover:text-neutral-200"
                                 }`}
@@ -1012,7 +1010,7 @@ export default function RoomPage() {
                                 <div className="h-full flex flex-col">
                                     <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
                                         {queue.length === 0 && (
-                                            <p className="px-4 py-10 text-center text-xs normal-case tracking-normal text-neutral-400">
+                                            <p className="px-4 py-10 text-center text-xs text-neutral-400">
                                                 The queue is empty. Paste a link and choose Queue to line up a video.
                                             </p>
                                         )}
@@ -1055,7 +1053,7 @@ export default function RoomPage() {
                                             type="button"
                                             disabled={queue.length === 0}
                                             onClick={() => sendMsg('video_ended')}
-                                            className="w-full h-9 bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-white font-black rounded-lg text-[11px] uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:hover:bg-neutral-800 disabled:hover:text-neutral-400"
+                                            className="w-full h-9 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white font-medium rounded-lg text-xs transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:hover:bg-neutral-800 disabled:hover:text-neutral-300"
                                         >
                                             <SkipForward aria-hidden="true" className="w-3.5 h-3.5" />
                                             Play next
@@ -1067,7 +1065,7 @@ export default function RoomPage() {
 
                             <div className="h-full overflow-y-auto p-2 space-y-1 custom-scrollbar">
                                 {members.length === 0 && (
-                                    <p className="px-4 py-10 text-center text-xs normal-case tracking-normal text-neutral-400">
+                                    <p className="px-4 py-10 text-center text-xs text-neutral-400">
                                         Nobody else is here yet. Share the room link to invite someone.
                                     </p>
                                 )}
@@ -1078,7 +1076,7 @@ export default function RoomPage() {
 
                                     return (
                                         <div key={i} className={`group flex items-center gap-2 p-1.5 rounded-lg bg-neutral-800/10 border ${activeTheme.border}`}>
-                                            <div className={`w-6 h-6 rounded-md flex items-center justify-center text-[10px] font-black ${activeTheme.text} ${activeTheme.accent}`}>
+                                            <div className={`w-6 h-6 rounded-md flex items-center justify-center text-[11px] font-semibold ui-numeric ${activeTheme.text} ${activeTheme.accent}`}>
                                                 {m.email.charAt(0).toUpperCase()}
                                             </div>
                                             <div className="flex-1 min-w-0 flex flex-col">
@@ -1140,7 +1138,7 @@ export default function RoomPage() {
             {/* Settings Overlay */}
             {
                 showSettings && (
-                    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 normal-case tracking-normal">
+                    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
                         <button
                             type="button"
                             aria-label="Close settings"
@@ -1224,7 +1222,7 @@ export default function RoomPage() {
                                     <button
                                         onClick={() => setShowCustomTheme(!showCustomTheme)}
                                         className={`w-full p-2 rounded-lg border text-[10px] font-bold transition-all flex items-center justify-between ${showCustomTheme
-                                            ? "bg-violet-500/10 border-violet-500/20 text-violet-400"
+                                            ? "bg-[color:var(--accent-glow)] border-[color:var(--accent-primary)] text-[color:var(--accent-primary)]"
                                             : "bg-white/5 border-white/5 text-zinc-500 hover:border-white/10"
                                             }`}
                                     >
@@ -1237,7 +1235,7 @@ export default function RoomPage() {
                                         <div className="space-y-3 p-3 rounded-lg bg-white/5 border border-white/5">
                                             <div className="flex items-center gap-3">
                                                 <div className="flex-1">
-                                                    <label className="text-[9px] text-zinc-500 uppercase">Background</label>
+                                                    <label className="ui-label">Background</label>
                                                     <div className="flex items-center gap-2 mt-1">
                                                         <input
                                                             type="color"
@@ -1249,12 +1247,12 @@ export default function RoomPage() {
                                                             type="text"
                                                             value={customBgColor}
                                                             onChange={(e) => setCustomBgColor(e.target.value)}
-                                                            className="flex-1 h-8 bg-white/5 border border-white/10 rounded-lg px-2 text-[10px] font-mono text-white focus:outline-none focus:border-violet-500/50"
+                                                            className="flex-1 h-8 bg-white/5 border border-white/10 rounded-lg px-2 text-[10px] font-mono text-white focus:outline-none focus:border-[color:var(--accent-primary)]"
                                                         />
                                                     </div>
                                                 </div>
                                                 <div className="flex-1">
-                                                    <label className="text-[9px] text-zinc-500 uppercase">Accent</label>
+                                                    <label className="ui-label">Accent</label>
                                                     <div className="flex items-center gap-2 mt-1">
                                                         <input
                                                             type="color"
@@ -1266,7 +1264,7 @@ export default function RoomPage() {
                                                             type="text"
                                                             value={customAccentColor}
                                                             onChange={(e) => setCustomAccentColor(e.target.value)}
-                                                            className="flex-1 h-8 bg-white/5 border border-white/10 rounded-lg px-2 text-[10px] font-mono text-white focus:outline-none focus:border-violet-500/50"
+                                                            className="flex-1 h-8 bg-white/5 border border-white/10 rounded-lg px-2 text-[10px] font-mono text-white focus:outline-none focus:border-[color:var(--accent-primary)]"
                                                         />
                                                     </div>
                                                 </div>
@@ -1279,7 +1277,7 @@ export default function RoomPage() {
                                                     localStorage.setItem('wt_theme', 'custom');
                                                     toast.success('Custom theme applied!');
                                                 }}
-                                                className="w-full h-9 bg-violet-600 hover:bg-violet-500 on-accent-light text-[10px] font-bold rounded-lg transition-colors"
+                                                className="w-full h-9 bg-[color:var(--accent-primary)] hover:brightness-110 on-accent-light text-[10px] font-bold rounded-lg transition-colors"
                                             >
                                                 Apply Custom Theme
                                             </button>
@@ -1303,7 +1301,7 @@ export default function RoomPage() {
                                             setFontSize(val);
                                             localStorage.setItem('wt_font_size', val.toString());
                                         }}
-                                        className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-violet-500"
+                                        className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-[color:var(--accent-primary)]"
                                     />
                                 </div>
 
@@ -1313,14 +1311,14 @@ export default function RoomPage() {
                                     role="switch"
                                     aria-checked={useProxy}
                                     onClick={() => { const v = !useProxy; setUseProxy(v); localStorage.setItem('wt_proxy', String(v)); }}
-                                    className={`w-full p-4 rounded-xl border flex items-center justify-between transition-all ${useProxy ? "bg-violet-500/10 border-violet-500/20" : "bg-zinc-800/30 border-zinc-800"
+                                    className={`w-full p-4 rounded-xl border flex items-center justify-between transition-all ${useProxy ? "bg-[color:var(--accent-glow)] border-[color:var(--accent-primary)]" : "bg-zinc-800/30 border-zinc-800"
                                         }`}
                                 >
                                     <div className="text-left">
                                         <span className="font-medium text-white text-sm">Proxy Mode</span>
                                         <p className="text-xs text-zinc-500 mt-0.5">Bypass regional restrictions</p>
                                     </div>
-                                    <div className={`w-10 h-5 rounded-full transition-all flex items-center px-0.5 ${useProxy ? "bg-violet-500" : "bg-zinc-700"}`}>
+                                    <div className={`w-10 h-5 rounded-full transition-all flex items-center px-0.5 ${useProxy ? "bg-[color:var(--accent-primary)]" : "bg-zinc-700"}`}>
                                         <div className={`w-4 h-4 knob-on-accent rounded-full transition-all shadow-sm ${useProxy ? "translate-x-5" : "translate-x-0"}`} />
                                     </div>
                                 </button>
@@ -1338,7 +1336,7 @@ export default function RoomPage() {
                                             id="room-cookies"
                                             spellCheck={false}
                                             placeholder={isLoadingCookies ? "Loading saved cookies..." : "# Netscape HTTP Cookie File..."}
-                                            className="w-full h-48 bg-zinc-900 border border-zinc-700 rounded-lg p-3 text-xs font-mono text-zinc-300 focus:border-violet-500/50 resize-y placeholder:text-zinc-500"
+                                            className="w-full h-48 bg-zinc-900 border border-zinc-700 rounded-lg p-3 text-xs font-mono text-zinc-300 focus:border-[color:var(--accent-primary)] resize-y placeholder:text-zinc-500"
                                             value={cookieContent}
                                             onChange={(e) => setCookieContent(e.target.value)}
                                             disabled={isLoadingCookies}
@@ -1382,7 +1380,7 @@ export default function RoomPage() {
                                                     }
                                                 }}
                                                 disabled={isSavingCookies || !cookieContent || !currentUser || currentUser === 'Guest'}
-                                                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 on-accent-light text-xs font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                                className="px-4 py-2 bg-[color:var(--accent-primary)] hover:brightness-110 on-accent-light text-xs font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                             >
                                                 {isSavingCookies ? "Saving..." : "Save Cookies"}
                                             </button>
@@ -1404,7 +1402,7 @@ export default function RoomPage() {
                                         {currentUser && currentUser !== 'Guest' && (
                                             <div className="space-y-2">
                                                 <div className="flex items-center justify-between">
-                                                    <span className="text-[10px] text-zinc-500 uppercase font-medium">API Token</span>
+                                                    <span className="ui-label">API Token</span>
                                                     {extensionToken?.last_sync_at && (
                                                         <span className="text-[10px] text-zinc-500">
                                                             Last sync: {new Date(extensionToken.last_sync_at * 1000).toLocaleString()}
@@ -1468,7 +1466,7 @@ export default function RoomPage() {
 
                                         {/* Download Links */}
                                         <div className="space-y-2">
-                                            <span className="text-[10px] text-zinc-500 uppercase font-medium">Install Extension</span>
+                                            <span className="ui-label">Install Extension</span>
                                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                                 <a
                                                     href="/extension/chrome"

@@ -377,7 +377,7 @@ export function CustomPlayer({
                 <div role="status" className="absolute inset-0 flex items-center justify-center pointer-events-none z-40">
                     <div className="flex flex-col items-center gap-2">
                         <Loader2 aria-hidden="true" className="w-10 h-10 text-white/80 animate-spin" />
-                        <span className="text-white/60 text-xs font-medium uppercase tracking-wider">Buffering...</span>
+                        <span className="ui-label text-neutral-300">Buffering...</span>
                     </div>
                 </div>
             )}
@@ -397,17 +397,17 @@ export function CustomPlayer({
             {showStats && (
                 <div aria-label="Playback statistics" className="absolute top-4 left-4 p-4 rounded-xl bg-black/80 backdrop-blur-xl border border-white/10 z-50 font-mono text-[10px] text-emerald-400 min-w-[200px] shadow-2xl animate-in fade-in zoom-in-95 duration-300">
                     <div className="flex items-center justify-between mb-2 border-b border-white/5 pb-2">
-                        <span className="font-bold text-white uppercase tracking-widest flex items-center gap-1.5">
+                        <span className="ui-title flex items-center gap-1.5">
                             <Activity className="w-3 h-3" /> Stats
                         </span>
-                        <span className="text-zinc-500 uppercase">{isMseMode ? 'DASH' : 'HLS'}</span>
+                        <span className="ui-label">{isMseMode ? 'DASH' : 'HLS'}</span>
                     </div>
                     <div className="space-y-1.5">
                         {isMseMode ? (
                             <>
                                 <div className="flex justify-between">
                                     <span className="text-zinc-500">Mode</span>
-                                    <span className="text-right text-purple-400">MSE (single element)</span>
+                                    <span className="text-right text-[color:var(--accent-primary)]">MSE (single element)</span>
                                 </div>
                                 <div className="flex justify-between">
                                     <span className="text-zinc-500">Quality</span>

@@ -62,7 +62,7 @@ export function DebugPanel({
         <div className="fixed bottom-4 left-4 z-50">
             <button
                 onClick={() => setShowDebug(!showDebug)}
-                className={`p-2 rounded-lg transition-all ${showDebug ? 'bg-violet-600 text-white' : 'bg-neutral-800/80 text-neutral-400 hover:text-white'
+                className={`p-2 rounded-lg transition-all ${showDebug ? 'bg-[color:var(--accent-primary)] on-accent-light' : 'bg-neutral-800/80 text-neutral-400 hover:text-white'
                     }`}
             >
                 <Bug className="w-4 h-4" />
@@ -71,7 +71,7 @@ export function DebugPanel({
             {showDebug && (
                 <div className="absolute bottom-12 left-0 w-80 bg-neutral-900/95 border border-neutral-700 rounded-lg p-4 backdrop-blur-sm shadow-xl">
                     <div className="flex items-center justify-between mb-3">
-                        <h3 className="text-xs font-bold text-white uppercase tracking-wider">Debug Info</h3>
+                        <h3 className="ui-heading">Debug Info</h3>
                         <button
                             onClick={copyDebugInfo}
                             className="p-1.5 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-white transition-colors"

@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Visual Language**: the palette moves from a violet accent on pure-neutral
+  greys to a cool slate with one signal red — red already means "live" next to a
+  video, so it carries the primary action and the recording dot without a second
+  hue, and the video is the only saturated thing on screen. The light scheme
+  leaves pure white behind (a page at `#fff` gives a card nothing to sit on) and
+  its borders are appreciably stronger than the dark scheme's, since a dark edge
+  on a light surface carries less apparent weight than the reverse.
+  The six themes now share one neutral and differ only in accent, instead of
+  each tinting the whole application.
+- **Typography**: the app shell no longer sets `uppercase` on everything, so no
+  element has to opt back out to read normally. Small text was set in 9–11px
+  `font-black uppercase tracking-widest`; four named steps (`ui-label`,
+  `ui-meta`, `ui-title`, `ui-heading`) replace it, carrying hierarchy with size
+  and weight rather than case and letter-spacing. `LIVE` on a live stream is the
+  one place capitals were kept.
+- **Accent Colours Follow The Theme**: every hard-coded violet is now a lookup of
+  `--accent-primary`, which the active theme writes onto the document. Only a
+  handful of places read the theme before, so most of the UI stayed violet
+  whichever theme was chosen.
+
+### Removed
+
+- Decorative CSS that nothing used: frosted-glass surfaces, a violet-to-pink
+  gradient text fill, a pulsing glow, a float animation, and the glow shadow
+  token. Pulsing is kept only for a dropped connection and a live stream.
+
 ### Fixed
 
 - **Endless Buffering, and Paused Videos Resuming Themselves**: the MSE playback engine

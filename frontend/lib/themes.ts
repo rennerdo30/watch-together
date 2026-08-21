@@ -36,109 +36,72 @@ export type CustomTheme = {
     };
 };
 
+/**
+ * The surfaces are the same cool slate in every theme; only the accent
+ * differs.
+ *
+ * Each theme used to carry its own tinted background — a green-black for the
+ * forest one, a red-black for the rose one — which made the app look like six
+ * different applications, each tinted a little cheaply. One considered
+ * neutral, six considered accents, is both calmer and more coherent, and it
+ * lets the video be the only saturated thing on screen.
+ *
+ * The accents are deliberately off the framework's default steps: Tailwind's
+ * 500s are the most-used colours on the web and read as a default rather than
+ * as a choice.
+ */
+const SLATE = {
+    // Read from the tokens so the light scheme is a token swap rather than a
+    // second set of classes to keep in step.
+    bg: 'bg-[color:var(--bg-primary)]',
+    header: 'bg-[color:var(--bg-primary)]/92',
+    sidebar: 'bg-[color:var(--bg-secondary)]/85',
+    bgHex: '#0a0b0d',
+    bgSecondaryHex: '#101216',
+} as const;
+
+function slateTheme(
+    id: string,
+    name: string,
+    accent: string,
+    text: string = ON_ACCENT_LIGHT,
+): Theme {
+    return {
+        id,
+        name,
+        bg: SLATE.bg,
+        header: SLATE.header,
+        sidebar: SLATE.sidebar,
+        // A static class, not `bg-[${accent}]`: Tailwind can only generate
+        // utilities it can see in the source, and an interpolated colour is
+        // invisible to it. The value arrives at runtime through the token,
+        // which `getThemeCSSVars` writes onto the shell.
+        accent: 'bg-[color:var(--accent-primary)]',
+        text,
+        border: 'border-[color:var(--border-default)]',
+        colors: {
+            bg: SLATE.bgHex,
+            bgSecondary: SLATE.bgSecondaryHex,
+            accent,
+            accentGlow: hexToGlow(accent, 0.16),
+        },
+    };
+}
+
 export const THEMES: Theme[] = [
-    {
-        id: 'obsidian',
-        name: 'Obsidian',
-        bg: 'bg-[#09090b]',
-        header: 'bg-[#09090b]/95',
-        sidebar: 'bg-[#0f0f12]/80',
-        accent: 'bg-violet-500',
-        text: ON_ACCENT_LIGHT,
-        border: 'border-white/10',
-        colors: {
-            bg: '#09090b',
-            bgSecondary: '#0f0f12',
-            accent: '#8b5cf6',
-            accentGlow: 'rgba(139, 92, 246, 0.15)',
-        }
-    },
-    {
-        id: 'midnight',
-        name: 'Midnight',
-        bg: 'bg-[#0a0a14]',
-        header: 'bg-[#0a0a14]/95',
-        sidebar: 'bg-[#0f0f1a]/80',
-        accent: 'bg-blue-500',
-        text: ON_ACCENT_LIGHT,
-        border: 'border-blue-500/15',
-        colors: {
-            bg: '#0a0a14',
-            bgSecondary: '#0f0f1a',
-            accent: '#3b82f6',
-            accentGlow: 'rgba(59, 130, 246, 0.15)',
-        }
-    },
-    {
-        id: 'emerald',
-        name: 'Forest',
-        bg: 'bg-[#080c08]',
-        header: 'bg-[#080c08]/95',
-        sidebar: 'bg-[#0a120a]/80',
-        accent: 'bg-emerald-500',
-        text: ON_ACCENT_LIGHT,
-        border: 'border-emerald-500/15',
-        colors: {
-            bg: '#080c08',
-            bgSecondary: '#0a120a',
-            accent: '#10b981',
-            accentGlow: 'rgba(16, 185, 129, 0.15)',
-        }
-    },
-    {
-        id: 'rose',
-        name: 'Rose',
-        bg: 'bg-[#0c0808]',
-        header: 'bg-[#0c0808]/95',
-        sidebar: 'bg-[#120a0a]/80',
-        accent: 'bg-rose-500',
-        text: ON_ACCENT_LIGHT,
-        border: 'border-rose-500/15',
-        colors: {
-            bg: '#0c0808',
-            bgSecondary: '#120a0a',
-            accent: '#f43f5e',
-            accentGlow: 'rgba(244, 63, 94, 0.15)',
-        }
-    },
-    {
-        id: 'amber',
-        name: 'Solar',
-        bg: 'bg-[#0c0a06]',
-        header: 'bg-[#0c0a06]/95',
-        sidebar: 'bg-[#12100a]/80',
-        accent: 'bg-amber-500',
-        text: ON_ACCENT_DARK,
-        border: 'border-amber-500/15',
-        colors: {
-            bg: '#0c0a06',
-            bgSecondary: '#12100a',
-            accent: '#f59e0b',
-            accentGlow: 'rgba(245, 158, 11, 0.15)',
-        }
-    },
-    {
-        id: 'mono',
-        name: 'Mono',
-        bg: 'bg-[#0a0a0a]',
-        header: 'bg-[#0a0a0a]/95',
-        sidebar: 'bg-[#111111]/80',
-        // Mono is the one theme whose accent is a neutral, so `bg-white` and
-        // `text-black` are deliberate: both flip with the colour scheme and stay
-        // in contrast with each other.
-        accent: 'bg-white',
-        text: 'text-black',
-        border: 'border-white/10',
-        colors: {
-            bg: '#0a0a0a',
-            bgSecondary: '#111111',
-            accent: '#ffffff',
-            accentGlow: 'rgba(255, 255, 255, 0.08)',
-        }
-    },
+    // Red is what "live" already means next to a video, so it does double duty
+    // as the primary action and the recording dot.
+    slateTheme('signal', 'Signal', '#d93a3a'),
+    slateTheme('ember', 'Ember', '#e2703a', ON_ACCENT_DARK),
+    slateTheme('tide', 'Tide', '#2e9e8f'),
+    slateTheme('iris', 'Iris', '#6366d8'),
+    slateTheme('citron', 'Citron', '#b8e02e', ON_ACCENT_DARK),
+    // The one theme whose accent is a neutral: `text-black` flips with the
+    // colour scheme alongside it, so the two stay in contrast.
+    slateTheme('mono', 'Mono', '#f2f4f7', 'text-black'),
 ];
 
-export const DEFAULT_THEME = THEMES[0]; // Obsidian
+export const DEFAULT_THEME = THEMES[0]; // Signal
 
 // Helper to get theme by ID
 export function getThemeById(id: string): Theme | undefined {
@@ -184,12 +147,12 @@ export function createCustomTheme(name: string, bgColor: string, accentColor: st
     return {
         id: 'custom',
         name: name || 'Custom',
-        bg: `bg-[${bgColor}]`,
-        header: `bg-[${bgColor}]/95`,
-        sidebar: `bg-[${bgSecondary}]/80`,
-        accent: `bg-[${accentColor}]`,
+        bg: 'bg-[color:var(--bg-primary)]',
+        header: 'bg-[color:var(--bg-primary)]/92',
+        sidebar: 'bg-[color:var(--bg-secondary)]/85',
+        accent: 'bg-[color:var(--accent-primary)]',
         text: ON_ACCENT_LIGHT,
-        border: `border-[${accentColor}]/15`,
+        border: 'border-[color:var(--border-default)]',
         colors: {
             bg: bgColor,
             bgSecondary: bgSecondary,
