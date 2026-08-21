@@ -18,6 +18,9 @@ MAX_CACHE_SIZE_BYTES = int(MAX_CACHE_SIZE_GB * 1024 * 1024 * 1024)
 CACHE_TTL_SECONDS = 21600  # 6 hours
 MIN_DISK_FREE_BYTES = 500 * 1024 * 1024  # Keep at least 500MB free
 MAX_CACHEABLE_FILE_BYTES = 50 * 1024 * 1024  # Don't cache files larger than 50MB
+# A partial download left by a crash or a client that vanished mid-body. It
+# can never be completed, so it is removed once no writer could still own it.
+STALE_TEMP_FILE_SECONDS = 3600
 # How long a measured cache size may be reused. The size is consulted on
 # every proxied request and measuring it means scanning the whole cache
 # directory, which is thousands of files once the cache is warm.

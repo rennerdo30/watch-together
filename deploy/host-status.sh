@@ -18,6 +18,8 @@
 #   ./deploy/host-status.sh --ranges=<video-url>   # re-fetch each declared range upstream
 #   ./deploy/host-status.sh --perf [--tail=N]      # media transfer summary: cache hit rate,
 #                                                 # service-time percentiles, slowest paths
+#   ./deploy/host-status.sh --seek=<video-url>     # cost of a ranged read at increasing
+#                                                 # depths, upstream and through the proxy
 #   ./deploy/host-status.sh --host=10.0.0.5 --user=admin
 
 set -euo pipefail
@@ -43,6 +45,7 @@ SHOW_COOKIES=0
 MANIFEST_URL=""
 RANGES_URL=""
 RUN_PERF=0
+SEEK_URL=""
 
 for arg in "$@"; do
 	case "$arg" in
@@ -60,6 +63,7 @@ for arg in "$@"; do
 		--manifest=*) MANIFEST_URL="${arg#--manifest=}" ;;
 		--ranges=*) RANGES_URL="${arg#--ranges=}" ;;
 		--perf) RUN_PERF=1 ;;
+		--seek=*) SEEK_URL="${arg#--seek=}" ;;
 	esac
 done
 
@@ -83,6 +87,7 @@ ssh -o BatchMode=yes -o ConnectTimeout=15 "${SSH_USER}@${SSH_HOST}" \
 	 WT_MANIFEST_URL=$(printf '%q' "$MANIFEST_URL") \
 	 WT_RANGES_URL=$(printf '%q' "$RANGES_URL") \
 	 WT_PERF=$(printf '%q' "$RUN_PERF") \
+	 WT_SEEK_URL=$(printf '%q' "$SEEK_URL") \
 	 bash -s" <<'REMOTE_SCRIPT'
 set -u
 REMOTE="$WT_REMOTE"
@@ -97,6 +102,7 @@ SHOW_COOKIES="${WT_COOKIES:-0}"
 MANIFEST_URL="${WT_MANIFEST_URL:-}"
 RANGES_URL="${WT_RANGES_URL:-}"
 RUN_PERF="${WT_PERF:-0}"
+SEEK_URL="${WT_SEEK_URL:-}"
 COMPOSE="docker compose -f deploy/docker-compose.yml --env-file ${REMOTE}/.env"
 
 if [ -n "$LOGS_SERVICE" ]; then
@@ -234,6 +240,81 @@ for path in paths:
     print("     expired: %d   next expiry: %s" % (
         expired,
         time.strftime("%Y-%m-%d", time.localtime(soonest)) if soonest else "n/a"))
+PYEOF
+	exit 0
+fi
+
+# What a seek actually costs. Playing from the start works while jumping
+# an hour in "loads forever", so the question is whether a deep byte range
+# is slower at the origin, slower through the proxy, or neither.
+if [ -n "$SEEK_URL" ]; then
+	cd "$REMOTE" || exit 1
+	echo "-- ranged read cost by depth --"
+	$COMPOSE exec -T -e WT_URL="$SEEK_URL" backend python - <<'PYEOF'
+import asyncio, os, time, logging
+logging.disable(logging.WARNING)
+import httpx
+from services.database import get_cached_format
+from services.upstream import open_upstream_stream
+
+URL = os.environ["WT_URL"]
+HEADERS = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.youtube.com/"}
+# One segment's worth, so the numbers compare to what the player asks for.
+CHUNK = 1024 * 1024
+DEPTHS = (0.0, 0.25, 0.50, 0.75, 0.95)
+
+
+async def timed_read(client, url, start, length):
+    """(status, bytes, ms to first byte, ms total) for one ranged read."""
+    began = time.monotonic()
+    resp, _ = await open_upstream_stream(
+        client, url, {**HEADERS, "Range": f"bytes={start}-{start + length - 1}"})
+    first_byte_ms = (time.monotonic() - began) * 1000
+    try:
+        body = await resp.aread()
+    finally:
+        await resp.aclose()
+    return resp.status_code, len(body), first_byte_ms, (time.monotonic() - began) * 1000
+
+
+async def sweep(client, label, url, clen):
+    print("%s  (%.0f MB)" % (label, clen / 1e6))
+    for fraction in DEPTHS:
+        start = int(clen * fraction)
+        if start + CHUNK > clen:
+            start = max(0, clen - CHUNK)
+        try:
+            status, got, ttfb, total = await timed_read(client, url, start, CHUNK)
+            rate = (got / 1e6) / (total / 1000) if total else 0
+            print("   %5.0f%%  offset %-12d %s  %7.1f KB  ttfb %6.0f ms  "
+                  "total %7.0f ms  %5.1f MB/s"
+                  % (fraction * 100, start, status, got / 1024, ttfb, total, rate))
+        except Exception as exc:
+            print("   %5.0f%%  offset %-12d ERROR %s" % (fraction * 100, start, exc))
+
+
+async def main():
+    cached = await get_cached_format(URL)
+    if not cached:
+        print("not resolved yet - open the video once, then re-run")
+        return
+    async with httpx.AsyncClient(follow_redirects=False, timeout=120) as client:
+        qualities = (cached.get("available_qualities") or [])[:1]
+        audio = (cached.get("audio_options") or [])[:1]
+        for q in qualities:
+            clen = int(q.get("filesize") or q.get("filesize_approx") or 0)
+            if not clen:
+                print("v:%s  no filesize recorded, skipping" % q.get("format_id"))
+                continue
+            await sweep(client, "video %s" % q.get("format_id"), q.get("video_url"), clen)
+        for a in audio:
+            clen = int(a.get("filesize") or a.get("filesize_approx") or 0)
+            if not clen:
+                print("a:%s  no filesize recorded, skipping" % a.get("format_id"))
+                continue
+            await sweep(client, "audio %s" % a.get("format_id"), a.get("audio_url"), clen)
+
+asyncio.run(main())
 PYEOF
 	exit 0
 fi
