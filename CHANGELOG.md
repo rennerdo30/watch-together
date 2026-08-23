@@ -45,6 +45,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   broadcast a real `play` — so a paused room resumed itself. Both values are now read at
   load time and the engine is keyed on the stream alone.
 
+- **A Second Viewer Having To Press Play**: a page that has had no user gesture
+  may not start audible playback, and the rejected `play()` promise is the only
+  signal the browser gives — the element simply stays paused. Every call site
+  swallowed that rejection into a `console.log`, and the `play` message
+  broadcast by another member did not even attach a `catch`, so a friend
+  joining a room that was already playing sat on a still frame with nothing to
+  tell them why. A refused start is now retried muted, since being in sync
+  without sound is much closer to what the viewer wanted than being stopped, and
+  one click restores the audio. If even muted playback is refused, the player
+  says so and offers the click the browser is waiting for.
+
 - **Playing An Older Video From A Room's Queue**: `/api/dash-manifest` answered
   `404 "Video has not been resolved yet. Call /api/resolve first."`, which the
   player reported as "the video could not be loaded" (Shaka 1001). Stream URLs

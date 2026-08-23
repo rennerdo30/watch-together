@@ -3,6 +3,8 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import Hls from 'hls.js';
 
+import { startPlayback, type PlaybackStart } from '@/lib/playback';
+
 export interface UseHlsPlayerOptions {
     videoRef: React.RefObject<HTMLVideoElement | null>;
     src: string;
@@ -15,6 +17,8 @@ export interface UseHlsPlayerOptions {
     onError?: (error: string) => void;
     onLoadingChange?: (isLoading: boolean) => void;
     onBufferingChange?: (isBuffering: boolean) => void;
+    /** How autoplay actually went; see `lib/playback`. */
+    onPlaybackStart?: (outcome: PlaybackStart) => void;
 }
 
 export interface HlsQualityLevel {
@@ -63,6 +67,7 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
         onError,
         onLoadingChange,
         onBufferingChange,
+        onPlaybackStart,
     } = options;
 
     // HLS instance ref
@@ -81,6 +86,7 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
         onError,
         onLoadingChange,
         onBufferingChange,
+        onPlaybackStart,
     });
     useEffect(() => {
         callbackRefs.current = {
@@ -89,8 +95,10 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
             onError,
             onLoadingChange,
             onBufferingChange,
+            onPlaybackStart,
         };
-    }, [onManifestParsed, onLevelSwitch, onError, onLoadingChange, onBufferingChange]);
+    }, [onManifestParsed, onLevelSwitch, onError, onLoadingChange, onBufferingChange,
+        onPlaybackStart]);
 
     // State
     const [isLoading, setIsLoading] = useState(true);
@@ -170,11 +178,14 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
                     video.muted = savedMuted;
 
                     isAutoPlayingRef.current = true;
-                    video.play().catch(() => {
-                        console.log('[Player] Autoplay blocked');
-                    }).finally(() => {
-                        setTimeout(() => { isAutoPlayingRef.current = false; }, 1000);
-                    });
+                    // Reported rather than logged: a browser that refuses to
+                    // autoplay leaves this viewer behind the rest of the room,
+                    // and only the UI can ask for the gesture it wants.
+                    startPlayback(video)
+                        .then((outcome) => callbackRefs.current.onPlaybackStart?.(outcome))
+                        .finally(() => {
+                            setTimeout(() => { isAutoPlayingRef.current = false; }, 1000);
+                        });
                 }
             };
 
@@ -246,11 +257,14 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
                     video.muted = savedMuted;
 
                     isAutoPlayingRef.current = true;
-                    video.play().catch(() => {
-                        console.log('[HLS] Autoplay blocked');
-                    }).finally(() => {
-                        setTimeout(() => { isAutoPlayingRef.current = false; }, 1000);
-                    });
+                    // Reported rather than logged: a browser that refuses to
+                    // autoplay leaves this viewer behind the rest of the room,
+                    // and only the UI can ask for the gesture it wants.
+                    startPlayback(video)
+                        .then((outcome) => callbackRefs.current.onPlaybackStart?.(outcome))
+                        .finally(() => {
+                            setTimeout(() => { isAutoPlayingRef.current = false; }, 1000);
+                        });
                 }
             });
 
@@ -336,11 +350,14 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
                     video.muted = savedMuted;
 
                     isAutoPlayingRef.current = true;
-                    video.play().catch(() => {
-                        console.log('[HLS] Autoplay blocked');
-                    }).finally(() => {
-                        setTimeout(() => { isAutoPlayingRef.current = false; }, 1000);
-                    });
+                    // Reported rather than logged: a browser that refuses to
+                    // autoplay leaves this viewer behind the rest of the room,
+                    // and only the UI can ask for the gesture it wants.
+                    startPlayback(video)
+                        .then((outcome) => callbackRefs.current.onPlaybackStart?.(outcome))
+                        .finally(() => {
+                            setTimeout(() => { isAutoPlayingRef.current = false; }, 1000);
+                        });
                 }
             };
 
