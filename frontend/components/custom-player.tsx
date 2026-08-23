@@ -2,10 +2,11 @@
 
 import { useRef, useEffect, useState, useCallback } from 'react';
 import { cn } from '@/lib/utils';
-import { Loader2, Info, Activity } from 'lucide-react';
+import { Loader2, Info, Activity, Play, VolumeX } from 'lucide-react';
 import { PlayerControls } from './player-controls';
 import { QualityOption } from '@/lib/api';
 import { useAudioNormalization, useHlsPlayer, useShakaPlayer, HlsQualityLevel } from './player/hooks';
+import { startPlayback, type PlaybackStart } from '@/lib/playback';
 
 interface CustomPlayerProps {
     url: string | { src: string; type: string };
@@ -89,6 +90,10 @@ export function CustomPlayer({
     const [showSettings, setShowSettings] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    // What the browser's autoplay policy did to the last attempt to start.
+    // 'blocked' means this viewer is stopped while the room plays on, and only
+    // a click of theirs can fix it.
+    const [playbackGate, setPlaybackGate] = useState<PlaybackStart>('started');
 
     // === PLAYBACK STATE ===
     const [currentTime, setCurrentTime] = useState(0);
@@ -142,6 +147,7 @@ export function CustomPlayer({
         onLevelSwitch: setHlsCurrentQuality,
         onError: setError,
         onLoadingChange: setHlsLoading,
+        onPlaybackStart: setPlaybackGate,
     });
 
     // === MSE PLAYER HOOK (single element, manifest-driven) ===
@@ -152,6 +158,7 @@ export function CustomPlayer({
         autoPlay,
         initialTime,
         onError: setError,
+        onPlaybackStart: setPlaybackGate,
     });
 
     // Derive loading/qualities/currentQuality from the active engine
@@ -227,7 +234,14 @@ export function CustomPlayer({
     useEffect(() => {
         if (playerRef) {
             playerRef.current = {
-                play: () => videoRef.current?.play(),
+                play: async () => {
+                    const video = videoRef.current;
+                    if (!video) return;
+                    // A `play` broadcast by another member is not a gesture
+                    // from *this* viewer, so the policy applies to it exactly
+                    // as it does to autoplay.
+                    setPlaybackGate(await startPlayback(video));
+                },
                 pause: () => isLive ? undefined : videoRef.current?.pause(),
                 currentTime: (time?: number) => {
                     if (time !== undefined && videoRef.current) {
@@ -290,6 +304,23 @@ export function CustomPlayer({
         if (isPlaying) videoRef.current?.pause();
         else videoRef.current?.play();
     }, [isPlaying, isLive]);
+
+    const handleStartFromGate = useCallback(async () => {
+        const video = videoRef.current;
+        if (!video) return;
+        // Restore the viewer's own sound preference first: the gate is the
+        // gesture the policy wanted, so there is no need to start muted.
+        video.muted = localStorage.getItem('w2g-player-muted') === 'true';
+        setPlaybackGate(await startPlayback(video));
+    }, []);
+
+    const handleRestoreSound = useCallback(() => {
+        const video = videoRef.current;
+        if (!video) return;
+        video.muted = false;
+        setIsMuted(false);
+        setPlaybackGate('started');
+    }, []);
 
     const handleMuteToggle = useCallback(() => {
         const newMuted = !isMuted;
@@ -380,6 +411,41 @@ export function CustomPlayer({
                         <span className="ui-label text-neutral-300">Buffering...</span>
                     </div>
                 </div>
+            )}
+
+            {/* Autoplay gate.
+                The browser refused to start playback without a gesture from
+                this viewer, so the room plays on without them until they
+                click. Silence here is what made a friend "have to press play
+                manually" with no indication why. */}
+            {playbackGate === 'blocked' && !error && (
+                <button
+                    type="button"
+                    onClick={handleStartFromGate}
+                    className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/70 backdrop-blur-sm cursor-pointer"
+                >
+                    <span className="flex h-16 w-16 items-center justify-center rounded-full bg-[color:var(--accent-primary)] on-accent-light">
+                        <Play aria-hidden="true" className="w-7 h-7 translate-x-0.5" fill="currentColor" />
+                    </span>
+                    <span className="text-white font-medium">Click to join playback</span>
+                    <span className="text-zinc-400 text-sm max-w-xs text-center">
+                        Your browser blocks video from starting on its own. The
+                        room is already playing.
+                    </span>
+                </button>
+            )}
+
+            {/* Started, but muted against the viewer's wishes to satisfy the
+                policy. One click gets the sound back. */}
+            {playbackGate === 'muted-to-start' && (
+                <button
+                    type="button"
+                    onClick={handleRestoreSound}
+                    className="absolute top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 rounded-full bg-black/80 backdrop-blur-sm px-4 py-2 text-sm text-white shadow-lg hover:bg-black/90"
+                >
+                    <VolumeX aria-hidden="true" className="w-4 h-4" />
+                    Started muted — click for sound
+                </button>
             )}
 
             {/* Error Overlay */}

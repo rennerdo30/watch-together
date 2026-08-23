@@ -1,7 +1,6 @@
 import { test, expect } from '@playwright/test';
-import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
+
+import { stubAdaptiveStream } from './adaptive-fixture';
 
 /**
  * Regression tests for the playback engine being torn down by state it
@@ -17,9 +16,6 @@ import path from 'node:path';
  * and playback never settled.
  */
 
-const FIXTURES = path.resolve(__dirname, '../../backend/tests/fixtures');
-const BACKEND_DIR = path.resolve(__dirname, '../../backend');
-const PYTHON = process.env.PYTHON_BIN ?? (process.env.CI ? 'python' : '../venv/bin/python');
 const USER = 'stability@example.com';
 const ORIGINAL_URL = 'https://youtu.be/stability-fixture';
 
@@ -32,84 +28,8 @@ function uniqueRoomId(label: string): string {
   return `e2e-${label}-${Date.now().toString(36)}`;
 }
 
-/** Build the manifest with the backend's own generator, via its Python API. */
-function buildManifest(): string {
-  const script = `
-import sys
-sys.path.insert(0, '.')
-from services.mp4_index import parse_index
-from services.manifest import build_mpd
-
-video_index = parse_index(open('tests/fixtures/video.mp4','rb').read(65536))
-audio_index = parse_index(open('tests/fixtures/audio.mp4','rb').read(65536))
-mpd = build_mpd(
-    6.0,
-    [{'id':'v0','url':'https://cdn.test/fixtures/video.mp4','width':320,'height':240,
-      'vcodec':'avc1.42c015','tbr':200,'fps':15,'index':video_index}],
-    [{'id':'a0','url':'https://cdn.test/fixtures/audio.mp4','acodec':'mp4a.40.2',
-      'abr':128,'asr':44100,'audio_channels':1,'index':audio_index}],
-    'http://localhost:3100/api/proxy?url=',
-)
-sys.stdout.write(mpd)
-`;
-  return execFileSync(PYTHON, ['-c', script], { cwd: BACKEND_DIR, encoding: 'utf8' });
-}
-
-/**
- * Serve a playable adaptive stream to the room page, counting how often
- * the manifest is asked for. Each request past the first is the engine
- * being rebuilt: the manifest describes the whole stream and is read once.
- */
-async function stubAdaptiveStream(page: import('@playwright/test').Page) {
-  const manifest = buildManifest();
-  const video = readFileSync(path.join(FIXTURES, 'video.mp4'));
-  const audio = readFileSync(path.join(FIXTURES, 'audio.mp4'));
-  const manifestRequests: string[] = [];
-
-  await page.route('**/api/resolve**', (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        stream_url: 'https://cdn.test/fixtures/video.mp4',
-        original_url: ORIGINAL_URL,
-        stream_type: 'dash',
-        video_url: 'https://cdn.test/fixtures/video.mp4',
-        audio_url: 'https://cdn.test/fixtures/audio.mp4',
-        title: 'Stability fixture',
-        duration: 6,
-        is_live: false,
-        quality: '240p',
-        available_qualities: [],
-      }),
-    }));
-
-  await page.route('**/api/dash-manifest**', (route) => {
-    manifestRequests.push(route.request().url());
-    route.fulfill({
-      status: 200,
-      contentType: 'application/dash+xml',
-      headers: { 'Access-Control-Allow-Origin': '*' },
-      body: manifest,
-    });
-  });
-
-  await page.route('**/api/proxy**', (route) => {
-    const target = new URL(route.request().url()).searchParams.get('url') ?? '';
-    const isAudio = target.includes('audio');
-    route.fulfill({
-      status: 200,
-      contentType: isAudio ? 'audio/mp4' : 'video/mp4',
-      headers: { 'Accept-Ranges': 'bytes' },
-      body: isAudio ? audio : video,
-    });
-  });
-
-  return manifestRequests;
-}
-
 async function openRoomWithVideo(page: import('@playwright/test').Page, label: string) {
-  const manifestRequests = await stubAdaptiveStream(page);
+  const manifestRequests = await stubAdaptiveStream(page, ORIGINAL_URL);
 
   await page.goto(`/room/${uniqueRoomId(label)}?user=${encodeURIComponent(USER)}`);
   await expect(page.getByLabel('Connected to the room')).toBeVisible({ timeout: 15_000 });

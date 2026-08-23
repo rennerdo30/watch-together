@@ -2,6 +2,7 @@
 
 import { useRef, useEffect, useCallback, useState } from 'react';
 
+import { startPlayback, type PlaybackStart } from '@/lib/playback';
 import {
     SHAKA_BUFFER_GOAL_SECONDS,
     SHAKA_BUFFER_BEHIND_SECONDS,
@@ -51,6 +52,8 @@ export interface UseShakaPlayerOptions {
     onError?: (error: string) => void;
     onLoadingChange?: (isLoading: boolean) => void;
     onBufferingChange?: (isBuffering: boolean) => void;
+    /** How autoplay actually went; see `lib/playback`. */
+    onPlaybackStart?: (outcome: PlaybackStart) => void;
 }
 
 export interface UseShakaPlayerReturn {
@@ -281,9 +284,12 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
 
                 if (shouldAutoPlay) {
                     video.muted = localStorage.getItem('w2g-player-muted') === 'true';
-                    video.play().catch(() => {
-                        console.log('[ShakaPlayer] Autoplay blocked');
-                    });
+                    // The outcome is reported rather than logged: a viewer
+                    // whose browser refuses to autoplay is left behind by the
+                    // rest of the room, and only the UI can ask them for the
+                    // gesture the browser is waiting for.
+                    const outcome = await startPlayback(video);
+                    if (!cancelled) callbackRefs.current.onPlaybackStart?.(outcome);
                 }
             } catch (error: unknown) {
                 if (cancelled) return;
