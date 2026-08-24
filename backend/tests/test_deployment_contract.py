@@ -397,3 +397,46 @@ class TestExtensionNightlyRelease:
         assert "watch-together-chrome-nightly.zip" in text
         assert ".zip.sha256" in text
         assert "unzip -t" in text
+
+
+class TestContactDetailsAreReal:
+    """An invented contact address sends real reports nowhere.
+
+    `security+watch-together@proton.me` was written into the security policy,
+    the code of conduct and two issue templates. Nobody owned that mailbox, so
+    a vulnerability reported there would simply have been lost. GitHub's
+    private advisory flow needs no mailbox to be monitored.
+    """
+
+    DOCUMENTS = (
+        "SECURITY.md",
+        "CODE_OF_CONDUCT.md",
+        ".github/ISSUE_TEMPLATE/config.yml",
+        ".github/ISSUE_TEMPLATE/security_report.md",
+    )
+
+    def test_no_contact_email_is_advertised(self):
+        import re
+
+        pattern = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+        offenders = {}
+        for name in self.DOCUMENTS:
+            found = pattern.findall((REPO_ROOT / name).read_text())
+            if found:
+                offenders[name] = found
+        assert not offenders, (
+            f"an email address is advertised in {offenders}; use the GitHub "
+            "advisory flow rather than a mailbox nobody reads"
+        )
+
+    def test_the_private_advisory_route_is_documented(self):
+        for name in ("SECURITY.md", ".github/ISSUE_TEMPLATE/config.yml",
+                     ".github/ISSUE_TEMPLATE/security_report.md"):
+            text = (REPO_ROOT / name).read_text()
+            assert "security/advisories/new" in text, f"{name} has no private route"
+
+    def test_no_response_time_is_promised(self):
+        """A one-person side project cannot honour an acknowledgement SLA."""
+        text = (REPO_ROOT / "SECURITY.md").read_text().lower()
+        for promise in ("within 72 hours", "within 7 days", "within 24 hours"):
+            assert promise not in text
