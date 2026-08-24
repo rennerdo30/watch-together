@@ -1,0 +1,133 @@
+name: Chrome Extension Nightly
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# The rolling `nightly` prerelease and its assets are rewritten on every main
+# commit. No package is published anywhere else.
+permissions:
+  contents: write
+
+concurrency:
+  group: chrome-extension-nightly
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Package Chrome extension
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate extension source
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(Path("extension/manifest.json").read_text())
+          assert manifest["manifest_version"] == 3, "Chrome package must use Manifest V3"
+          assert manifest["background"]["service_worker"] == "background.js"
+          print("Chrome extension version:", manifest["version"])
+          PY
+
+          found=0
+          while IFS= read -r script; do
+            node --check "$script"
+            found=$((found + 1))
+          done < <(find extension -name '*.js' -not -path '*/lib/*' | sort)
+          test "$found" -gt 0
+
+      - name: Build extension ZIP
+        run: |
+          rm -rf dist
+          mkdir -p dist
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import zipfile
+          from pathlib import Path
+
+          root = Path("extension")
+          output = Path("dist/watch-together-chrome-nightly.zip")
+          page_files = [
+              path
+              for directory in (root / "popup", root / "options")
+              for path in sorted(directory.glob("*"))
+              if path.suffix in {".html", ".css", ".js"}
+          ]
+          paths = [
+              root / "manifest.json",
+              root / "background.js",
+              *page_files,
+              *sorted((root / "icons").glob("*.png")),
+          ]
+          files = [path for path in paths if path.is_file()]
+
+          with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+              for path in files:
+                  archive.write(path, path.relative_to(root).as_posix())
+
+          digest = hashlib.sha256(output.read_bytes()).hexdigest()
+          checksum = output.with_suffix(output.suffix + ".sha256")
+          checksum.write_text(f"{digest}  {output.name}\n")
+
+          manifest = json.loads((root / "manifest.json").read_text())
+          Path("dist/release-notes.md").write_text(
+              "Automated Chrome extension build from the latest `main` commit.\n\n"
+              f"- Extension version: `{manifest['version']}`\n"
+              f"- Commit: `{os.environ['GITHUB_SHA']}`\n\n"
+              "Download `watch-together-chrome-nightly.zip`, extract it, then load the "
+              "directory from `chrome://extensions` with Developer mode enabled.\n"
+          )
+          print(f"Wrote {output} with {len(files)} files")
+          PY
+
+          unzip -t dist/watch-together-chrome-nightly.zip
+          unzip -p dist/watch-together-chrome-nightly.zip manifest.json \
+            | python -m json.tool >/dev/null
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: watch-together-chrome-nightly
+          path: |
+            dist/watch-together-chrome-nightly.zip
+            dist/watch-together-chrome-nightly.zip.sha256
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Update rolling Nightly prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The tag is deliberately movable: this is one rolling prerelease,
+          # not an unbounded permanent release for every commit.
+          git tag -f nightly "$GITHUB_SHA"
+          git push origin refs/tags/nightly --force
+
+          if gh release view nightly >/dev/null 2>&1; then
+            gh release edit nightly \
+              --title "Chrome Extension Nightly" \
+              --notes-file dist/release-notes.md \
+              --prerelease
+            gh release upload nightly \
+              dist/watch-together-chrome-nightly.zip \
+              dist/watch-together-chrome-nightly.zip.sha256 \
+              --clobber
+          else
+            gh release create nightly \
+              dist/watch-together-chrome-nightly.zip \
+              dist/watch-together-chrome-nightly.zip.sha256 \
+              --title "Chrome Extension Nightly" \
+              --notes-file dist/release-notes.md \
+              --prerelease \
+              --target "$GITHUB_SHA"
+          fi

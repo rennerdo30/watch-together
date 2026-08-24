@@ -121,9 +121,13 @@ CI runs exactly these, plus manifest/syntax checks on the browser extension.
 To watch age-restricted or region-locked content:
 
 ### Option 1: Browser Extension (Recommended)
-1. Install the Watch Together extension from `/extension` folder
+1. Install the extension — download the ZIP from the
+   [Nightly release](../../releases/tag/nightly), built from the latest `main`,
+   or load the `/extension` folder unpacked
 2. Log in to YouTube/Twitch in your browser
-3. The extension automatically syncs cookies to the server
+3. Open your Watch Together instance while signed in, then connect it from the
+   extension popup
+4. The extension automatically syncs cookies to the server
 
 ### Option 2: Manual Upload
 1. Export cookies using [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)

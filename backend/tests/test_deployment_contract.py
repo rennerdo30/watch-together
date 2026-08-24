@@ -80,7 +80,7 @@ class TestExtensionManifest:
         """
         background = (EXTENSION / "background.js").read_text()
         assert "chrome.permissions.onAdded.addListener" in background
-        assert "fetchInstanceToken" in background
+        assert "fetchInstanceConnection" in background
 
     def test_token_is_fetched_from_the_api(self):
         background = (EXTENSION / "background.js").read_text()
@@ -89,6 +89,38 @@ class TestExtensionManifest:
         # The meta-tag handshake is gone.
         assert "wt-ext-token" not in background
         assert "TOKEN_DETECTED" not in background
+
+    def test_credentials_are_local_only_and_atomic(self):
+        """Synced or separately-written identity fields can cross users.
+
+        Older builds synchronized token/email/backend. A later partial move to
+        local storage left the options page reading the old synced values,
+        while a failed instance switch could pair a new backend with the old
+        token/email. One local record is the only credential source now.
+        """
+        background = (EXTENSION / "background.js").read_text()
+        assert "ACTIVE_CONNECTION_KEY = 'activeConnection'" in background
+        assert "[ACTIVE_CONNECTION_KEY]: acquired.connection" in background
+        assert "LEGACY_SYNC_CREDENTIAL_KEYS" in background
+        assert "chrome.storage.sync.remove(LEGACY_SYNC_CREDENTIAL_KEYS)" in background
+        assert "instanceOrigins.push" not in background
+
+    def test_options_get_identity_from_verified_background_status(self):
+        options = (EXTENSION / "options" / "options.js").read_text()
+        html = (EXTENSION / "options" / "options.html").read_text()
+
+        assert "sendMessage({ type: 'GET_STATUS' })" in options
+        sync_get = options.split("chrome.storage.sync.get(", 1)[1].split(")", 1)[0]
+        for credential in ("token", "userEmail", "backendUrl", "lastSync"):
+            assert credential not in sync_get, f"{credential} is read from synchronized storage"
+        assert 'id="tokenInput"' not in html
+        assert "copyTokenBtn" not in options
+
+    def test_cached_email_is_not_connection_proof(self):
+        background = (EXTENSION / "background.js").read_text()
+        assert "/api/extension/status" in background
+        assert "sessionEmail !== tokenStatus.userEmail" in background
+        assert "connected: !!local.token" not in background
 
 
 class TestConnectionsAreReused:
@@ -333,3 +365,35 @@ class TestVisualLanguage:
                 if "-violet-" in line or "-fuchsia-" in line:
                     offenders.append(f"{path.name}:{number}")
         assert not offenders, f"a hard-coded accent is back in {offenders}"
+
+
+class TestExtensionNightlyRelease:
+    """Every main commit produces one rolling, installable Chrome package."""
+
+    WORKFLOW = REPO_ROOT / ".github" / "workflows" / "extension-nightly.yml"
+
+    def test_runs_on_every_main_commit(self):
+        text = self.WORKFLOW.read_text()
+        assert "push:" in text
+        assert "branches: [main]" in text
+
+    def test_release_has_write_permission_and_is_a_prerelease(self):
+        text = self.WORKFLOW.read_text()
+        assert "contents: write" in text
+        assert "gh release" in text
+        assert "--prerelease" in text
+        assert "git tag -f nightly" in text
+
+    def test_chrome_package_is_manifest_v3_and_excludes_repo_files(self):
+        text = self.WORKFLOW.read_text()
+        assert 'manifest["manifest_version"] == 3' in text
+        assert 'root / "manifest.json"' in text
+        assert 'root / "background.js"' in text
+        assert 'root / "manifest.v2.json"' not in text
+        assert "CLAUDE.md" not in text
+
+    def test_release_has_a_zip_and_checksum(self):
+        text = self.WORKFLOW.read_text()
+        assert "watch-together-chrome-nightly.zip" in text
+        assert ".zip.sha256" in text
+        assert "unzip -t" in text

@@ -214,6 +214,7 @@ This repository uses GitHub Actions for quality, security, and release automatio
 - **CI** (`.github/workflows/ci.yml`): backend tests, frontend lint/build, extension sanity checks
 - **CodeQL** (`.github/workflows/codeql.yml`): security scanning for Python and TypeScript/JavaScript
 - **Container Publish** (`.github/workflows/docker-publish.yml`): publish backend/frontend images to GHCR on `main`
+- **Chrome Extension Nightly** (`.github/workflows/extension-nightly.yml`): package the MV3 extension on every `main` commit and refresh the rolling `nightly` prerelease
 - **Dependabot** (`.github/dependabot.yml`): automated dependency update pull requests
 
 ## Pull Request Process
