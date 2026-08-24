@@ -28,6 +28,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   handful of places read the theme before, so most of the UI stayed violet
   whichever theme was chosen.
 
+### Added
+
+- **Chrome Extension Nightly**: every commit to `main` now validates and packages
+  the Manifest V3 extension, uploads the ZIP and SHA-256 checksum as a workflow
+  artifact, and updates one rolling GitHub prerelease tagged `nightly`.
+
+### Security
+
+- **Extension Identity Is Token-Bound**: the extension no longer treats a cached
+  email beside any cached token as proof of who is connected. One atomic,
+  local-only active connection stores the instance and token; displayed identity
+  comes from `/api/extension/status`, is compared with the browser's current
+  Access session, and is cleared on a 401, account switch, permission removal, or
+  explicit disconnect. `/api/token` returns its owner in the same authenticated
+  response, removing the former `/api/me` → `/api/token` session race. Identity
+  and token responses are explicitly `private, no-store`.
+- **Synchronized Extension Secrets Removed**: old builds wrote token, email and
+  backend URL into `chrome.storage.sync`, and the options page still read those
+  values after the background worker moved to local storage. A second browser
+  could therefore display and copy another user's still-valid token while sync
+  ran as the current local user. Upgrade deletes those historical secrets rather
+  than migrating them, Settings reads only verified background status, and the
+  token reveal/copy UI is removed.
+
 ### Removed
 
 - Decorative CSS that nothing used: frosted-glass surfaces, a violet-to-pink
@@ -35,6 +59,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   token. Pulsing is kept only for a dropped connection and a live stream.
 
 ### Fixed
+
+- **Volume Jumping To 100% On The Next Queue Item**: queue advancement
+  intentionally remounts the player, and a new `<video>` starts at the browser
+  defaults. Persisted preferences updated React after hydration, but a mount-only
+  effect had already copied `volume=1` into the element and never ran again, so
+  the slider showed the stored value while the sound was full volume. Audio
+  preferences now use a hydration-safe local-storage store and React continuously
+  applies the same volume/mute state to each physical media element.
 
 - **Endless Buffering, and Paused Videos Resuming Themselves**: the MSE playback engine
   was rebuilt whenever room state changed. Its setup effect depended on `autoPlay` (which

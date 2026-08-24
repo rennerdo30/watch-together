@@ -282,6 +282,17 @@ The browser extension automatically syncs cookies from YouTube/Twitch to the ser
 
 ### Installation
 
+Chrome, from a packaged build (recommended):
+
+1. Download `watch-together-chrome-nightly.zip` from the
+   [Nightly release](../../releases/tag/nightly) — rebuilt from every commit on
+   `main` — and verify it against the published `.sha256` if you like
+2. Extract the archive
+3. Open `chrome://extensions`, enable "Developer mode"
+4. Click "Load unpacked" and select the extracted folder
+
+From a checkout (either browser):
+
 1. Open Chrome/Firefox and go to `chrome://extensions` or `about:addons`
 2. Enable "Developer mode"
 3. Click "Load unpacked" and select the `extension/` folder
@@ -290,8 +301,15 @@ The browser extension automatically syncs cookies from YouTube/Twitch to the ser
 ### Usage
 
 1. Log in to YouTube/Twitch in your browser
-2. Click the extension icon
-3. Cookies are automatically synced when you visit Watch Together
+2. Open your Watch Together instance while signed in, then click the extension
+   icon and connect that site — the extension asks the instance who you are and
+   stores the resulting token locally, on this browser only
+3. Cookies are synced automatically from then on
+
+The account shown in the popup and in Settings is always the one the backend
+confirms owns the stored token. If you sign in as somebody else, the extension
+drops the old connection rather than syncing your cookies to the previous
+account, and asks you to reconnect.
 
 ## Maintenance
 
