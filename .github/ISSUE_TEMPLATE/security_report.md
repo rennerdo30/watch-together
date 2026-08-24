@@ -10,7 +10,8 @@ Please do not disclose security vulnerabilities in public issues.
 
 Report privately using the process in `SECURITY.md`:
 
-- Email: security+watch-together@proton.me
+- Open a private advisory:
+  https://github.com/rennerdo30/watch-together/security/advisories/new
 - Include steps to reproduce, impact, and affected versions/commits
 
 This issue can be closed after redirecting to private reporting.

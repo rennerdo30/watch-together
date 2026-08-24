@@ -58,8 +58,9 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the project maintainers at security+watch-together@proton.me.
-All complaints will be reviewed and investigated promptly and fairly.
+reported privately to the maintainer, [@rennerdo30](https://github.com/rennerdo30),
+through GitHub. All complaints will be reviewed and investigated promptly and
+fairly.
 
 All community leaders are obligated to respect the privacy and security of the
 reporter of any incident.
