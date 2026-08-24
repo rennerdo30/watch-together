@@ -44,7 +44,6 @@ interface RoomPlayer {
     pause: () => void;
     currentTime: (time?: number) => number;
     getDuration: () => number;
-    setVolume: (val: number) => void;
     getVideoElement: () => HTMLVideoElement | null;
 }
 

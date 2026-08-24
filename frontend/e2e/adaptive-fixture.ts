@@ -56,13 +56,18 @@ export async function stubAdaptiveStream(
   const audio = readFileSync(path.join(FIXTURES, 'audio.mp4'));
   const manifestRequests: string[] = [];
 
-  await page.route('**/api/resolve**', (route) =>
-    route.fulfill({
+  await page.route('**/api/resolve**', (route) => {
+    // Preserve whichever original URL the room asked to resolve. This lets a
+    // test drive two different queue items through one shared media fixture:
+    // the player identity changes (and therefore remounts), while the bytes
+    // stay deterministic.
+    const requested = new URL(route.request().url()).searchParams.get('url') ?? originalUrl;
+    return route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         stream_url: FIXTURE_VIDEO_URL,
-        original_url: originalUrl,
+        original_url: requested,
         stream_type: 'dash',
         video_url: FIXTURE_VIDEO_URL,
         audio_url: FIXTURE_AUDIO_URL,
@@ -72,7 +77,8 @@ export async function stubAdaptiveStream(
         quality: '240p',
         available_qualities: [],
       }),
-    }));
+    });
+  });
 
   await page.route('**/api/dash-manifest**', (route) => {
     manifestRequests.push(route.request().url());

@@ -7,6 +7,7 @@ import { PlayerControls } from './player-controls';
 import { QualityOption } from '@/lib/api';
 import { useAudioNormalization, useHlsPlayer, useShakaPlayer, HlsQualityLevel } from './player/hooks';
 import { startPlayback, type PlaybackStart } from '@/lib/playback';
+import { useLocalStorageState } from '@/lib/hooks/useLocalStorageState';
 
 interface CustomPlayerProps {
     url: string | { src: string; type: string };
@@ -40,9 +41,23 @@ interface PlayerAPI {
     pause: () => void;
     currentTime: (time?: number) => number;
     getDuration: () => number;
-    setVolume: (val: number) => void;
     getVideoElement: () => HTMLVideoElement | null;
 }
+
+const parseStoredBoolean = (stored: string | null, fallback: boolean) =>
+    stored === null ? fallback : stored === 'true';
+
+const parseStoredVolume = (stored: string | null, fallback: number) => {
+    if (stored === null) return fallback;
+    const parsed = Number.parseFloat(stored);
+    return Number.isFinite(parsed) ? Math.min(1, Math.max(0, parsed)) : fallback;
+};
+
+const parseStoredGain = (stored: string | null, fallback: number) => {
+    if (stored === null) return fallback;
+    const parsed = Number.parseFloat(stored);
+    return Number.isFinite(parsed) ? Math.min(3, Math.max(0.5, parsed)) : fallback;
+};
 
 /**
  * CustomPlayer - Unified video player supporting both HLS and DASH (separate video/audio) streams.
@@ -76,6 +91,11 @@ export function CustomPlayer({
 }: CustomPlayerProps) {
     // === REFS ===
     const videoRef = useRef<HTMLVideoElement>(null);
+    const [mediaElement, setMediaElement] = useState<HTMLVideoElement | null>(null);
+    const setVideoElement = useCallback((element: HTMLVideoElement | null) => {
+        videoRef.current = element;
+        setMediaElement(element);
+    }, []);
     const containerRef = useRef<HTMLDivElement>(null);
     const isAutoPlayingRef = useRef(false);
 
@@ -98,34 +118,23 @@ export function CustomPlayer({
     // === PLAYBACK STATE ===
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
+    const [isPlaying, setIsPlaying] = useState(false);
     const [liveLatency, setLiveLatency] = useState(0);
     const [seekableRange, setSeekableRange] = useState({ start: 0, end: 0 });
 
-    // === VOLUME STATE (persisted via useEffect to avoid SSR hydration mismatch) ===
-    const [volume, setVolume] = useState(1.0);
-    const [isMuted, setIsMuted] = useState(false);
-    const volumeInitializedRef = useRef(false);
-
-    useEffect(() => {
-        if (!volumeInitializedRef.current) {
-            volumeInitializedRef.current = true;
-            const savedVolume = localStorage.getItem('w2g-player-volume');
-            if (savedVolume !== null) setVolume(parseFloat(savedVolume));
-            const savedMuted = localStorage.getItem('w2g-player-muted');
-            if (savedMuted === 'true') setIsMuted(true);
-        }
-    }, []);
-
-    // === NORMALIZATION STATE (persisted via useEffect to avoid SSR hydration mismatch) ===
-    const [isNormalizationEnabled, setIsNormalizationEnabled] = useState(true);
-    const [normalizationGain, setNormalizationGain] = useState(1.0);
-
-    useEffect(() => {
-        const savedNorm = localStorage.getItem('w2g-player-normalization');
-        if (savedNorm === 'false') setIsNormalizationEnabled(false);
-        const savedGain = localStorage.getItem('w2g-player-normalization-gain');
-        if (savedGain !== null) setNormalizationGain(parseFloat(savedGain));
-    }, []);
+    // === PERSISTED AUDIO PREFERENCES ===
+    // useSyncExternalStore gives hydration the server defaults, then reads the
+    // browser snapshot and updates every subscriber. Unlike a mount effect, it
+    // cannot leave React controls on the stored value while the media element
+    // is stuck on the first render's defaults.
+    const [volume, setVolume] = useLocalStorageState(
+        'w2g-player-volume', 1, parseStoredVolume);
+    const [isMuted, setIsMuted] = useLocalStorageState(
+        'w2g-player-muted', false, parseStoredBoolean);
+    const [isNormalizationEnabled, setIsNormalizationEnabled] = useLocalStorageState(
+        'w2g-player-normalization', true, parseStoredBoolean);
+    const [normalizationGain, setNormalizationGain] = useLocalStorageState(
+        'w2g-player-normalization-gain', 1, parseStoredGain);
 
     // === HLS PLAYER HOOK ===
     const [hlsLoading, setHlsLoading] = useState(true);
@@ -169,25 +178,27 @@ export function CustomPlayer({
     // === AUDIO NORMALIZATION HOOK ===
     // Both engines carry audio on the video element.
     const normalization = useAudioNormalization({
-        sourceElement: videoRef.current,
+        sourceElement: mediaElement,
         enabled: isNormalizationEnabled,
         gain: normalizationGain,
     });
 
     const isBuffering = isMseMode ? shakaPlayer.isBuffering : hlsPlayer.isBuffering;
-    const isPlaying = !videoRef.current?.paused;
 
-    // === APPLY INITIAL VOLUME (non-DASH mode) ===
-    // This runs once on mount and when switching modes to sync persisted settings
+    // === KEEP MEDIA AND CONTROLS ON ONE VOLUME STATE ===
+    // A queue transition remounts the player and creates a new media element at
+    // the browser defaults (volume 1, unmuted). Persisted preferences are read
+    // after hydration, so a mount-only effect captures those defaults and never
+    // sees the state update: the slider says 25% while the new video plays at
+    // 100%. React state is authoritative, and every change is applied to the
+    // current element. Autoplay-policy muting remains transient because it does
+    // not change `isMuted`.
     useEffect(() => {
         const video = videoRef.current;
         if (!video) return;
-
-        // Apply saved volume and muted state to video element
         video.volume = volume;
         video.muted = isMuted;
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []); // Only on mount, not on every volume change
+    }, [volume, isMuted]);
 
     // === VIDEO EVENT HANDLERS (non-DASH mode) ===
     useEffect(() => {
@@ -195,13 +206,20 @@ export function CustomPlayer({
         if (!video) return;
 
         const handleVideoPlay = () => {
+            setIsPlaying(true);
             if (!isAutoPlayingRef.current) onPlay?.();
         };
-        const handleVideoPause = () => onPause?.();
+        const handleVideoPause = () => {
+            setIsPlaying(false);
+            onPause?.();
+        };
         const handleVideoSeeked = () => {
             if (!isAutoPlayingRef.current) onSeeked?.(video.currentTime);
         };
-        const handleVideoEnded = () => onEnd?.();
+        const handleVideoEnded = () => {
+            setIsPlaying(false);
+            onEnd?.();
+        };
         const handleVideoTimeUpdate = () => {
             setCurrentTime(video.currentTime);
             onTimeUpdate?.(video.currentTime, !video.paused);
@@ -250,9 +268,6 @@ export function CustomPlayer({
                     return videoRef.current?.currentTime || 0;
                 },
                 getDuration: () => videoRef.current?.duration || 0,
-                setVolume: (val: number) => {
-                    if (videoRef.current) videoRef.current.volume = val;
-                },
                 getVideoElement: () => videoRef.current,
             };
         }
@@ -310,9 +325,9 @@ export function CustomPlayer({
         if (!video) return;
         // Restore the viewer's own sound preference first: the gate is the
         // gesture the policy wanted, so there is no need to start muted.
-        video.muted = localStorage.getItem('w2g-player-muted') === 'true';
+        video.muted = isMuted;
         setPlaybackGate(await startPlayback(video));
-    }, []);
+    }, [isMuted]);
 
     const handleRestoreSound = useCallback(() => {
         const video = videoRef.current;
@@ -320,32 +335,16 @@ export function CustomPlayer({
         video.muted = false;
         setIsMuted(false);
         setPlaybackGate('started');
-    }, []);
+    }, [setIsMuted]);
 
     const handleMuteToggle = useCallback(() => {
-        const newMuted = !isMuted;
-        setIsMuted(newMuted);
-        localStorage.setItem('w2g-player-muted', String(newMuted));
-
-        if (videoRef.current) {
-            videoRef.current.muted = newMuted;
-        }
-    }, [isMuted]);
+        setIsMuted(!isMuted);
+    }, [isMuted, setIsMuted]);
 
     const handleVolumeChange = useCallback((val: number) => {
         setVolume(val);
-        localStorage.setItem('w2g-player-volume', String(val));
-
-        if (val > 0 && isMuted) {
-            setIsMuted(false);
-            localStorage.setItem('w2g-player-muted', 'false');
-        }
-
-        if (videoRef.current) {
-            videoRef.current.volume = val;
-            if (val > 0) videoRef.current.muted = false;
-        }
-    }, [isMuted]);
+        if (val > 0 && isMuted) setIsMuted(false);
+    }, [isMuted, setIsMuted, setVolume]);
 
     const handleSeek = useCallback((time: number) => {
         if (videoRef.current) {
@@ -362,15 +361,12 @@ export function CustomPlayer({
     }, [isMseMode, shakaPlayer, hlsPlayer]);
 
     const toggleNormalization = useCallback(() => {
-        const newVal = !isNormalizationEnabled;
-        setIsNormalizationEnabled(newVal);
-        localStorage.setItem('w2g-player-normalization', String(newVal));
-    }, [isNormalizationEnabled]);
+        setIsNormalizationEnabled(!isNormalizationEnabled);
+    }, [isNormalizationEnabled, setIsNormalizationEnabled]);
 
     const updateNormalizationGain = useCallback((val: number) => {
         setNormalizationGain(val);
-        localStorage.setItem('w2g-player-normalization-gain', String(val));
-    }, []);
+    }, [setNormalizationGain]);
 
     // === RENDER ===
     return (
@@ -385,7 +381,7 @@ export function CustomPlayer({
         >
             {/* Video Element */}
             <video
-                ref={videoRef}
+                ref={setVideoElement}
                 poster={poster}
                 className="w-full h-full object-contain"
                 playsInline
