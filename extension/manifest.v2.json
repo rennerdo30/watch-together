@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Watch Together Cookie Sync",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Automatically sync cookies from YouTube, Twitch, and other sites to Watch Together",
   "permissions": [
     "cookies",

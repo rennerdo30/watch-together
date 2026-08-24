@@ -332,16 +332,6 @@ input[readonly] {
     background: rgba(239, 68, 68, 0.1);
 }
 
-/* Token Row */
-.token-row {
-    display: flex;
-    gap: 8px;
-}
-
-.token-row input {
-    flex: 1;
-}
-
 /* Footer */
 footer {
     margin-top: 32px;

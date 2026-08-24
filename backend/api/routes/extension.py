@@ -4,7 +4,7 @@ Browser extension sync API routes.
 import os
 import logging
 from typing import List, Optional
-from fastapi import APIRouter, Request, HTTPException, Header
+from fastapi import APIRouter, Request, Response, HTTPException, Header
 import pydantic
 
 from core.config import COOKIES_DIR, COOKIE_FILE_MODE
@@ -17,6 +17,7 @@ router = APIRouter(prefix="/api/extension", tags=["extension"])
 # Counted separately from browser cookie uploads so a busy extension
 # cannot lock a user out of the web UI, or the other way round.
 RATE_LIMIT_SCOPE = "extension-sync"
+NO_STORE_HEADERS = {"Cache-Control": "private, no-store"}
 
 
 class CookieSyncRequest(pydantic.BaseModel):
@@ -28,7 +29,11 @@ class CookieSyncRequest(pydantic.BaseModel):
 async def validate_bearer_token(authorization: str) -> str:
     """Validate Bearer token and return user_email."""
     if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
+        raise HTTPException(
+            status_code=401,
+            detail="Missing or invalid authorization header",
+            headers=NO_STORE_HEADERS,
+        )
 
     token_id = authorization[7:]  # Remove "Bearer " prefix
 
@@ -36,7 +41,11 @@ async def validate_bearer_token(authorization: str) -> str:
     user_email = await validate_token(token_id)
 
     if not user_email:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired token",
+            headers=NO_STORE_HEADERS,
+        )
 
     return user_email
 
@@ -115,11 +124,12 @@ async def sync_cookies(
 
 
 @router.get("/status")
-async def get_status(authorization: str = Header(None)):
+async def get_status(response: Response, authorization: str = Header(None)):
     """
     Check token validity and get sync status.
     Returns token info and last sync time.
     """
+    response.headers.update(NO_STORE_HEADERS)
     # Validate token
     user_email = await validate_bearer_token(authorization)
     token_id = authorization[7:]
@@ -136,3 +146,24 @@ async def get_status(authorization: str = Header(None)):
         "sync_count": token["sync_count"] if token else 0,
         "has_cookies": has_cookies,
     }
+
+
+@router.delete("/token")
+async def revoke_extension_token(
+    response: Response,
+    authorization: str = Header(None),
+):
+    """Revoke the exact bearer token held by this extension.
+
+    The web token endpoint revokes every token owned by the current Access
+    session. Disconnecting an extension must not depend on that session still
+    being the same user, or revoke some other user's credentials after an
+    account switch.
+    """
+    await validate_bearer_token(authorization)
+    token_id = authorization[7:]
+
+    from services.database import revoke_token
+    revoked = await revoke_token(token_id)
+    response.headers.update(NO_STORE_HEADERS)
+    return {"status": "ok", "revoked": bool(revoked)}

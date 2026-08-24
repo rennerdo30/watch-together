@@ -43,11 +43,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.error('Failed to get current tab:', err);
     }
 
-    // Load status
-    await loadStatus();
+    // Load backend-verified status, then decide whether the open site needs
+    // to be connected. One request feeds both displays, so cached token
+    // presence cannot disagree with the identity card.
+    const initialStatus = await loadStatus();
 
-    // Offer to connect the open site if it is not granted yet
-    await updateConnectOffer();
+    // Offer to connect the open site if it is not the verified active instance.
+    await updateConnectOffer(initialStatus);
 
     // Check for detected streams
     await checkForStreams();
@@ -82,7 +84,7 @@ document.addEventListener('DOMContentLoaded', async () => {
      * user is looking at, which also has to come from a click: the browser
      * only shows a permission prompt in response to a user gesture.
      */
-    async function updateConnectOffer() {
+    async function updateConnectOffer(status) {
         connectBtn.hidden = true;
         connectStatus.textContent = '';
 
@@ -105,9 +107,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Granting permission is only half the job — the token still has to
         // be fetched — and hiding the button after the grant left no way to
         // finish or retry.
-        const state = await chrome.runtime.sendMessage({ type: 'GET_INSTANCE_STATE' });
         const host = new URL(origin).host;
-        const connectedHere = state?.backendUrl === origin && state?.hasToken;
+        const connectedHere = status?.connected && status?.backendUrl === origin;
         if (alreadyGranted && connectedHere) {
             return;
         }
@@ -135,7 +136,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         ? `Connected as ${result.userEmail} — cookies synced`
                         : `Connected as ${result.userEmail}`;
                     connectBtn.hidden = true;
-                    await loadStatus();
+                    status = await loadStatus();
                 } else {
                     connectStatus.textContent = result?.error || 'Could not connect';
                     connectStatus.className = 'send-status error';
@@ -160,11 +161,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (status.connected) {
                 statusDot.classList.add('connected');
                 statusText.textContent = 'Connected';
-                userEmail.textContent = status.userEmail || '';
+                const host = status.backendUrl ? new URL(status.backendUrl).host : '';
+                userEmail.textContent = [status.userEmail, host].filter(Boolean).join(' · ');
             } else {
                 statusDot.classList.remove('connected');
-                statusText.textContent = 'Not Connected';
-                userEmail.textContent = 'Open your Watch Together site, then connect it';
+                statusText.textContent = status.connectionReason === 'unverifiable'
+                    ? 'Cannot verify connection'
+                    : 'Not Connected';
+                userEmail.textContent = status.connectionError ||
+                    'Open your Watch Together site, then connect it';
             }
 
             // Last sync
@@ -195,10 +200,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             // Auto-sync toggle
             autoSyncToggle.checked = status.autoSync;
+            return status;
 
         } catch (err) {
             console.error('Failed to load status:', err);
             statusText.textContent = 'Error';
+            userEmail.textContent = 'Could not verify the extension account';
+            return null;
         }
     }
 
@@ -307,13 +315,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                 sendStatus.textContent = result.message || 'Video queued!';
                 sendStatus.className = 'send-status success';
 
-                // Open Watch Together room in new tab (use local storage, validate protocol)
-                const storage = await chrome.storage.local.get(['backendUrl']);
-                if (storage.backendUrl) {
+                // Open the room on the same verified instance that handled
+                // this request; no separately cached backend URL is consulted.
+                if (result.backendUrl) {
                     try {
-                        const parsed = new URL(storage.backendUrl);
+                        const parsed = new URL(result.backendUrl);
                         if (['http:', 'https:'].includes(parsed.protocol)) {
-                            const roomUrl = `${storage.backendUrl}/room/${encodeURIComponent(roomId)}`;
+                            const roomUrl = `${parsed.origin}/room/${encodeURIComponent(roomId)}`;
                             chrome.tabs.create({ url: roomUrl });
                         }
                     } catch (urlErr) {

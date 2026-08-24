@@ -72,36 +72,13 @@
                 <div class="domain-list" id="domainList"></div>
             </section>
 
-            <!-- Backend URL -->
+            <!-- Active instance -->
             <section class="card">
-                <h2>Backend URL</h2>
+                <h2>Active Instance</h2>
                 <p class="help-text">
-                    This is automatically detected when you visit Watch Together.
+                    The verified account above is scoped to this Watch Together instance.
                 </p>
-                <input type="text" id="backendUrl" placeholder="https://your-instance.example.com" readonly />
-            </section>
-
-            <!-- API Token -->
-            <section class="card">
-                <h2>API Token</h2>
-                <p class="help-text">
-                    Your authentication token. Keep this secret.
-                </p>
-                <div class="token-row">
-                    <input type="password" id="tokenInput" readonly />
-                    <button class="btn btn-icon" id="toggleTokenBtn" title="Show/hide token">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                            <circle cx="12" cy="12" r="3"/>
-                        </svg>
-                    </button>
-                    <button class="btn btn-icon" id="copyTokenBtn" title="Copy token">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-                        </svg>
-                    </button>
-                </div>
+                <input type="text" id="backendUrl" placeholder="Not connected" readonly />
             </section>
 
             <!-- Danger Zone -->
@@ -118,7 +95,7 @@
         </main>
 
         <footer>
-            <p>Watch Together Cookie Sync v1.0.0</p>
+            <p>Watch Together Cookie Sync v1.1.0</p>
         </footer>
     </div>
 
