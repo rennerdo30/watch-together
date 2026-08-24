@@ -35,95 +35,310 @@ const MIN_SYNC_INTERVAL_MS = 5000; // 5 seconds between syncs
 const STREAM_MAX_AGE_MS = 60 * 60 * 1000;
 
 
+/** Local-only key for the one active Watch Together connection. */
+const ACTIVE_CONNECTION_KEY = 'activeConnection';
+
+/**
+ * Credential keys written by older extension builds.
+ *
+ * They are deleted, not migrated: sync storage can arrive from another
+ * browser/user, and the flat local tuple can already be internally mixed after
+ * a failed instance switch. Keeping either would preserve the defect this
+ * migration exists to remove.
+ */
+const LEGACY_SYNC_CREDENTIAL_KEYS = [
+    'token', 'userEmail', 'backendUrl', 'lastSync', 'lastSyncStatus'
+];
+const LEGACY_LOCAL_CREDENTIAL_KEYS = [
+    'token', 'userEmail', 'backendUrl', 'instanceOrigins'
+];
+
+/** Serialises connection changes; the last request deterministically wins. */
+let connectionQueue = Promise.resolve();
+const connectionAttempts = new Map();
+
 /** Turn any instance URL into a match pattern for its origin. */
 function originPattern(instanceUrl) {
     const { origin } = new URL(instanceUrl);
     return `${origin}/*`;
 }
 
-/**
- * Fetch this user's API token straight from an instance.
- *
- * Once the origin is granted, the extension can ask the backend directly
- * and the browser attaches the session cookies — including the Cloudflare
- * Access cookie. That replaces waiting for the page to advertise a token
- * in a meta tag, which only worked if the content script happened to run
- * after the page had fetched it.
- */
-async function fetchInstanceToken(origin) {
-    const meResponse = await fetch(`${origin}/api/me`, { credentials: 'include' });
-    if (!meResponse.ok) {
-        throw new Error(`Instance returned ${meResponse.status} for /api/me`);
-    }
-    const me = await meResponse.json();
-    if (!me.authenticated || !me.email) {
-        throw new Error('Not signed in to this instance — open it in a tab and log in first');
-    }
+/** Remove credentials that could have synchronized from another user. */
+async function purgeLegacyCredentials() {
+    await Promise.all([
+        chrome.storage.sync.remove(LEGACY_SYNC_CREDENTIAL_KEYS),
+        chrome.storage.local.remove(LEGACY_LOCAL_CREDENTIAL_KEYS),
+    ]);
+}
 
-    const tokenResponse = await fetch(`${origin}/api/token`, { credentials: 'include' });
+/** Read the active local connection, rejecting malformed partial records. */
+async function getActiveConnection() {
+    const stored = await chrome.storage.local.get([ACTIVE_CONNECTION_KEY]);
+    const connection = stored[ACTIVE_CONNECTION_KEY];
+    if (!connection || typeof connection.origin !== 'string' ||
+        typeof connection.token !== 'string' || !connection.token) {
+        return null;
+    }
+    try {
+        const origin = new URL(connection.origin).origin;
+        if (!['http:', 'https:'].includes(new URL(origin).protocol)) return null;
+        return { origin, token: connection.token };
+    } catch {
+        return null;
+    }
+}
+
+/** Clear only the credential tuple; portable preferences stay intact. */
+async function clearActiveConnection() {
+    await chrome.storage.local.remove([ACTIVE_CONNECTION_KEY]);
+}
+
+/** Fetch the token and its owner in one authenticated response. */
+async function fetchInstanceConnection(origin) {
+    const tokenResponse = await fetch(`${origin}/api/token`, {
+        credentials: 'include',
+        cache: 'no-store',
+    });
     if (!tokenResponse.ok) {
         throw new Error(`Instance returned ${tokenResponse.status} for /api/token`);
     }
     const body = await tokenResponse.json();
     const token = body?.token?.id;
-    if (!token) {
-        throw new Error('Instance did not return a token');
+    const userEmail = body?.user_email;
+    if (!token || !userEmail) {
+        throw new Error('Instance did not return a token and its owner');
     }
 
-    return { token, userEmail: me.email };
+    // Prove that the new token authenticates as the owner returned with it
+    // before committing anything to storage.
+    const status = await fetchTokenStatus({ origin, token });
+    if (status.userEmail !== userEmail) {
+        throw new Error('Instance returned a token for a different user');
+    }
+    return { connection: { origin, token }, userEmail };
+}
+
+/** Validate a token and return the identity bound to it by the backend. */
+async function fetchTokenStatus(connection) {
+    const response = await fetch(`${connection.origin}/api/extension/status`, {
+        headers: { 'Authorization': `Bearer ${connection.token}` },
+        cache: 'no-store',
+    });
+    if (response.status === 401) {
+        const error = new Error('The saved extension token is no longer valid');
+        error.code = 'invalid-token';
+        throw error;
+    }
+    if (!response.ok) {
+        throw new Error(`Instance returned ${response.status} for /api/extension/status`);
+    }
+    const body = await response.json();
+    if (!body?.valid || !body.user_email) {
+        throw new Error('Instance did not verify the token owner');
+    }
+    return {
+        userEmail: body.user_email,
+        lastSyncAt: body.last_sync_at || null,
+        syncCount: body.sync_count || 0,
+        hasCookies: Boolean(body.has_cookies),
+    };
+}
+
+/** Fetch the identity of the browser's current Access session. */
+async function fetchSessionIdentity(origin) {
+    const response = await fetch(`${origin}/api/me`, {
+        credentials: 'include',
+        cache: 'no-store',
+    });
+    if (!response.ok) {
+        throw new Error(`Instance returned ${response.status} for /api/me`);
+    }
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+        throw new Error('Open the Watch Together instance and sign in again');
+    }
+    const body = await response.json();
+    return body?.authenticated && body.email ? body.email : null;
 }
 
 /**
- * Grant access to an instance and start syncing to it.
- *
- * Called from the popup ("Connect this site") and the options page. The
- * permission prompt must be triggered from a user gesture, so the caller
- * requests it and this only records the result.
+ * Verify the stored token and ensure it still belongs to the browser's current
+ * signed-in user. A cached display email is never consulted.
  */
-async function connectInstance(instanceUrl) {
-    let pattern;
-    try {
-        pattern = originPattern(instanceUrl);
-    } catch {
-        return { success: false, error: 'That does not look like a valid URL' };
+async function verifyActiveConnection({ checkSession = true } = {}) {
+    const connection = await getActiveConnection();
+    if (!connection) {
+        return { connected: false, reason: 'not-connected' };
     }
 
+    let tokenStatus;
+    try {
+        tokenStatus = await fetchTokenStatus(connection);
+    } catch (err) {
+        if (err.code === 'invalid-token') {
+            await clearActiveConnection();
+            return {
+                connected: false,
+                backendUrl: connection.origin,
+                reason: 'invalid-token',
+                error: err.message,
+            };
+        }
+        return {
+            connected: false,
+            backendUrl: connection.origin,
+            reason: 'unverifiable',
+            error: err.message,
+        };
+    }
+
+    if (checkSession) {
+        let sessionEmail;
+        try {
+            sessionEmail = await fetchSessionIdentity(connection.origin);
+        } catch (err) {
+            return {
+                connected: false,
+                backendUrl: connection.origin,
+                reason: 'unverifiable',
+                error: err.message,
+            };
+        }
+        if (!sessionEmail) {
+            // The token is kept: an expired Access session says nothing about
+            // who owns it, and signing back in restores the connection without
+            // another permission prompt. Reporting "not connected" is enough to
+            // stop a sync, so this viewer's cookies cannot reach the token's
+            // account while the browser cannot say who is using it.
+            return {
+                connected: false,
+                backendUrl: connection.origin,
+                reason: 'signed-out',
+                error: 'Sign in to the Watch Together instance, then reconnect',
+            };
+        }
+        if (sessionEmail !== tokenStatus.userEmail) {
+            await clearActiveConnection();
+            return {
+                connected: false,
+                backendUrl: connection.origin,
+                reason: 'account-changed',
+                error: `The browser is signed in as ${sessionEmail}; reconnect the extension`,
+            };
+        }
+    }
+
+    return {
+        connected: true,
+        backendUrl: connection.origin,
+        userEmail: tokenStatus.userEmail,
+        lastSyncAt: tokenStatus.lastSyncAt,
+        syncCount: tokenStatus.syncCount,
+        hasCookies: tokenStatus.hasCookies,
+        connection,
+    };
+}
+
+/** Acquire and atomically commit one instance connection. */
+async function connectInstanceNow(origin, syncAfterConnect) {
+    const pattern = originPattern(origin);
     if (!await chrome.permissions.contains({ origins: [pattern] })) {
         return { success: false, error: 'Permission for this site was not granted' };
     }
 
-    const origin = new URL(instanceUrl).origin;
-
-    const { instanceOrigins = [] } = await chrome.storage.local.get(['instanceOrigins']);
-    if (!instanceOrigins.includes(pattern)) {
-        instanceOrigins.push(pattern);
-        await chrome.storage.local.set({ instanceOrigins });
-    }
-    await chrome.storage.local.set({ backendUrl: origin });
-
-    let credentials;
+    let acquired;
     try {
-        credentials = await fetchInstanceToken(origin);
+        acquired = await fetchInstanceConnection(origin);
     } catch (err) {
-        console.warn('[WT Sync] Could not fetch a token:', err);
+        console.warn('[WT Sync] Could not establish a connection:', err);
         return { success: false, error: err.message };
     }
 
+    // One write means an origin can never be paired with another origin's
+    // token, even if a previous or simultaneous attempt failed.
     await chrome.storage.local.set({
-        token: credentials.token,
-        userEmail: credentials.userEmail,
-        backendUrl: origin,
+        [ACTIVE_CONNECTION_KEY]: acquired.connection,
     });
 
-    const syncResult = await syncCookies();
-    return { success: true, backendUrl: origin, userEmail: credentials.userEmail, syncResult };
+    const syncResult = syncAfterConnect
+        ? await syncCookies({ allowReconnect: false })
+        : null;
+    return {
+        success: true,
+        backendUrl: origin,
+        userEmail: acquired.userEmail,
+        syncResult,
+    };
+}
+
+/**
+ * Connect to an instance without allowing permission/popup races to mix state.
+ * Duplicate same-origin calls share one promise; different origins are
+ * serialised, so a later request commits after an earlier one.
+ */
+function connectInstance(instanceUrl, { syncAfterConnect = true } = {}) {
+    let origin;
+    try {
+        origin = new URL(instanceUrl).origin;
+        if (!['http:', 'https:'].includes(new URL(origin).protocol)) {
+            throw new Error('unsupported protocol');
+        }
+    } catch {
+        return Promise.resolve({ success: false, error: 'That does not look like a valid URL' });
+    }
+
+    const existing = connectionAttempts.get(origin);
+    if (existing) return existing;
+
+    const attempt = connectionQueue.then(
+        () => connectInstanceNow(origin, syncAfterConnect),
+        () => connectInstanceNow(origin, syncAfterConnect),
+    );
+    connectionQueue = attempt.catch(() => undefined);
+    connectionAttempts.set(origin, attempt);
+    attempt.then(
+        () => connectionAttempts.delete(origin),
+        () => connectionAttempts.delete(origin),
+    );
+    return attempt;
+}
+
+/** Revoke the active token best-effort, clear it locally, and drop permission. */
+async function disconnectInstance() {
+    const connection = await getActiveConnection();
+    if (!connection) return { success: true };
+
+    try {
+        await fetch(`${connection.origin}/api/extension/token`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${connection.token}` },
+            cache: 'no-store',
+        });
+    } catch (err) {
+        console.warn('[WT Sync] Could not revoke the token during disconnect:', err);
+    }
+
+    await clearActiveConnection();
+    try {
+        // Manifest V2 grants host access up front, so the browser refuses to
+        // drop it. Losing the credential is what disconnect has to guarantee.
+        await chrome.permissions.remove({ origins: [originPattern(connection.origin)] });
+    } catch (err) {
+        console.warn('[WT Sync] Host permission was not removable:', err);
+    }
+    return { success: true };
 }
 
 /**
  * Initialize extension on install
  */
 chrome.runtime.onInstalled.addListener(async () => {
-    console.log('[WT Sync] Extension installed');
+    console.log('[WT Sync] Extension installed or updated');
+
+    // Credentials from older builds were synchronized across devices and may
+    // belong to another browser/user. Delete them rather than treating them as
+    // a current connection; the user reconnects once under the new schema.
+    await purgeLegacyCredentials();
 
     // Set default settings
     const settings = await chrome.storage.sync.get(['domains', 'autoSync']);
@@ -167,6 +382,17 @@ chrome.permissions.onAdded.addListener((permissions) => {
             }
         }
     })();
+});
+
+/** A removed host permission invalidates a connection to that origin. */
+chrome.permissions.onRemoved.addListener((permissions) => {
+    const removed = new Set(permissions.origins || []);
+    if (removed.size === 0) return;
+    getActiveConnection().then((connection) => {
+        if (connection && removed.has(originPattern(connection.origin))) {
+            return clearActiveConnection();
+        }
+    }).catch(err => console.warn('[WT Sync] Permission cleanup failed:', err));
 });
 
 /**
@@ -238,8 +464,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             connectInstance(message.instanceUrl).then(result => sendResponse(result));
             return true;
 
-        case 'GET_INSTANCE_STATE':
-            getInstanceState().then(state => sendResponse(state));
+        case 'DISCONNECT_INSTANCE':
+            disconnectInstance().then(result => sendResponse(result));
+            return true;
+
+        case 'RESET_EXTENSION':
+            resetExtension().then(result => sendResponse(result));
             return true;
 
         case 'UPDATE_SETTINGS':
@@ -261,39 +491,48 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 /**
- * Report which instances are connected, for the popup and options page.
- */
-async function getInstanceState() {
-    const { instanceOrigins = [], backendUrl = null, token = null } =
-        await chrome.storage.local.get(['instanceOrigins', 'backendUrl', 'token']);
-    return { instanceOrigins, backendUrl, hasToken: Boolean(token) };
-}
-
-/**
- * Update extension settings
+ * Update portable extension settings.
+ * Credentials are never accepted here: this is the sync-storage boundary.
  */
 async function updateSettings(settings) {
-    await chrome.storage.sync.set(settings);
-    if ('autoSync' in settings) {
+    const portable = {};
+    for (const key of ['domains', 'autoSync', 'lastRoomId']) {
+        if (key in settings) portable[key] = settings[key];
+    }
+    await chrome.storage.sync.set(portable);
+    if ('autoSync' in portable) {
         await setupAutoSync();
     }
 }
 
-/**
- * Get current extension status
- */
+/** Get current, backend-verified extension status. */
 async function getStatus() {
-    // Credentials from local storage, preferences from sync storage
-    const local = await chrome.storage.local.get(['token', 'userEmail', 'backendUrl', 'lastSync', 'lastSyncStatus']);
-    const sync = await chrome.storage.sync.get(['domains', 'autoSync']);
+    const [verified, local, sync] = await Promise.all([
+        verifyActiveConnection(),
+        chrome.storage.local.get(['lastSync', 'lastSyncStatus']),
+        chrome.storage.sync.get(['domains', 'autoSync']),
+    ]);
     return {
-        connected: !!local.token,
-        userEmail: local.userEmail || null,
+        connected: verified.connected,
+        userEmail: verified.connected ? verified.userEmail : null,
+        backendUrl: verified.backendUrl || null,
+        connectionReason: verified.reason || null,
+        connectionError: verified.error || null,
         lastSync: local.lastSync || null,
         lastSyncStatus: local.lastSyncStatus || null,
         domains: sync.domains || DEFAULT_DOMAINS,
-        autoSync: sync.autoSync !== false
+        autoSync: sync.autoSync !== false,
     };
+}
+
+/** Reset both the local connection and portable preferences coherently. */
+async function resetExtension() {
+    await disconnectInstance();
+    await chrome.storage.local.remove(['lastSync', 'lastSyncStatus', 'lastQueuedVideo']);
+    await chrome.storage.sync.clear();
+    await chrome.storage.sync.set({ domains: DEFAULT_DOMAINS, autoSync: true });
+    await setupAutoSync();
+    return { success: true };
 }
 
 /**
@@ -352,131 +591,102 @@ async function getCookiesForDomains(domains) {
     return unique;
 }
 
-/**
- * Get the backend URL from storage or default
- */
-async function getBackendUrl() {
-    const storage = await chrome.storage.local.get(['backendUrl']);
-    // Default to the current tab's origin if we have a token
-    return storage.backendUrl || null;
+/** Send one cookie payload with the active bearer token. */
+async function postCookieSync(connection, netscapeContent, domains) {
+    return fetch(`${connection.origin}/api/extension/sync`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${connection.token}`,
+        },
+        body: JSON.stringify({
+            cookies: netscapeContent,
+            domains,
+            browser: 'chrome',
+        }),
+        cache: 'no-store',
+    });
 }
 
 /**
- * Sync cookies to Watch Together backend
+ * Sync cookies only after the active token and current browser session agree
+ * on the same user. A revoked token is reacquired once, never retried forever.
  */
-async function syncCookies() {
-    // Rate limit check
-    const now = Date.now();
-    if (now - lastSyncTime < MIN_SYNC_INTERVAL_MS) {
-        const waitSec = Math.ceil((MIN_SYNC_INTERVAL_MS - (now - lastSyncTime)) / 1000);
+async function syncCookies({ allowReconnect = true } = {}) {
+    const startedAt = Date.now();
+    if (startedAt - lastSyncTime < MIN_SYNC_INTERVAL_MS) {
+        const waitSec = Math.ceil((MIN_SYNC_INTERVAL_MS - (startedAt - lastSyncTime)) / 1000);
         console.log(`[WT Sync] Rate limited, wait ${waitSec}s`);
         return { success: false, error: `Please wait ${waitSec}s before syncing again` };
     }
-
-    // Prevent concurrent sync operations
     if (syncInProgress) {
         console.log('[WT Sync] Sync already in progress, skipping');
         return { success: false, error: 'Sync already in progress' };
     }
 
     syncInProgress = true;
-    lastSyncTime = now;
+    lastSyncTime = startedAt;
     console.log('[WT Sync] Starting cookie sync...');
 
     try {
-        let local = await chrome.storage.local.get(['token', 'backendUrl']);
+        let verified = await verifyActiveConnection();
+        const reconnectOrigin = verified.backendUrl;
 
-        // A token can be missing because it was never fetched, or because it
-        // was rotated on the server. If the instance is still granted, ask it
-        // for a fresh one rather than failing with "No token configured".
-        if (!local.token && local.backendUrl) {
-            try {
-                if (await chrome.permissions.contains({ origins: [originPattern(local.backendUrl)] })) {
-                    const credentials = await fetchInstanceToken(local.backendUrl);
-                    await chrome.storage.local.set({
-                        token: credentials.token,
-                        userEmail: credentials.userEmail,
-                    });
-                    local = await chrome.storage.local.get(['token', 'backendUrl']);
-                    console.log('[WT Sync] Recovered a token for', local.backendUrl);
-                }
-            } catch (err) {
-                console.warn('[WT Sync] Could not recover a token:', err);
-            }
-        }
-        const sync = await chrome.storage.sync.get(['domains']);
-        const storage = { ...sync, ...local };
-
-        if (!storage.token) {
-            console.log('[WT Sync] No token configured');
-            await chrome.storage.local.set({ lastSyncStatus: 'No token configured' });
-            return { success: false, error: 'No token configured' };
+        if (!verified.connected && allowReconnect && reconnectOrigin &&
+            await chrome.permissions.contains({ origins: [originPattern(reconnectOrigin)] })) {
+            const reconnected = await connectInstance(reconnectOrigin, { syncAfterConnect: false });
+            if (reconnected.success) verified = await verifyActiveConnection();
         }
 
-        const domains = storage.domains || DEFAULT_DOMAINS;
+        if (!verified.connected || !verified.connection) {
+            const error = verified.error || 'Not connected to Watch Together';
+            await chrome.storage.local.set({ lastSyncStatus: error });
+            return { success: false, error };
+        }
+
+        const { domains = DEFAULT_DOMAINS } = await chrome.storage.sync.get(['domains']);
         const cookies = await getCookiesForDomains(domains);
-
         if (cookies.length === 0) {
-            console.log('[WT Sync] No cookies to sync');
             await chrome.storage.local.set({ lastSyncStatus: 'No cookies found' });
             return { success: false, error: 'No cookies found for configured domains' };
         }
 
         const netscapeContent = toNetscapeFormat(cookies);
-        const backendUrl = storage.backendUrl || '';
+        let connection = verified.connection;
+        let response = await postCookieSync(connection, netscapeContent, domains);
 
-        if (!backendUrl) {
-            console.log('[WT Sync] No backend URL configured');
-            await chrome.storage.local.set({ lastSyncStatus: 'No backend URL' });
-            return { success: false, error: 'No backend URL configured. Visit Watch Together to configure.' };
-        }
-
-        // Validate backend URL protocol to prevent security issues
-        try {
-            const parsedUrl = new URL(backendUrl);
-            if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
-                console.error('[WT Sync] Invalid backend URL protocol:', parsedUrl.protocol);
-                await chrome.storage.local.set({ lastSyncStatus: 'Invalid backend URL' });
-                return { success: false, error: 'Invalid backend URL protocol' };
+        // Token regeneration invalidates the stored bearer. Reacquire it from
+        // the current signed-in session and retry this payload exactly once.
+        if (response.status === 401 && allowReconnect) {
+            const origin = connection.origin;
+            await clearActiveConnection();
+            const reconnected = await connectInstance(origin, { syncAfterConnect: false });
+            if (reconnected.success) {
+                const fresh = await verifyActiveConnection();
+                if (fresh.connected && fresh.connection) {
+                    connection = fresh.connection;
+                    response = await postCookieSync(connection, netscapeContent, domains);
+                }
             }
-        } catch {
-            console.error('[WT Sync] Invalid backend URL format');
-            await chrome.storage.local.set({ lastSyncStatus: 'Invalid backend URL' });
-            return { success: false, error: 'Invalid backend URL format' };
         }
-
-        // Send to backend
-        const response = await fetch(`${backendUrl}/api/extension/sync`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${storage.token}`
-            },
-            body: JSON.stringify({
-                cookies: netscapeContent,
-                domains: domains,
-                browser: 'chrome'
-            })
-        });
 
         if (!response.ok) {
+            if (response.status === 401) await clearActiveConnection();
             const error = await response.json().catch(() => ({
-                detail: `HTTP ${response.status}: ${response.statusText || 'Request failed'}`
+                detail: `HTTP ${response.status}: ${response.statusText || 'Request failed'}`,
             }));
             throw new Error(error.detail || `HTTP ${response.status}`);
         }
 
-        const result = await response.json();
-        const now = Date.now();
-
+        await response.json();
+        const syncedAt = Date.now();
         await chrome.storage.local.set({
-            lastSync: now,
-            lastSyncStatus: 'Success'
+            lastSync: syncedAt,
+            lastSyncStatus: 'Success',
         });
 
         console.log(`[WT Sync] Synced ${cookies.length} cookies from ${domains.length} domains`);
-        return { success: true, cookieCount: cookies.length, domains: domains };
-
+        return { success: true, cookieCount: cookies.length, domains };
     } catch (err) {
         console.error('[WT Sync] Sync failed:', err);
         await chrome.storage.local.set({ lastSyncStatus: err.message });
@@ -597,11 +807,14 @@ async function sendToRoom(roomId, videoUrl, pageUrl) {
     console.log(`[WT Sync] Sending to room ${roomId}:`, videoUrl?.slice(0, 80) || pageUrl);
 
     try {
-        const storage = await chrome.storage.local.get(['token', 'backendUrl']);
-
-        if (!storage.token || !storage.backendUrl) {
-            return { success: false, error: 'Not connected to Watch Together' };
+        const verified = await verifyActiveConnection();
+        if (!verified.connected || !verified.connection) {
+            return {
+                success: false,
+                error: verified.error || 'Not connected to Watch Together',
+            };
         }
+        const connection = verified.connection;
 
         // Use the page URL for resolution (original URL), or the detected stream URL
         const urlToSend = pageUrl || videoUrl;
@@ -620,10 +833,12 @@ async function sendToRoom(roomId, videoUrl, pageUrl) {
         }
 
         // Resolve the video through the backend
-        const resolveResponse = await fetch(`${storage.backendUrl}/api/resolve?url=${encodeURIComponent(urlToSend)}`, {
+        const resolveResponse = await fetch(`${connection.origin}/api/resolve?url=${encodeURIComponent(urlToSend)}`, {
+            credentials: 'include',
             headers: {
-                'Authorization': `Bearer ${storage.token}`
-            }
+                'Authorization': `Bearer ${connection.token}`,
+            },
+            cache: 'no-store',
         });
 
         if (!resolveResponse.ok) {
@@ -649,7 +864,8 @@ async function sendToRoom(roomId, videoUrl, pageUrl) {
         return {
             success: true,
             message: `Video resolved: ${videoData.title}`,
-            videoData
+            backendUrl: connection.origin,
+            videoData,
         };
 
     } catch (err) {

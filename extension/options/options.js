@@ -23,12 +23,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const addDomainBtn = document.getElementById('addDomainBtn');
     const domainList = document.getElementById('domainList');
     const backendUrlInput = document.getElementById('backendUrl');
-    const tokenInput = document.getElementById('tokenInput');
-    const toggleTokenBtn = document.getElementById('toggleTokenBtn');
-    const copyTokenBtn = document.getElementById('copyTokenBtn');
     const resetBtn = document.getElementById('resetBtn');
-
-    let showToken = false;
 
     // Load initial data
     await loadSettings();
@@ -40,52 +35,48 @@ document.addEventListener('DOMContentLoaded', async () => {
     newDomainInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') handleAddDomain();
     });
-    toggleTokenBtn.addEventListener('click', handleToggleToken);
-    copyTokenBtn.addEventListener('click', handleCopyToken);
     resetBtn.addEventListener('click', handleReset);
 
     /**
      * Load and display all settings
      */
     async function loadSettings() {
-        const storage = await chrome.storage.sync.get([
-            'token', 'userEmail', 'backendUrl', 'domains', 'autoSync', 'lastSync'
+        // Credentials never come from sync storage: old extension versions
+        // synchronized them across devices, which is how one browser could
+        // display another user's email and still-valid token. The background
+        // worker validates the local bearer and current site session, then
+        // returns the one identity the backend says it represents.
+        const [status, preferences] = await Promise.all([
+            chrome.runtime.sendMessage({ type: 'GET_STATUS' }),
+            chrome.storage.sync.get(['domains', 'autoSync']),
         ]);
 
-        // Connection status
-        if (storage.token) {
+        if (status?.connected) {
             statusDot.classList.add('connected');
             statusText.textContent = 'Connected';
-            userEmail.textContent = storage.userEmail || '';
+            userEmail.textContent = status.userEmail || '';
             connectionHelp.style.display = 'none';
         } else {
             statusDot.classList.remove('connected');
-            statusText.textContent = 'Not Connected';
+            statusText.textContent = status?.connectionReason === 'unverifiable'
+                ? 'Cannot verify connection'
+                : 'Not Connected';
             userEmail.textContent = '';
+            connectionHelp.textContent = status?.connectionError ||
+                'Visit Watch Together while logged in, then connect it from the extension menu.';
             connectionHelp.style.display = 'block';
         }
 
-        // Auto-sync toggle
-        autoSyncToggle.checked = storage.autoSync !== false;
+        autoSyncToggle.checked = preferences.autoSync !== false;
 
-        // Last sync
-        if (storage.lastSync) {
-            const date = new Date(storage.lastSync);
-            lastSync.textContent = date.toLocaleString();
+        if (status?.lastSync) {
+            lastSync.textContent = new Date(status.lastSync).toLocaleString();
         } else {
             lastSync.textContent = 'Never';
         }
 
-        // Domains
-        const domains = storage.domains || DEFAULT_DOMAINS;
-        renderDomains(domains);
-
-        // Backend URL
-        backendUrlInput.value = storage.backendUrl || '';
-
-        // Token
-        tokenInput.value = storage.token || '';
-        tokenInput.type = 'password';
+        renderDomains(preferences.domains || DEFAULT_DOMAINS);
+        backendUrlInput.value = status?.backendUrl || '';
     }
 
     /**
@@ -187,37 +178,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     /**
-     * Toggle token visibility
-     */
-    function handleToggleToken() {
-        showToken = !showToken;
-        tokenInput.type = showToken ? 'text' : 'password';
-    }
-
-    /**
-     * Copy token to clipboard
-     */
-    async function handleCopyToken() {
-        const token = tokenInput.value;
-        if (token) {
-            await navigator.clipboard.writeText(token);
-            copyTokenBtn.innerHTML = `
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2">
-                    <polyline points="20,6 9,17 4,12"/>
-                </svg>
-            `;
-            setTimeout(() => {
-                copyTokenBtn.innerHTML = `
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-                    </svg>
-                `;
-            }, 2000);
-        }
-    }
-
-    /**
      * Reset extension
      */
     async function handleReset() {
@@ -225,10 +185,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
 
-        await chrome.storage.sync.clear();
-        await chrome.storage.local.clear();
-        await chrome.storage.sync.set({ domains: DEFAULT_DOMAINS, autoSync: true });
-
+        const result = await chrome.runtime.sendMessage({ type: 'RESET_EXTENSION' });
+        if (!result?.success) {
+            alert('Reset failed: ' + (result?.error || 'Unknown error'));
+            return;
+        }
         location.reload();
     }
 });
