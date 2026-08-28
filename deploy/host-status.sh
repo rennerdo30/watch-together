@@ -604,6 +604,22 @@ try:
 except Exception as e:
     print("extractor args    FAILED:", e)
 
+# What the deployed manifest generator can index. A segment index carries 12
+# bytes per segment, so the first probe size decides how long a VOD may be
+# before its index has to be re-read at the size its header declares.
+try:
+    from core.config import MANIFEST_PROBE_BYTES, MANIFEST_MAX_INDEX_BYTES
+    from services.mp4_index import index_span  # noqa: F401
+    # ~12 bytes per segment, ~5s segments for video.
+    hours = (MANIFEST_MAX_INDEX_BYTES / 12) * 5 / 3600
+    print("index probe      ", f"{MANIFEST_PROBE_BYTES // 1024} KB first read, "
+          f"re-reads up to {MANIFEST_MAX_INDEX_BYTES // 1024} KB "
+          f"(~{hours:.0f}h of video)")
+except ImportError:
+    print("index probe       FIXED SIZE - long VODs lose their video track")
+except Exception as e:
+    print("index probe       FAILED:", e)
+
 # Does yt-dlp itself have a usable request handler in this environment?
 try:
     from yt_dlp.networking import Request
