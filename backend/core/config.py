@@ -80,6 +80,11 @@ QUALITY_LADDER_SIZE = 8
 
 # DASH manifest generation
 MANIFEST_PROBE_BYTES = 64 * 1024  # Prefix read to locate ftyp/moov/sidx
+# Ceiling for a re-probe once a `sidx` header states its real size. A segment
+# index carries 12 bytes per segment, so a multi-hour VOD outgrows the prefix
+# above — 101 KB at 12 hours, 159 KB at 19. This bounds what a URL can make the
+# server hold: the declared size comes from the remote file, not from us.
+MANIFEST_MAX_INDEX_BYTES = 4 * 1024 * 1024
 MANIFEST_INDEX_CACHE_TTL_SECONDS = 7200  # Byte ranges are stable per rendition
 MANIFEST_INDEX_CACHE_MAX_ENTRIES = 500
 MANIFEST_MIN_BANDWIDTH = 1000  # Floor so a manifest never declares 0 bps
