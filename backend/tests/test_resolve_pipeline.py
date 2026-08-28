@@ -365,3 +365,63 @@ class TestQualityLadder:
         assert QUALITY_LADDER_SIZE >= 8
         # The manifest must not re-truncate what the ladder deliberately kept.
         assert MANIFEST_MAX_VIDEO_REPRESENTATIONS >= QUALITY_LADDER_SIZE
+
+
+class TestUnindexableRenditionsAreNotOffered:
+    """A WebM rendition can never be described by a SegmentBase manifest.
+
+    The DASH manifest points at each rendition's `sidx` box, which exists
+    only in fragmented MP4. Matroska keys its segments in a Cues element
+    this project does not index, so every WebM rendition offered cost a
+    64 KB probe and was then dropped — and if the whole ladder happened
+    to be WebM, the manifest came out with sound and no picture.
+    """
+
+    def indexable(self, **fields):
+        from services.resolver import _is_indexable
+        return _is_indexable(fields)
+
+    def test_webm_is_excluded_by_extension(self):
+        assert not self.indexable(ext="webm", url="https://cdn/x")
+        assert not self.indexable(ext="mkv", url="https://cdn/x")
+
+    def test_fragmented_mp4_is_kept(self):
+        assert self.indexable(ext="mp4", url="https://cdn/x")
+        assert self.indexable(ext="m4a", url="https://cdn/x")
+
+    def test_googlevideo_mime_decides_when_no_extension_is_recorded(self):
+        assert not self.indexable(
+            url="https://r1.googlevideo.com/videoplayback?itag=278&mime=video%2Fwebm")
+        assert self.indexable(
+            url="https://r1.googlevideo.com/videoplayback?itag=137&mime=video%2Fmp4")
+
+    def test_an_unlabelled_container_is_left_for_the_probe(self):
+        """Guessing would drop renditions from sources that do not say."""
+        assert self.indexable(url="https://cdn.example.com/media/video")
+        assert self.indexable(url="")
+
+    def test_webm_never_reaches_the_quality_ladder(self):
+        from services.resolver import _extract_stream_url
+
+        info = {
+            "title": "Mixed containers",
+            "formats": [
+                {"format_id": "137", "url": "https://cdn/v.mp4?mime=video%2Fmp4",
+                 "ext": "mp4", "vcodec": "avc1.640028", "acodec": "none",
+                 "height": 1080, "width": 1920, "tbr": 4500},
+                {"format_id": "248", "url": "https://cdn/v.webm?mime=video%2Fwebm",
+                 "ext": "webm", "vcodec": "vp9", "acodec": "none",
+                 "height": 1080, "width": 1920, "tbr": 4000},
+                {"format_id": "140", "url": "https://cdn/a.m4a?mime=audio%2Fmp4",
+                 "ext": "m4a", "vcodec": "none", "acodec": "mp4a.40.2", "abr": 128},
+                {"format_id": "251", "url": "https://cdn/a.webm?mime=audio%2Fwebm",
+                 "ext": "webm", "vcodec": "none", "acodec": "opus", "abr": 160},
+            ],
+        }
+
+        selected = _extract_stream_url(info)
+
+        assert selected["type"] == "dash"
+        offered = {q["format_id"] for q in selected["available_qualities"]}
+        assert offered == {"137"}, f"a rendition that cannot be indexed was offered: {offered}"
+        assert {a["format_id"] for a in selected["audio_options"]} == {"140"}

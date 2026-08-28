@@ -6,6 +6,7 @@ import asyncio
 import logging
 import aiofiles
 from typing import Optional
+from urllib.parse import urlparse, parse_qs
 import yt_dlp
 
 from core.config import (
@@ -88,6 +89,32 @@ def _select_quality_ladder(video_only_formats, per_codec_limit: int):
     return sorted(selected, key=lambda item: item[0] or 0, reverse=True)
 
 
+# Containers whose segment index the manifest generator cannot read. A DASH
+# manifest describes each rendition by a byte range into its `sidx` box, which
+# exists only in fragmented MP4 — Matroska (WebM) keys its segments in a Cues
+# element this project does not index. Offering such a rendition means probing
+# it, failing, and dropping it, so it is excluded before the ladder is built.
+#
+# Only positively-identified containers are excluded. An unknown container is
+# left in: the probe is authoritative, and guessing "not indexable" would drop
+# renditions from sources that simply do not label themselves.
+_UNINDEXABLE_EXTENSIONS = ("webm", "mkv")
+_UNINDEXABLE_MIME = ("video/webm", "audio/webm", "video/x-matroska")
+
+
+def _is_indexable(fmt: dict) -> bool:
+    """Whether a SegmentBase manifest could describe this rendition."""
+    extension = (fmt.get("ext") or "").lower()
+    if extension:
+        return extension not in _UNINDEXABLE_EXTENSIONS
+
+    # No extension recorded; googlevideo states the container in the URL.
+    mime = parse_qs(urlparse(fmt.get("url") or "").query).get("mime")
+    if mime:
+        return mime[0].lower() not in _UNINDEXABLE_MIME
+    return True
+
+
 def _extract_stream_url(info: dict, prefer_dash: bool = True) -> dict:
     """
     Extract the best stream URL from yt-dlp info dict.
@@ -124,9 +151,13 @@ def _extract_stream_url(info: dict, prefer_dash: bool = True) -> dict:
         elif has_video and has_audio and url:
             combined_formats.append((height, f))
         elif has_video and url:
-            video_only_formats.append((height, f))
+            # Only fragmented MP4 can carry a SegmentBase index, and these
+            # two lists feed the DASH manifest.
+            if _is_indexable(f):
+                video_only_formats.append((height, f))
         elif has_audio and url and not has_video:
-            audio_only_formats.append((abr, f))
+            if _is_indexable(f):
+                audio_only_formats.append((abr, f))
 
     # Sort by quality descending
     hls_formats.sort(key=lambda x: x[0], reverse=True)

@@ -12,8 +12,10 @@ import xml.etree.ElementTree as ET
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from services.mp4_index import parse_index, scan_boxes, Mp4Index
-from services.manifest import build_mpd, ManifestError, clear_index_cache
+from services.mp4_index import parse_index, scan_boxes, index_span, Mp4Index
+from services.manifest import (
+    build_mpd, build_manifest_for_formats, ManifestError, clear_index_cache,
+)
 
 MPD_NS = {"mpd": "urn:mpeg:dash:schema:mpd:2011"}
 
@@ -116,6 +118,41 @@ AUDIO_REP = {
 PROXY_BASE = "https://watch.example.com/api/proxy?url="
 
 
+class TestLongVodIndexes:
+    """A segment index outgrows any fixed probe on a long VOD.
+
+    A `sidx` carries 12 bytes per segment, so a livestream VOD's index
+    passes the 64 KB probe at roughly 7.5 hours: measured 56 KB at 6.5
+    hours, 101 KB at 12, 159 KB at 19. The rendition used to be dropped.
+    Audio segments are longer, so its index is about half the size — for
+    roughly 8 to 15 hours of content every video probe failed while audio
+    succeeded, and the manifest that came out had sound and no picture.
+    """
+
+    def test_truncated_index_reports_the_bytes_it_needs(self):
+        full = box(b"ftyp") + box(b"moov", b"x" * 20) + box(b"sidx", b"y" * 200)
+        prefix = full[:60]
+
+        assert parse_index(prefix) is None
+        # The box header states its own size, so the exact figure is known
+        # from a prefix that only reaches the header.
+        assert index_span(prefix) == len(full)
+        assert parse_index(full[:index_span(prefix)]) is not None
+
+    def test_span_of_a_complete_index_is_its_end(self):
+        full = box(b"ftyp") + box(b"moov") + box(b"sidx", b"y" * 40)
+        assert index_span(full) == len(full)
+
+    def test_no_span_without_an_index_header(self):
+        assert index_span(box(b"ftyp") + box(b"moov")) is None
+        assert index_span(b"not an mp4 at all") is None
+
+    def test_span_survives_a_header_split_across_the_prefix(self):
+        """Half a header carries no size, so no figure may be invented."""
+        full = box(b"ftyp") + box(b"sidx", b"y" * 100)
+        assert index_span(full[:len(full) - 100 - 4]) is None
+
+
 class TestManifestBuilding:
     def test_produces_parseable_xml(self):
         root = ET.fromstring(build_mpd(635.0, [VIDEO_REP], [AUDIO_REP], PROXY_BASE))
@@ -191,6 +228,59 @@ class TestManifestBuilding:
         root = ET.fromstring(build_mpd(10.0, [], [AUDIO_REP], PROXY_BASE))
         sets = root.findall(".//mpd:AdaptationSet", MPD_NS)
         assert [s.get("contentType") for s in sets] == ["audio"]
+
+
+class TestPartialProbeFailure:
+    """A manifest missing one whole media type is a failure to report.
+
+    Audio segments are longer than video ones, so a long VOD's audio
+    index is about half the size of its video index. Between roughly 8
+    and 15 hours the audio probe succeeded while every video probe
+    failed, and `build_manifest_for_formats` only refused when *both*
+    were empty — so it emitted sound with no picture and the player
+    buffered forever on a video track nobody had declared.
+    """
+
+    VIDEO = [{"id": "v0", "url": "https://cdn.test/v.mp4", "width": 1920,
+              "height": 1080, "vcodec": "avc1.640028", "tbr": 4500, "fps": 30}]
+    AUDIO = [{"id": "a0", "url": "https://cdn.test/a.m4a", "acodec": "mp4a.40.2",
+              "abr": 128, "asr": 44100, "audio_channels": 2}]
+
+    def probe_only(self, monkeypatch, succeeds_for):
+        """Let probing succeed for one media type and fail for the other."""
+        import services.manifest as manifest_module
+
+        async def fake_probe(client, url, headers=None):
+            if succeeds_for in url:
+                return Mp4Index(init_start=0, init_end=99,
+                                index_start=100, index_end=199)
+            return None
+
+        monkeypatch.setattr(manifest_module, "probe_index", fake_probe)
+
+    async def test_video_lost_while_audio_survives_is_rejected(self, monkeypatch):
+        self.probe_only(monkeypatch, succeeds_for="a.m4a")
+
+        with pytest.raises(ManifestError, match="video"):
+            await build_manifest_for_formats(
+                None, 3600.0, self.VIDEO, self.AUDIO, "https://p/?url=")
+
+    async def test_audio_lost_while_video_survives_is_rejected(self, monkeypatch):
+        self.probe_only(monkeypatch, succeeds_for="v.mp4")
+
+        with pytest.raises(ManifestError, match="audio"):
+            await build_manifest_for_formats(
+                None, 3600.0, self.VIDEO, self.AUDIO, "https://p/?url=")
+
+    async def test_a_complete_probe_still_builds(self, monkeypatch):
+        self.probe_only(monkeypatch, succeeds_for="cdn.test")
+
+        manifest = await build_manifest_for_formats(
+            None, 3600.0, self.VIDEO, self.AUDIO, "https://p/?url=")
+
+        root = ET.fromstring(manifest)
+        kinds = {s.get("contentType") for s in root.iter(f"{{{MPD_NS['mpd']}}}AdaptationSet")}
+        assert kinds == {"video", "audio"}
 
 
 class TestIndexCacheKey:

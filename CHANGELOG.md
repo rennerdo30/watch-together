@@ -60,6 +60,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Long Livestream VODs Buffering Forever**: a segment index carries 12 bytes
+  per segment, so a VOD's `sidx` outgrows the fixed 64 KB probe at roughly 7.5
+  hours — measured 56 KB at 6.5 hours, 101 KB at 12, 159 KB at 19. Renditions
+  whose index did not fit were dropped. Audio segments are longer, so audio's
+  index is about half the size of video's: between roughly 8 and 15 hours every
+  video probe failed while audio succeeded, and the manifest that came out had
+  sound and no picture. The player then buffered forever on a video track
+  nobody had declared, and seeking could never complete. A truncated `sidx`
+  header states its own size, so the probe now asks for exactly that (bounded
+  by `MANIFEST_MAX_INDEX_BYTES`), and losing every representation of one media
+  type is reported as an error rather than served as half a manifest.
+- **Renditions That Could Never Play Are No Longer Offered**: WebM/Matroska
+  keys its segments in a Cues element this project does not index, so every
+  WebM rendition cost a probe and was then dropped. They are excluded before
+  the quality ladder is built; a container that does not identify itself is
+  still left for the probe to judge.
+
 - **Volume Jumping To 100% On The Next Queue Item**: queue advancement
   intentionally remounts the player, and a new `<video>` starts at the browser
   defaults. Persisted preferences updated React after hydration, but a mount-only

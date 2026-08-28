@@ -22,10 +22,11 @@ from urllib.parse import quote
 import httpx
 
 from services.cache import stream_identity
-from services.mp4_index import Mp4Index, parse_index
+from services.mp4_index import Mp4Index, parse_index, index_span
 from services.upstream import open_upstream_stream, UnsafeUpstreamError
 from core.config import (
     MANIFEST_PROBE_BYTES,
+    MANIFEST_MAX_INDEX_BYTES,
     MANIFEST_INDEX_CACHE_TTL_SECONDS,
     MANIFEST_INDEX_CACHE_MAX_ENTRIES,
     MANIFEST_MIN_BANDWIDTH,
@@ -71,26 +72,48 @@ async def probe_index(
         if cached and (now - cached[1]) <= MANIFEST_INDEX_CACHE_TTL_SECONDS:
             return cached[0]
 
-    request_headers = dict(headers or {})
-    request_headers["Range"] = f"bytes=0-{MANIFEST_PROBE_BYTES - 1}"
-
-    try:
-        response, _pinned = await open_upstream_stream(client, url, request_headers)
+    async def read_prefix(length: int) -> Optional[bytes]:
+        request_headers = dict(headers or {})
+        request_headers["Range"] = f"bytes=0-{length - 1}"
         try:
-            data = await response.aread()
-        finally:
-            await response.aclose()
-    except UnsafeUpstreamError:
-        raise
-    except Exception as exc:
-        logger.warning(f"Could not probe {url[:80]}: {exc}")
-        return None
+            response, _pinned = await open_upstream_stream(client, url, request_headers)
+            try:
+                body = await response.aread()
+            finally:
+                await response.aclose()
+        except UnsafeUpstreamError:
+            raise
+        except Exception as exc:
+            logger.warning(f"Could not probe {url[:80]}: {exc}")
+            return None
 
-    if response.status_code not in (200, 206):
-        logger.warning(f"Probe of {url[:80]} returned {response.status_code}")
+        if response.status_code not in (200, 206):
+            logger.warning(f"Probe of {url[:80]} returned {response.status_code}")
+            return None
+        return body
+
+    data = await read_prefix(MANIFEST_PROBE_BYTES)
+    if data is None:
         return None
 
     index = parse_index(data)
+    if index is None:
+        # A `sidx` too large for the first probe is the normal case for a
+        # long VOD, not a broken rendition. Its header states the exact
+        # size, so ask for precisely that rather than dropping the
+        # rendition — dropping every video one leaves an audio-only
+        # manifest that a player waits on forever.
+        needed = index_span(data)
+        if needed and MANIFEST_PROBE_BYTES < needed <= MANIFEST_MAX_INDEX_BYTES:
+            logger.info(
+                f"Segment index needs {needed} bytes, re-probing {url[:60]}...")
+            data = await read_prefix(needed)
+            index = parse_index(data) if data is not None else None
+        elif needed and needed > MANIFEST_MAX_INDEX_BYTES:
+            logger.warning(
+                f"Segment index of {needed} bytes exceeds the {MANIFEST_MAX_INDEX_BYTES} "
+                f"byte ceiling for {url[:60]}...")
+
     if index is None:
         logger.warning(f"No fragmented-MP4 index found in {url[:80]}")
         return None
@@ -264,6 +287,16 @@ async def build_manifest_for_formats(
     video_reps = [r for r in video_results if r]
     audio_reps = [r for r in audio_results if r]
 
+    # Losing every representation of one kind is a failure, not a manifest.
+    # Audio segments are longer than video ones, so a long VOD's audio index
+    # is about half the size of its video index — for roughly 8 to 15 hours of
+    # content the audio probe succeeded while every video probe failed, and
+    # the result was an audio-only manifest that a player buffers on forever
+    # waiting for a video track nobody declared.
+    if video_formats and not video_reps:
+        raise ManifestError("No video representation could be probed")
+    if audio_formats and not audio_reps:
+        raise ManifestError("No audio representation could be probed")
     if not video_reps and not audio_reps:
         raise ManifestError("No representation could be probed")
 

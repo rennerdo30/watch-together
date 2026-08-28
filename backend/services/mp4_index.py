@@ -79,6 +79,26 @@ def scan_boxes(data: bytes):
         offset = end
 
 
+def index_span(data: bytes) -> Optional[int]:
+    """Bytes needed from the start of the file to hold the whole `sidx`.
+
+    A box header states its own size, so a truncated prefix still says
+    exactly how much more is required. A `sidx` carries 12 bytes per
+    segment, which for a multi-hour livestream VOD runs past any fixed
+    probe: 56 KB at 6.5 hours, 101 KB at 12, 159 KB at 19. Returning the
+    real figure lets the caller ask for precisely that instead of giving
+    up on the rendition.
+
+    Returns None when the prefix holds no `sidx` header at all, which
+    means either a larger prefix is needed to reach it or the file is not
+    a fragmented MP4.
+    """
+    for box_type, _start, end in scan_boxes(data):
+        if box_type == _INDEX_BOX:
+            return end
+    return None
+
+
 def parse_index(data: bytes) -> Optional[Mp4Index]:
     """Locate the initialization segment and segment index in a prefix.
 
