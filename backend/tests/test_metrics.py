@@ -956,3 +956,139 @@ class TestCachingContinuesPastTheBudget:
 
         from services.cache import measure_cache_size, MAX_CACHE_SIZE_BYTES
         assert measure_cache_size() <= MAX_CACHE_SIZE_BYTES
+
+
+class TestFailedWritesReturnTheirReservation:
+    """A write that never lands must hand its reserved bytes back.
+
+    Seeking cancels transfers constantly, and every publish refreshes the
+    size memo's timestamp, so a busy session never re-measures. Without a
+    release, each aborted write left its reservation behind; enough
+    seeking filled the whole budget with phantoms and caching refused
+    again — the very failure eviction was added to remove.
+    """
+
+    def test_release_returns_reserved_bytes(self, monkeypatch, tmp_path):
+        import services.cache as cache_module
+
+        monkeypatch.setattr(cache_module, "CACHE_DIR", str(tmp_path))
+        monkeypatch.setattr(cache_module, "MAX_CACHE_SIZE_BYTES", 1000)
+        monkeypatch.setattr(cache_module, "_cache_size_measurement", (0, 0.0))
+
+        assert cache_module.make_room(400) is True
+        assert cache_module.get_current_cache_size() == 400
+
+        cache_module.release_room(400)
+        assert cache_module.get_current_cache_size() == 0
+
+    def test_release_never_goes_negative(self, monkeypatch, tmp_path):
+        import services.cache as cache_module
+
+        monkeypatch.setattr(cache_module, "_cache_size_measurement", (100, 0.0))
+        cache_module.release_room(500)
+        assert cache_module.get_current_cache_size() == 0
+
+    def test_repeated_aborts_do_not_exhaust_the_budget(self, monkeypatch, tmp_path):
+        """The production shape: many reservations, no files."""
+        import services.cache as cache_module
+
+        monkeypatch.setattr(cache_module, "CACHE_DIR", str(tmp_path))
+        monkeypatch.setattr(cache_module, "MAX_CACHE_SIZE_BYTES", 1000)
+        monkeypatch.setattr(cache_module, "CACHE_EVICTION_BATCH_BYTES", 200)
+        monkeypatch.setattr(cache_module, "_cache_size_measurement", (0, 0.0))
+
+        # Fifty aborted 400-byte writes against a 1000-byte budget. With
+        # the reservation returned each time, admission never fails; with
+        # a leak, the third write is already refused.
+        for _ in range(50):
+            assert cache_module.make_room(400) is True, (
+                "phantom reservations from aborted writes filled the budget")
+            cache_module.release_room(400)
+
+
+class TestTruncatedBodiesAreNotCached:
+    """A body shorter than the origin promised must not enter the cache.
+
+    An upstream that closes early used to have its partial file renamed
+    into the cache with a meta claiming the full Content-Range. A later
+    disk hit then replayed a 206 whose body did not match its declared
+    range — which players reject and intermediaries turn into a 416.
+    """
+
+    PAYLOAD = bytes(range(256)) * 4  # 1024 deterministic bytes
+
+    @pytest.fixture
+    def lying_origin(self):
+        """Declares the full range but writes only half and disconnects."""
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        payload = self.PAYLOAD
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                spec = (self.headers.get("Range") or "bytes=0-").split("=", 1)[1]
+                start_s, _, end_s = spec.partition("-")
+                start = int(start_s)
+                end = min(int(end_s) if end_s else len(payload) - 1, len(payload) - 1)
+                body = payload[start:end + 1]
+                self.send_response(206)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Content-Range", f"bytes {start}-{end}/{len(payload)}")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body[: len(body) // 2])
+                # Closing mid-body is how a CDN failure actually looks.
+                self.wfile.flush()
+                self.connection.close()
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        yield f"http://127.0.0.1:{server.server_port}/media.mp4"
+        server.shutdown()
+        server.server_close()
+
+    @pytest.fixture(autouse=True)
+    def isolated_cache(self, lying_origin, monkeypatch, tmp_path):
+        import services.cache as cache_module
+        import services.upstream as upstream
+        from urllib.parse import urlparse
+
+        monkeypatch.setattr(cache_module, "CACHE_DIR", str(tmp_path))
+        monkeypatch.setattr(cache_module, "MAX_CACHE_SIZE_BYTES", 100_000)
+        monkeypatch.setattr(cache_module, "_cache_size_measurement", (0, 0.0))
+
+        real = upstream._is_public_ip
+        monkeypatch.setattr(upstream, "_is_public_ip",
+                            lambda ip: ip == "127.0.0.1" or real(ip))
+        monkeypatch.setattr(upstream, "UPSTREAM_ALLOWED_PORTS",
+                            upstream.UPSTREAM_ALLOWED_PORTS +
+                            (urlparse(lying_origin).port,))
+        return tmp_path
+
+    async def test_short_body_is_discarded_and_its_room_returned(
+            self, client, lying_origin, isolated_cache):
+        from services.cache import memory_cache, measure_cache_size, \
+            get_current_cache_size
+        await memory_cache.clear()
+
+        try:
+            client.get("/api/proxy",
+                       params={"url": lying_origin, "user": "trunc@example.com"},
+                       headers={"Range": "bytes=0-511"})
+        except Exception:
+            # The proxy may surface the upstream disconnect; what matters
+            # is what the cache retained.
+            pass
+
+        leftovers = [name for name in os.listdir(isolated_cache)
+                     if not name.endswith(".tmp")]
+        assert leftovers == [], f"a truncated body entered the cache: {leftovers}"
+        assert measure_cache_size() == 0
+        assert get_current_cache_size() == 0, "the aborted write kept its reservation"
+
+        # And the memory tier holds nothing for it either.
+        assert memory_cache.get_stats()["items"] == 0

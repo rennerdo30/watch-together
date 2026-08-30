@@ -412,6 +412,26 @@ def _publish_cache_size(size: int) -> None:
     _cache_size_measurement = (size, time.time())
 
 
+def release_room(reserved_bytes: int) -> None:
+    """Return a reservation made by `make_room` for a write that never landed.
+
+    Seeking cancels transfers constantly, and each cancelled write removes
+    its temp file but — without this — kept its reservation. Because every
+    publish refreshes the measurement's timestamp, a busy session never
+    re-measures, so phantom reservations only accumulate; enough seeking
+    filled the whole budget with them and caching refused again until the
+    janitor's sweep. That is the very failure eviction was added to remove.
+
+    If a fresh scan happened between reserve and release, releasing
+    under-counts slightly; that only evicts a little late, and the
+    janitor's authoritative scan corrects it.
+    """
+    if reserved_bytes <= 0:
+        return
+    size, _measured_at = _cache_size_measurement
+    _publish_cache_size(max(0, size - reserved_bytes))
+
+
 def get_current_cache_size(max_age_seconds: float = CACHE_SIZE_MEASURE_TTL_SECONDS) -> int:
     """Cache size, re-measured at most every `max_age_seconds`.
 
