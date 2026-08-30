@@ -15,6 +15,13 @@ export interface UseHlsPlayerOptions {
     onManifestParsed?: (levels: HlsQualityLevel[]) => void;
     onLevelSwitch?: (level: number) => void;
     onError?: (error: string) => void;
+    /**
+     * The CDN rejected the source outright (403/410). Retrying the same URL
+     * cannot succeed — the signed token in it has expired, which is routine
+     * for long-running live streams. The owner should re-resolve and hand
+     * this hook a fresh src.
+     */
+    onSourceExpired?: () => void;
     onLoadingChange?: (isLoading: boolean) => void;
     onBufferingChange?: (isBuffering: boolean) => void;
     /** How autoplay actually went; see `lib/playback`. */
@@ -65,6 +72,7 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
         onManifestParsed,
         onLevelSwitch,
         onError,
+        onSourceExpired,
         onLoadingChange,
         onBufferingChange,
         onPlaybackStart,
@@ -76,14 +84,22 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
     const retryCountRef = useRef<number>(0);
     const lastRetryTimeRef = useRef<number>(0);
     const lastSrcRef = useRef<string>('');
+    // One expiry report per source: the re-resolve it triggers swaps the src,
+    // which resets this. Without the guard a burst of segment 403s would
+    // spam the owner with refresh requests.
+    const sourceExpiredRef = useRef(false);
     const MAX_RETRIES = 3;
     const RETRY_COOLDOWN_MS = 2000;
+    // Upstream verdicts that a retry of the same URL can never change: the
+    // signed token in the URL is dead (403) or the resource is gone (410).
+    const EXPIRED_SOURCE_HTTP_CODES = [403, 410];
 
     // Use refs for callbacks to avoid recreating initHls on every render
     const callbackRefs = useRef({
         onManifestParsed,
         onLevelSwitch,
         onError,
+        onSourceExpired,
         onLoadingChange,
         onBufferingChange,
         onPlaybackStart,
@@ -93,12 +109,13 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
             onManifestParsed,
             onLevelSwitch,
             onError,
+            onSourceExpired,
             onLoadingChange,
             onBufferingChange,
             onPlaybackStart,
         };
-    }, [onManifestParsed, onLevelSwitch, onError, onLoadingChange, onBufferingChange,
-        onPlaybackStart]);
+    }, [onManifestParsed, onLevelSwitch, onError, onSourceExpired, onLoadingChange,
+        onBufferingChange, onPlaybackStart]);
 
     // State
     const [isLoading, setIsLoading] = useState(true);
@@ -294,6 +311,26 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
                 if (data.fatal) {
                     console.error('[HLS] Fatal error:', data);
 
+                    // A 403/410 from the CDN means the signed URL itself has
+                    // expired — normal for live streams that outlive their
+                    // token. Retrying the same URL just burns the retry
+                    // budget on an answer that cannot change; ask the owner
+                    // for a freshly resolved source instead.
+                    const httpCode = data.response?.code;
+                    if (
+                        data.type === Hls.ErrorTypes.NETWORK_ERROR &&
+                        typeof httpCode === 'number' &&
+                        EXPIRED_SOURCE_HTTP_CODES.includes(httpCode) &&
+                        callbackRefs.current.onSourceExpired &&
+                        !sourceExpiredRef.current
+                    ) {
+                        sourceExpiredRef.current = true;
+                        console.warn(`[HLS] Upstream rejected the source (${httpCode}), requesting a fresh stream URL`);
+                        callbackRefs.current.onSourceExpired();
+                        hls.destroy();
+                        return;
+                    }
+
                     const now = Date.now();
                     const timeSinceLastRetry = now - lastRetryTimeRef.current;
 
@@ -371,6 +408,10 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
         // Reset lastSrcRef when src changes to allow reinitialization
         if (src !== lastSrcRef.current) {
             lastSrcRef.current = ''; // Clear to allow initHls to run
+            // A new source gets a clean slate: fresh retry budget, and the
+            // right to report its own expiry.
+            sourceExpiredRef.current = false;
+            retryCountRef.current = 0;
         }
 
         const currentVersion = ++initVersionRef.current;
