@@ -44,6 +44,8 @@ export interface ResolveResponse {
 export interface RoomSummary {
     id: string;
     active_users: number;
+    /** Admin-set display name; empty when the room only has its id. */
+    name?: string;
     current_video?: string;
     queue_size: number;
 }

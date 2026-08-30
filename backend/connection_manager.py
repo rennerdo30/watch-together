@@ -75,6 +75,28 @@ class ConnectionManager:
         logger.info(f"Room {room_id} permanent status: {state['permanent']}")
         return True
 
+    # A display name is free text shown in headers and lists; the length cap
+    # keeps it a label rather than a message board.
+    ROOM_NAME_MAX_LENGTH = 60
+
+    async def rename_room(self, room_id: str, requester_email: str, name) -> bool:
+        """Set a room's display name. Only admins can rename.
+
+        The id stays the address — links, persistence and reconnects all key
+        on it — so renaming changes what people see, never where they go.
+        """
+        if room_id not in self.room_states or not isinstance(name, str):
+            return False
+
+        state = self.room_states[room_id]
+        if state.get("roles", {}).get(requester_email) != "admin":
+            return False
+
+        state["name"] = name.strip()[: self.ROOM_NAME_MAX_LENGTH]
+        await self._save_room_state(room_id)
+        logger.info(f"Room {room_id} renamed to {state['name']!r}")
+        return True
+
     def get_active_rooms(self) -> List[dict]:
         rooms = []
         for rid, state in self.room_states.items():
@@ -83,6 +105,7 @@ class ConnectionManager:
             if active_count > 0 or state.get("video_data") or state.get("queue"):
                 rooms.append({
                     "id": rid,
+                    "name": state.get("name", ""),
                     "active_users": active_count,
                     "current_video": state.get("video_data", {}).get("title") if state.get("video_data") else None,
                     "queue_size": len(state.get("queue", []))
@@ -171,7 +194,8 @@ class ConnectionManager:
                     "queue": [],
                     "roles": {},
                     "playing_index": -1,
-                    "permanent": False
+                    "permanent": False,
+                    "name": ""
                 }
 
             # Ensure per-room lock exists

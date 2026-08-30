@@ -219,7 +219,7 @@ export default function Home() {
                         <Play className="icon-on-surface h-4 w-4" />
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate font-medium">{room.id}</span>
+                        <span className="block truncate font-medium">{room.name || room.id}</span>
                         <span className="block truncate text-sm text-neutral-400">
                           {room.current_video || 'No video playing'}
                         </span>

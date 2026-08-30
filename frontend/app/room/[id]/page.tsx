@@ -101,6 +101,7 @@ export default function RoomPage() {
     const [isRestoringVideo, setIsRestoringVideo] = useState(false);
     const [actualPlayerTime, setActualPlayerTime] = useState(0); // Real player time for badge display
     const [isPermanent, setIsPermanent] = useState(false); // Room permanent status
+    const [roomName, setRoomName] = useState(''); // Admin-set display name; the id stays the address
 
     // A link is being resolved, either pasted directly or picked from the
     // queue. The empty state is hidden while this is true: both used to
@@ -689,7 +690,7 @@ export default function RoomPage() {
                     <div className="flex flex-col pl-1 min-w-0">
                         <h1 className="font-bold text-white leading-none text-sm truncate">{APP_NAME}</h1>
                         <div className="flex items-center gap-1.5 mt-0.5">
-                            <span className="font-medium text-neutral-400 text-xs truncate">{roomId}</span>
+                            <span className="font-medium text-neutral-400 text-xs truncate" title={roomId}>{roomName || roomId}</span>
                             <span
                                 role="status"
                                 aria-label={connected ? 'Connected to the room' : 'Disconnected from the room'}
@@ -1187,6 +1188,38 @@ export default function RoomPage() {
 
 
                             <div className="p-5 space-y-6 overflow-y-auto flex-1">
+                                {/* Room Name - Admin Only */}
+                                {roles[currentUser] === 'admin' && (
+                                    <form
+                                        className="space-y-2"
+                                        onSubmit={(e) => {
+                                            e.preventDefault();
+                                            const draft = new FormData(e.currentTarget).get('roomName');
+                                            sendMsg('rename_room', { name: String(draft ?? '').trim() });
+                                        }}
+                                    >
+                                        <label htmlFor="room-name-input" className="ui-label block">Room name</label>
+                                        <div className="flex gap-2">
+                                            <input
+                                                id="room-name-input"
+                                                name="roomName"
+                                                key={roomName}
+                                                defaultValue={roomName}
+                                                maxLength={60}
+                                                placeholder={roomId}
+                                                className="flex-1 h-9 bg-white/5 border border-white/10 rounded-lg px-3 text-sm text-white placeholder:text-zinc-500 focus:outline-none"
+                                            />
+                                            <button
+                                                type="submit"
+                                                className="h-9 px-3 bg-[color:var(--accent-primary)] hover:brightness-110 on-accent-light text-sm font-medium rounded-lg transition-colors"
+                                            >
+                                                Save
+                                            </button>
+                                        </div>
+                                        <p className="ui-meta">Shown instead of the room id; the link stays /room/{roomId}.</p>
+                                    </form>
+                                )}
+
                                 {/* Permanent Room Toggle - Admin Only */}
                                 {roles[currentUser] === 'admin' && (
                                     <button

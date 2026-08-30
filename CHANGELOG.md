@@ -30,6 +30,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Room Names**: an admin can name a room after creation from the room
+  settings. The name shows in the room header and the home-page listing and
+  survives restarts; the id stays the address, so existing links keep working.
+
 - **Chrome Extension Nightly**: every commit to `main` now validates and packages
   the Manifest V3 extension, uploads the ZIP and SHA-256 checksum as a workflow
   artifact, and updates one rolling GitHub prerelease tagged `nightly`.
