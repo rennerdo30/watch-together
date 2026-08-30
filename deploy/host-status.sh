@@ -170,13 +170,23 @@ if [ "$RUN_PERF" = "1" ]; then
 			t[int(NR * 0.9) < 1 ? 1 : int(NR * 0.9)],
 			t[int(NR * 0.99) < 1 ? 1 : int(NR * 0.99)], t[NR]
 	} { t[NR] = $1 }' /tmp/wt-times
-	rm -f /tmp/wt-perf.log /tmp/wt-times
+	rm -f /tmp/wt-times
+	echo
+	echo "── transfers with no Range header (whole files) ───────────"
+	# A media request without a Range pulls an entire rendition. These are the
+	# most expensive transfers on the server and the least cacheable, so the
+	# caller is worth naming.
+	grep 'range="-"' /tmp/wt-perf.log 2>/dev/null \
+		| grep -oE 'ua="[^"]*"' | sort | uniq -c | sort -rn | head -5
+	grep -c 'range="-"' /tmp/wt-perf.log 2>/dev/null \
+		| awk '{ if ($1 == 0) print "(none - good)"; else printf "%d such transfers\n", $1 }'
 	echo
 	echo "── cache tier that served each segment (backend log) ───────────"
 	$COMPOSE logs --tail 4000 backend 2>&1 \
 		| grep -oE '(MEMORY HIT|DISK HIT|Added to memory cache|Disk cache (read error|entry vanished))' \
 		| sort | uniq -c | sort -rn
 	echo
+	rm -f /tmp/wt-perf.log
 	echo "── cache on disk ───────────"
 	$COMPOSE exec -T backend python - <<'PYEOF'
 import os, time

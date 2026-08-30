@@ -28,6 +28,10 @@ STALE_TEMP_FILE_SECONDS = 3600
 # every proxied request and measuring it means scanning the whole cache
 # directory, which is thousands of files once the cache is warm.
 CACHE_SIZE_MEASURE_TTL_SECONDS = 10
+# How much a full cache frees in one pass. Evicting only enough for the body
+# in hand would rescan the directory for every segment; freeing a batch
+# amortises that over many writes.
+CACHE_EVICTION_BATCH_BYTES = MAX_CACHE_SIZE_BYTES // 10
 
 # googlevideo byte ranges. A `Range` header is served through the throttled
 # progressive path; the `range=` query parameter returns the same bytes at

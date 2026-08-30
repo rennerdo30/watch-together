@@ -10,7 +10,7 @@ from services.cache import (
     check_disk_space,
     get_current_cache_size,
     cache_cleanup_task,
-    get_or_fetch_segment,
+    make_room,
 )
 from services.resolver import (
     refresh_video_url,
@@ -27,7 +27,7 @@ __all__ = [
     "check_disk_space",
     "get_current_cache_size",
     "cache_cleanup_task",
-    "get_or_fetch_segment",
+    "make_room",
     "refresh_video_url",
     "_extract_stream_url",
 ]

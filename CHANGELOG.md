@@ -60,6 +60,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A Full Cache Stopped Caching Instead Of Evicting**: the proxy checked the
+  budget and skipped the write once it was reached, so the first few gigabytes
+  to arrive kept the space and everything afterwards went to the CDN until the
+  janitor's next sweep trimmed back to exactly the limit. Measured in
+  production across one session: 41 GB served, 37 cache writes, 2 disk hits,
+  and an empty cache directory. A full cache now evicts oldest-first to admit
+  new content, in batches so the directory scan is amortised, and admitted
+  bytes are reserved against the measured size — without that, every write
+  inside one ten-second measurement window read the same stale total and the
+  budget was never seen to be reached.
+
 - **Long Livestream VODs Buffering Forever**: a segment index carries 12 bytes
   per segment, so a VOD's `sidx` outgrows the fixed 64 KB probe at roughly 7.5
   hours — measured 56 KB at 6.5 hours, 101 KB at 12, 159 KB at 19. Renditions
