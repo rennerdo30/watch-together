@@ -757,3 +757,202 @@ class TestStaleCacheEntriesAreRemoved:
             await cache_module.cache_cleanup_task()
         except asyncio.CancelledError:
             pass
+
+
+class TestAFullCacheEvictsInsteadOfRefusing:
+    """A cache that stops accepting writes when full is not a cache.
+
+    The write path checked the budget and simply skipped caching once it
+    was reached, so the first entries to arrive held the space and
+    everything afterwards went uncached until the janitor's next sweep
+    trimmed back to exactly the limit. Measured in production: 37 writes
+    across 5179 transfers, and an empty cache directory.
+    """
+
+    @pytest.fixture
+    def cache_dir(self, tmp_path, monkeypatch):
+        import services.cache as cache_module
+
+        monkeypatch.setattr(cache_module, "CACHE_DIR", str(tmp_path))
+        monkeypatch.setattr(cache_module, "_cache_size_measurement", (0, 0.0))
+        return tmp_path
+
+    def fill(self, cache_dir, name, size, age_seconds=0):
+        import os
+        import time as _time
+
+        body = cache_dir / name
+        body.write_bytes(b"x" * size)
+        (cache_dir / f"{name}.meta").write_text('{"size": %d}' % size)
+        if age_seconds:
+            when = _time.time() - age_seconds
+            os.utime(body, (when, when))
+        return body
+
+    def test_room_is_made_by_evicting_the_oldest(self, cache_dir, monkeypatch):
+        import services.cache as cache_module
+
+        monkeypatch.setattr(cache_module, "MAX_CACHE_SIZE_BYTES", 300)
+        monkeypatch.setattr(cache_module, "CACHE_EVICTION_BATCH_BYTES", 100)
+        oldest = self.fill(cache_dir, "seg_a_0-99", 100, age_seconds=300)
+        middle = self.fill(cache_dir, "seg_b_0-99", 100, age_seconds=200)
+        newest = self.fill(cache_dir, "seg_c_0-99", 100, age_seconds=100)
+
+        assert cache_module.make_room(100) is True
+
+        assert not oldest.exists(), "a full cache refused to evict"
+        assert not (cache_dir / "seg_a_0-99.meta").exists()
+        assert middle.exists() and newest.exists()
+
+    def test_an_uncrowded_cache_evicts_nothing(self, cache_dir, monkeypatch):
+        import services.cache as cache_module
+
+        monkeypatch.setattr(cache_module, "MAX_CACHE_SIZE_BYTES", 1000)
+        kept = self.fill(cache_dir, "seg_a_0-99", 100)
+
+        assert cache_module.make_room(100) is True
+        assert kept.exists()
+
+    def test_a_body_larger_than_the_whole_budget_is_refused(self, cache_dir, monkeypatch):
+        """Admitting it would evict the entire cache for one entry."""
+        import services.cache as cache_module
+
+        monkeypatch.setattr(cache_module, "MAX_CACHE_SIZE_BYTES", 300)
+        kept = self.fill(cache_dir, "seg_a_0-99", 100)
+
+        assert cache_module.make_room(5_000) is False
+        assert kept.exists()
+
+    def test_admitted_bytes_are_reserved_against_the_budget(self, cache_dir, monkeypatch):
+        """Writes land faster than the size is re-measured.
+
+        Without a reservation every caller inside one measurement window
+        reads the same stale total, so the budget is never seen to be
+        reached and nothing is ever evicted.
+        """
+        import services.cache as cache_module
+
+        monkeypatch.setattr(cache_module, "MAX_CACHE_SIZE_BYTES", 1000)
+        self.fill(cache_dir, "seg_a_0-99", 100)
+
+        # First call measures 100 on disk and reserves 100 more.
+        assert cache_module.make_room(100) is True
+        assert cache_module.get_current_cache_size() == 200
+
+        # A second call within the same window sees the reservation rather
+        # than re-reading the unchanged directory.
+        assert cache_module.make_room(100) is True
+        assert cache_module.get_current_cache_size() == 300
+
+    def test_eviction_publishes_what_it_left_behind(self, cache_dir, monkeypatch):
+        import services.cache as cache_module
+
+        monkeypatch.setattr(cache_module, "MAX_CACHE_SIZE_BYTES", 300)
+        monkeypatch.setattr(cache_module, "CACHE_EVICTION_BATCH_BYTES", 100)
+        for name, age in (("seg_a_0-99", 300), ("seg_b_0-99", 200), ("seg_c_0-99", 100)):
+            self.fill(cache_dir, name, 100, age_seconds=age)
+
+        assert cache_module.make_room(100) is True
+
+        # One entry evicted, one reserved: 200 on disk plus 100 admitted.
+        assert cache_module.measure_cache_size() == 200
+        assert cache_module.get_current_cache_size() == 300
+
+    def test_a_partial_download_is_not_counted_or_evicted(self, cache_dir, monkeypatch):
+        import services.cache as cache_module
+
+        monkeypatch.setattr(cache_module, "MAX_CACHE_SIZE_BYTES", 300)
+        monkeypatch.setattr(cache_module, "CACHE_EVICTION_BATCH_BYTES", 100)
+        in_progress = cache_dir / "seg_z_0-99.1.tmp"
+        in_progress.write_bytes(b"z" * 500)
+        self.fill(cache_dir, "seg_a_0-99", 100, age_seconds=300)
+        self.fill(cache_dir, "seg_b_0-99", 100, age_seconds=200)
+        self.fill(cache_dir, "seg_c_0-99", 100, age_seconds=100)
+
+        cache_module.make_room(100)
+
+        assert in_progress.exists(), "a download still in flight was evicted"
+
+
+class TestCachingContinuesPastTheBudget:
+    """Reaching the budget must not switch caching off for the session.
+
+    A viewing session moves tens of gigabytes through the proxy while the
+    budget is a few. If the budget stops writes rather than triggering
+    eviction, everything after the first few gigabytes is uncached — so a
+    re-watch, a backwards seek, or a second viewer all go to the CDN.
+    """
+
+    PAYLOAD = bytes(range(256)) * 4  # 1024 deterministic bytes
+
+    @pytest.fixture
+    def origin(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        payload = self.PAYLOAD
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                spec = (self.headers.get("Range") or "bytes=0-").split("=", 1)[1]
+                start_s, _, end_s = spec.partition("-")
+                start = int(start_s)
+                end = min(int(end_s) if end_s else len(payload) - 1, len(payload) - 1)
+                body = payload[start:end + 1]
+                self.send_response(206)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Content-Range",
+                                 f"bytes {start}-{end}/{len(payload)}")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        yield f"http://127.0.0.1:{server.server_port}/media.mp4"
+        server.shutdown()
+        server.server_close()
+
+    @pytest.fixture(autouse=True)
+    def small_budget(self, origin, monkeypatch, tmp_path):
+        import services.cache as cache_module
+        import services.upstream as upstream
+        from urllib.parse import urlparse
+
+        monkeypatch.setattr(cache_module, "CACHE_DIR", str(tmp_path))
+        # Room for roughly two 128-byte bodies, so the budget is crossed
+        # within the run rather than after it.
+        monkeypatch.setattr(cache_module, "MAX_CACHE_SIZE_BYTES", 300)
+        monkeypatch.setattr(cache_module, "CACHE_EVICTION_BATCH_BYTES", 128)
+        monkeypatch.setattr(cache_module, "_cache_size_measurement", (0, 0.0))
+
+        real = upstream._is_public_ip
+        monkeypatch.setattr(upstream, "_is_public_ip",
+                            lambda ip: ip == "127.0.0.1" or real(ip))
+        monkeypatch.setattr(upstream, "UPSTREAM_ALLOWED_PORTS",
+                            upstream.UPSTREAM_ALLOWED_PORTS + (urlparse(origin).port,))
+        return tmp_path
+
+    async def test_later_segments_are_still_cached(self, client, origin, small_budget):
+        from services.cache import memory_cache, get_segment_disk_key
+        await memory_cache.clear()
+
+        # Eight distinct 128-byte ranges against a 300-byte budget: the
+        # cache is over budget long before the last one arrives.
+        for index in range(8):
+            start = index * 128
+            response = client.get(
+                "/api/proxy", params={"url": origin, "user": "budget@example.com"},
+                headers={"Range": f"bytes={start}-{start + 127}"})
+            assert response.status_code == 206
+
+        last_start = 7 * 128
+        _, last_path = get_segment_disk_key(origin, last_start, last_start + 127)
+        assert os.path.exists(last_path), (
+            "caching stopped once the budget was reached")
+
+        from services.cache import measure_cache_size, MAX_CACHE_SIZE_BYTES
+        assert measure_cache_size() <= MAX_CACHE_SIZE_BYTES

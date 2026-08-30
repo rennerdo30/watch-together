@@ -26,8 +26,8 @@ import yt_dlp
 
 # Import modules
 from core.config import (
-    CACHE_DIR, COOKIES_DIR, YTDLP_CACHE_DIR, MAX_CACHE_SIZE_BYTES, CACHE_TTL_SECONDS,
-    MIN_DISK_FREE_BYTES, MAX_CACHEABLE_FILE_BYTES, FORMAT_CACHE_TTL_SECONDS,
+    CACHE_DIR, COOKIES_DIR, YTDLP_CACHE_DIR,
+    MAX_CACHEABLE_FILE_BYTES, FORMAT_CACHE_TTL_SECONDS,
     METRICS_DEFAULT_SAMPLE_LIMIT, POT_PROVIDER_EXTRACTOR_ARGS,
     MANIFEST_MAX_VIDEO_REPRESENTATIONS, MANIFEST_MAX_AUDIO_REPRESENTATIONS,
 )
@@ -38,7 +38,7 @@ from core.security import (
 from core.access_jwt import is_configured as access_is_configured
 from services.cache import (
     parse_range_header, get_segment_disk_key,
-    check_disk_space, get_current_cache_size,
+    check_disk_space, make_room,
     cache_cleanup_task,
     memory_cache, get_segment_cache_key, is_audio_url, mark_content_active,
 )
@@ -882,10 +882,13 @@ async def proxy_stream(request: Request, url: str):
             disk_ok, _ = check_disk_space()
             if not disk_ok:
                 should_cache = False
-            if get_current_cache_size() >= MAX_CACHE_SIZE_BYTES:
-                should_cache = False
             content_length = int(r.headers.get("content-length", 0))
             if content_length > MAX_CACHEABLE_FILE_BYTES:
+                should_cache = False
+            # A full cache evicts to admit new content. Refusing the write
+            # instead — which is what this did — means the first entries to
+            # arrive keep the space and everything later goes uncached.
+            if should_cache and not make_room(content_length):
                 should_cache = False
 
             # Check for late-detected manifest (content-type based detection)

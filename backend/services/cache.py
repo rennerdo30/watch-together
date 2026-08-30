@@ -21,6 +21,7 @@ from core.config import (
     MIN_DISK_FREE_BYTES,
     MAX_CACHEABLE_FILE_BYTES,
     CACHE_SIZE_MEASURE_TTL_SECONDS,
+    CACHE_EVICTION_BATCH_BYTES,
     STALE_TEMP_FILE_SECONDS,
     FORMAT_CACHE_TTL_SECONDS,
     MEMORY_CACHE_SIZE_BYTES,
@@ -259,86 +260,77 @@ async def cleanup_active_content():
 # Format cache - stores resolved video formats in memory
 _format_cache: Dict[str, Tuple[dict, float]] = {}
 
-# In-flight request tracking for deduplication
-# Maps URL to (asyncio.Event, bytes | None, error | None)
-_in_flight_requests: Dict[str, asyncio.Event] = {}
-_in_flight_results: Dict[str, Tuple[Optional[bytes], Optional[Exception], float]] = {}  # Added timestamp
-_in_flight_lock = asyncio.Lock()
-_IN_FLIGHT_MAX_SIZE = 100  # Max tracked in-flight results before forced cleanup
-_IN_FLIGHT_RESULT_TTL = 30.0  # Seconds to keep results before cleanup
+def make_room(needed_bytes: int) -> bool:
+    """Evict oldest entries until `needed_bytes` fits inside the budget.
 
+    The write path used to simply stop caching once the budget was
+    reached, which is not what a cache does: the first entries to arrive
+    held the space forever and everything afterwards went uncached until
+    the janitor's next sweep trimmed back to exactly the limit. Measured
+    in production, that left 37 writes across 5179 transfers.
 
-async def get_or_fetch_segment(url: str, fetch_fn) -> bytes:
+    Eviction frees a whole batch rather than just enough for this one
+    body, so the directory scan is amortised over many writes instead of
+    repeating for every segment.
     """
-    Coalesce concurrent requests for the same URL.
-    
-    If a request for this URL is already in-flight, wait for it to complete
-    and return the same result. This prevents multiple downloads of the same
-    segment when multiple clients request it simultaneously.
-    """
-    async with _in_flight_lock:
-        if url in _in_flight_requests:
-            # Another request is already fetching this URL
-            logger.info(f"COALESCE: Waiting for in-flight request: {url[:60]}...")
-            event = _in_flight_requests[url]
-        else:
-            # We're the first - create event and register
-            event = asyncio.Event()
-            _in_flight_requests[url] = event
-            event = None  # Signal that we're the fetcher
-    
-    if event is not None:
-        # Wait for the other request to complete (with timeout to prevent hanging)
-        try:
-            await asyncio.wait_for(event.wait(), timeout=60.0)
-        except asyncio.TimeoutError:
-            logger.warning(f"In-flight request wait timed out: {url[:60]}...")
-            raise Exception("Timed out waiting for in-flight request")
-        async with _in_flight_lock:
-            result = _in_flight_results.get(url)
-        if result is None:
-            raise Exception("In-flight request returned no data")
-        result_data, result_error, _ = result
-        if result_error:
-            raise result_error
-        if result_data is None:
-            raise Exception("In-flight request returned no data")
-        return result_data
+    if needed_bytes > MAX_CACHE_SIZE_BYTES:
+        return False
 
-    # We're the fetcher. The result is published under the lock so a
-    # waiter reading it cannot race with the cleanup that evicts it.
+    size = get_current_cache_size()
+    if size + needed_bytes <= MAX_CACHE_SIZE_BYTES:
+        # Reserve the space. Writes land far faster than the measurement is
+        # refreshed, so without this every caller inside one measurement
+        # window sees the same stale total and the budget is never reached.
+        # Over-counting an aborted write only evicts a little early, and the
+        # janitor's own scan corrects the figure.
+        _publish_cache_size(size + needed_bytes)
+        return True
+
+    target = MAX_CACHE_SIZE_BYTES - max(needed_bytes, CACHE_EVICTION_BATCH_BYTES)
+    entries = []
     try:
-        data = await fetch_fn()
-        async with _in_flight_lock:
-            _in_flight_results[url] = (data, None, time.time())
-        return data
-    except Exception as e:
-        async with _in_flight_lock:
-            _in_flight_results[url] = (None, e, time.time())
-        raise
-    finally:
-        # Signal waiters and cleanup
-        async with _in_flight_lock:
-            if url in _in_flight_requests:
-                _in_flight_requests[url].set()
-                del _in_flight_requests[url]
-            # Inline cleanup of stale results (prevents unbounded growth)
-            _cleanup_stale_in_flight_results()
+        for name in os.listdir(CACHE_DIR):
+            if name.endswith('.meta') or name.endswith('.tmp'):
+                continue
+            path = os.path.join(CACHE_DIR, name)
+            try:
+                stat = os.stat(path)
+            except OSError:
+                continue
+            if os.path.isfile(path):
+                entries.append((stat.st_mtime, stat.st_size, path))
+    except OSError as exc:
+        logger.warning(f"Could not scan the cache to make room: {exc}")
+        return False
 
+    entries.sort(key=lambda entry: entry[0])
+    freed = 0
+    evicted = 0
+    for _mtime, entry_size, path in entries:
+        if size - freed <= target:
+            break
+        try:
+            os.remove(path)
+            # The sidecar goes with its body; either half alone is unusable
+            # and still occupies the budget.
+            meta = path + '.meta'
+            if os.path.exists(meta):
+                os.remove(meta)
+            freed += entry_size
+            evicted += 1
+        except OSError:
+            continue
 
-def _cleanup_stale_in_flight_results():
-    """Remove stale in-flight results. Called under _in_flight_lock."""
-    now = time.time()
-    stale_keys = [
-        k for k, (_, _, ts) in _in_flight_results.items()
-        if now - ts > _IN_FLIGHT_RESULT_TTL
-    ]
-    for k in stale_keys:
-        del _in_flight_results[k]
-    # Force evict oldest if still over limit
-    while len(_in_flight_results) > _IN_FLIGHT_MAX_SIZE:
-        oldest_key = min(_in_flight_results, key=lambda k: _in_flight_results[k][2])
-        del _in_flight_results[oldest_key]
+    remaining = max(0, size - freed)
+    if evicted:
+        logger.info(
+            f"Evicted {evicted} cache entries ({freed / 1024 / 1024:.1f} MB) "
+            f"to make room")
+    if remaining + needed_bytes > MAX_CACHE_SIZE_BYTES:
+        _publish_cache_size(remaining)
+        return False
+    _publish_cache_size(remaining + needed_bytes)
+    return True
 
 
 def parse_range_header(range_header: str) -> Tuple[int, int | None]:
@@ -414,6 +406,12 @@ def measure_cache_size() -> int:
     return total
 
 
+def _publish_cache_size(size: int) -> None:
+    """Record an authoritative measurement for the proxy to read."""
+    global _cache_size_measurement
+    _cache_size_measurement = (size, time.time())
+
+
 def get_current_cache_size(max_age_seconds: float = CACHE_SIZE_MEASURE_TTL_SECONDS) -> int:
     """Cache size, re-measured at most every `max_age_seconds`.
 
@@ -423,13 +421,12 @@ def get_current_cache_size(max_age_seconds: float = CACHE_SIZE_MEASURE_TTL_SECON
     slightly stale figure just means the budget is enforced a few seconds
     late. Pass 0 to force a fresh measurement.
     """
-    global _cache_size_measurement
     size, measured_at = _cache_size_measurement
     now = time.time()
     if max_age_seconds > 0 and now - measured_at < max_age_seconds:
         return size
     size = measure_cache_size()
-    _cache_size_measurement = (size, now)
+    _publish_cache_size(size)
     return size
 
 
@@ -529,8 +526,7 @@ async def cache_cleanup_task():
             # rather than leaving the proxy to re-measure. Getting it wrong
             # in the pessimistic direction stops caching entirely until the
             # next sweep.
-            global _cache_size_measurement
-            _cache_size_measurement = (total_size, time.time())
+            _publish_cache_size(total_size)
 
             # Clean expired format cache entries in DB
             cleaned = await cleanup_expired_format_cache()
