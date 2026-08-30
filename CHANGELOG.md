@@ -60,6 +60,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Every Member Paid A Full Extraction For The Same Video**: `/api/resolve`
+  never consulted its own cache, so the sender extracted once to paste, then
+  the `set_video` broadcast made every member — sender included — extract the
+  same URL again, several seconds each. A fresh cached resolution is now
+  returned directly; within the cache TTL a room of any size pays one
+  extraction per video.
+
 - **A Full Cache Stopped Caching Instead Of Evicting**: the proxy checked the
   budget and skipped the write once it was reached, so the first few gigabytes
   to arrive kept the space and everything afterwards went to the CDN until the

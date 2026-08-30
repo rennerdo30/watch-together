@@ -357,6 +357,18 @@ async def resolve_video(request: Request, url: str, user_agent: str = None) -> d
     a dead end for anything already in a room's queue.
     """
     user_email = get_user_from_request(request)
+
+    # Serve a fresh resolution from the cache before extracting. Extraction
+    # costs seconds of yt-dlp work per call, and the room multiplies calls:
+    # the sender resolves once to paste, then the set_video broadcast makes
+    # every member — sender included — resolve the same URL again. Signed
+    # stream URLs stay valid for hours, so within the cache TTL those are
+    # all the same answer.
+    cached = await get_cached_format(url)
+    if cached and cached.get("stream_url"):
+        logger.info(f"Resolve cache hit: {url} (User: {user_email or 'anonymous'})")
+        return cached
+
     logger.info(f"Resolving URL: {url} (User: {user_email or 'anonymous'})")
 
     cookie_path = get_user_cookie_path(user_email) if user_email else None

@@ -425,3 +425,36 @@ class TestUnindexableRenditionsAreNotOffered:
         offered = {q["format_id"] for q in selected["available_qualities"]}
         assert offered == {"137"}, f"a rendition that cannot be indexed was offered: {offered}"
         assert {a["format_id"] for a in selected["audio_options"]} == {"140"}
+
+
+class TestResolveServesFromCache:
+    """Re-resolving a fresh URL must not pay another extraction.
+
+    Extraction costs seconds of yt-dlp work, and the room multiplies it:
+    the sender resolves once to paste, then the set_video broadcast makes
+    every member — sender included — resolve the same URL again. Within
+    the cache TTL those are all the same answer, so a room of three paid
+    roughly four extractions for one video and the viewer stared at
+    "Resolving..." for each of them.
+    """
+
+    def test_second_resolve_does_not_extract_again(self, client, captured_options):
+        url = "https://youtu.be/resolve-cache-hit"
+
+        first = client.get("/api/resolve", params={"url": url, "user": "a@example.com"})
+        extractions_after_first = len(captured_options)
+        second = client.get("/api/resolve", params={"url": url, "user": "b@example.com"})
+
+        assert first.status_code == second.status_code == 200
+        assert second.json()["stream_url"] == first.json()["stream_url"]
+        assert len(captured_options) == extractions_after_first, (
+            "a cached resolution was extracted again"
+        )
+
+    def test_a_new_url_still_extracts(self, client, captured_options):
+        client.get("/api/resolve",
+                   params={"url": "https://youtu.be/resolve-cache-a", "user": "a@example.com"})
+        before = len(captured_options)
+        client.get("/api/resolve",
+                   params={"url": "https://youtu.be/resolve-cache-b", "user": "a@example.com"})
+        assert len(captured_options) > before
