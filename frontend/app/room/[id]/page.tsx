@@ -163,6 +163,11 @@ export default function RoomPage() {
     // and correcting against it yanks the viewer straight back to where they
     // seeked away from.
     const lastLocalSeekAtRef = useRef(0);
+    // The name this viewer just asked for, so the settings broadcast that
+    // confirms it can be acknowledged with a toast. Without one, Save gave no
+    // sign of life: the modal hides the header, the input already shows what
+    // was typed, and the address deliberately never changes.
+    const pendingRenameRef = useRef<string | null>(null);
     const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
     const videoElementRef = useRef<HTMLVideoElement | null>(null);
 
@@ -509,7 +514,23 @@ export default function RoomPage() {
                 break;
             case 'room_settings_update':
                 if (typeof payload.permanent === 'boolean') setIsPermanent(payload.permanent);
-                if (typeof payload.name === 'string') setRoomName(payload.name);
+                if (typeof payload.name === 'string') {
+                    setRoomName(payload.name);
+                    if (pendingRenameRef.current !== null &&
+                        payload.name === pendingRenameRef.current) {
+                        toast.success(payload.name
+                            ? `Room renamed to "${payload.name}"`
+                            : 'Room name removed');
+                        pendingRenameRef.current = null;
+                    }
+                }
+                break;
+            case 'error':
+                // The server refuses quietly otherwise, and a click that
+                // does nothing visible reads as a broken button.
+                if (typeof payload.message === 'string' && payload.message) {
+                    toast.error(payload.message);
+                }
                 break;
             case 'pong':
                 // Calculate round-trip latency
@@ -1195,7 +1216,9 @@ export default function RoomPage() {
                                         onSubmit={(e) => {
                                             e.preventDefault();
                                             const draft = new FormData(e.currentTarget).get('roomName');
-                                            sendMsg('rename_room', { name: String(draft ?? '').trim() });
+                                            const requested = String(draft ?? '').trim();
+                                            pendingRenameRef.current = requested;
+                                            sendMsg('rename_room', { name: requested });
                                         }}
                                     >
                                         <label htmlFor="room-name-input" className="ui-label block">Room name</label>

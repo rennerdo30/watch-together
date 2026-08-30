@@ -208,16 +208,38 @@ class TestRoomRename:
                 payload = _drain_until(member, "room_settings_update")
                 assert payload["name"] == "Movie Night"
 
-    def test_non_admin_rename_is_refused(self, client):
+    def test_non_admin_rename_is_refused_and_told_so(self, client):
+        """A refusal must answer the sender: the header sits behind the
+        settings modal and the address never changes, so a silent refusal
+        reads as a broken Save button."""
         room = "/ws/rename-refused"
         with client.websocket_connect(f"{room}?user=admin@example.com") as admin:
             _drain_until(admin, "sync")
             with client.websocket_connect(f"{room}?user=member@example.com") as member:
                 _drain_until(member, "sync")
 
+                # The ping right behind the rename bounds the wait: if the
+                # refusal sent nothing — the old behaviour — the pong arrives
+                # first and the test fails fast instead of blocking forever
+                # on a message that never comes.
                 member.send_json({"type": "rename_room",
                                   "payload": {"name": "Hijacked"}})
-                # A refused rename changes nothing and notifies nobody.
+                member.send_json({"type": "ping",
+                                  "payload": {"client_time": 1}})
+                # Presence broadcasts may still be queued ahead, so read on
+                # until one of the two possible answers arrives. The pong is
+                # what keeps the old behaviour a fast failure rather than a
+                # forever-block on an error that never comes.
+                for _ in range(10):
+                    message = member.receive_json()
+                    if message.get("type") in ("error", "pong"):
+                        break
+                assert message.get("type") == "error", (
+                    "the sender was not told the rename was refused"
+                )
+                assert "admin" in message["payload"]["message"].lower()
+
+                # The room itself is untouched and the admin hears nothing.
                 admin.send_json({"type": "ping",
                                  "payload": {"client_time": 1}})
                 _drain_until(admin, "pong")
