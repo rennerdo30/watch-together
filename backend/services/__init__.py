@@ -11,6 +11,7 @@ from services.cache import (
     get_current_cache_size,
     cache_cleanup_task,
     make_room,
+    release_room,
 )
 from services.resolver import (
     refresh_video_url,
@@ -28,6 +29,7 @@ __all__ = [
     "get_current_cache_size",
     "cache_cleanup_task",
     "make_room",
+    "release_room",
     "refresh_video_url",
     "_extract_stream_url",
 ]

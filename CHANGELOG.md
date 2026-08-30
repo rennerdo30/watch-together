@@ -69,7 +69,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   new content, in batches so the directory scan is amortised, and admitted
   bytes are reserved against the measured size — without that, every write
   inside one ten-second measurement window read the same stale total and the
-  budget was never seen to be reached.
+  budget was never seen to be reached. A follow-up review closed two gaps in
+  that fix: a cancelled transfer — which seeking produces constantly — now
+  returns its reservation instead of leaving a phantom that could refill the
+  budget, and a body shorter than the origin promised is discarded rather than
+  cached under a meta claiming the full range, which a later disk hit would
+  have replayed as a 206 whose body does not match.
 
 - **Long Livestream VODs Buffering Forever**: a segment index carries 12 bytes
   per segment, so a VOD's `sidx` outgrows the fixed 64 KB probe at roughly 7.5

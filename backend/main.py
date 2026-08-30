@@ -38,7 +38,7 @@ from core.security import (
 from core.access_jwt import is_configured as access_is_configured
 from services.cache import (
     parse_range_header, get_segment_disk_key,
-    check_disk_space, make_room,
+    check_disk_space, make_room, release_room,
     cache_cleanup_task,
     memory_cache, get_segment_cache_key, is_audio_url, mark_content_active,
 )
@@ -909,6 +909,11 @@ async def proxy_stream(request: Request, url: str):
                     url, range_start, range_end, identity=cache_identity)
                 cache_meta_path = cache_path + ".meta"
 
+                # make_room reserved this many bytes; a write that never
+                # lands must hand them back or seeking fills the budget with
+                # phantom reservations and caching refuses again.
+                reserved_bytes = content_length
+
                 async def stream_and_cache():
                     temp_path = cache_path + f".{time.time()}.tmp"
                     total = 0
@@ -925,7 +930,13 @@ async def proxy_stream(request: Request, url: str):
                                 chunks.append(chunk)
                                 yield chunk
 
-                        if r.status_code in (200, 206):
+                        # A body shorter than the origin promised must not
+                        # enter the cache: its meta would claim the full
+                        # Content-Range, and a later disk hit would replay a
+                        # 206 whose body does not match — which players
+                        # reject and intermediaries turn into a 416.
+                        complete = not expected_bytes or total == expected_bytes
+                        if r.status_code in (200, 206) and complete:
                             os.rename(temp_path, cache_path)
                             meta = {
                                 "range_start": range_start,
@@ -961,6 +972,10 @@ async def proxy_stream(request: Request, url: str):
                                 url_hash = segment_cache_key.split('_')[1] if '_' in segment_cache_key else None
                                 if url_hash:
                                     await mark_content_active(url_hash)
+                        else:
+                            if os.path.exists(temp_path):
+                                os.remove(temp_path)
+                            release_room(reserved_bytes)
                     except asyncio.CancelledError:
                         # Only an abort if the client left mid-body. A
                         # cancellation after full delivery is the normal end
@@ -969,6 +984,7 @@ async def proxy_stream(request: Request, url: str):
                             outcome = OUTCOME_CLIENT_ABORTED
                         if os.path.exists(temp_path):
                             os.remove(temp_path)
+                            release_room(reserved_bytes)
                         raise
                     except Exception as e:
                         outcome = OUTCOME_TRUNCATED
@@ -976,6 +992,7 @@ async def proxy_stream(request: Request, url: str):
                         logger.warning(f"Cache error: {e}")
                         if os.path.exists(temp_path):
                             os.remove(temp_path)
+                            release_room(reserved_bytes)
                     finally:
                         await r.aclose()
                         if outcome == OUTCOME_OK and expected_bytes and total < expected_bytes:
