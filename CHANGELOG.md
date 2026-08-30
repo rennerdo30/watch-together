@@ -60,6 +60,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Theme Cards All Previewed The Same Colour**: the restyle routed every
+  theme's accent class through the live `--accent-primary` token so the whole
+  app recolours on switch — correct everywhere except the picker, where all six
+  preview swatches painted the currently active accent. Swatches now use each
+  theme's own hex.
+
 - **Seeking Snapped Back After Buffering**: every incoming WebSocket message —
   heartbeats fire every five seconds — raised a 300 ms suppression window, and
   a viewer's seek completing inside it was silently dropped. The server then

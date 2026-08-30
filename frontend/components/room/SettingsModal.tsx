@@ -118,7 +118,16 @@ export function SettingsModal({
                                             : 'bg-white/5 border-white/5 text-zinc-500 hover:border-white/10 hover:text-zinc-300'
                                         }`}
                                 >
-                                    <div className={`h-2 w-full rounded-full mb-2 ${t.accent}`} />
+                                    <div
+                                                    data-theme-swatch={t.id}
+                                                    className="h-2 w-full rounded-full mb-2"
+                                                    // The class in `t.accent` is a lookup of the
+                                                    // *active* accent token, so as a preview it
+                                                    // painted every card the current colour. A
+                                                    // swatch must show the colour the theme
+                                                    // would apply, which only exists as a hex.
+                                                    style={{ backgroundColor: t.colors.accent }}
+                                                />
                                     {t.name}
                                 </button>
                             ))}
