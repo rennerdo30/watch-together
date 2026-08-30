@@ -489,3 +489,45 @@ class TestSeeksAreNotSwallowedBySync:
         assert "pendingProgrammaticSeeksRef.current.push" in setter
         seeked = text.split("const handleVideoSeeked", 1)[1].split("};", 1)[0]
         assert "pendingProgrammaticSeeksRef" in seeked
+
+
+class TestLiveStreamExpiryIsRecoverable:
+    """A live stream outlives its signed playlist URL.
+
+    Production (2026-08-30): the Twitch usher token behind a playing room
+    expired mid-session. Every proxied fetch answered 403, and hls.js spent
+    its whole retry budget re-requesting the same dead URL before giving up
+    with "please try refreshing". The only recovery is a fresh resolve, so
+    the hook must report the expiry instead of retrying, and the room page
+    must answer it by re-resolving the original URL.
+    """
+    HOOK = REPO_ROOT / "frontend" / "components" / "player" / "hooks" / "useHlsPlayer.ts"
+    ROOM_PAGE = REPO_ROOT / "frontend" / "app" / "room" / "[id]" / "page.tsx"
+
+    def test_hls_hook_reports_an_expired_source_instead_of_retrying_it(self):
+        text = self.HOOK.read_text()
+        assert "onSourceExpired" in text, "the hook has no way to report a dead source"
+        # 403 (dead signed token) and 410 (gone) are verdicts a retry of the
+        # same URL cannot change.
+        assert "403" in text and "410" in text
+
+        handler = text.split("Hls.Events.ERROR", 1)[1]
+        expiry_at = handler.index("onSourceExpired")
+        retry_at = handler.index("retryCountRef.current >= MAX_RETRIES")
+        assert expiry_at < retry_at, (
+            "the expiry check must run before the retry budget: retrying a "
+            "403'd URL burns every retry on an answer that cannot change"
+        )
+
+    def test_room_page_answers_expiry_with_a_fresh_resolve(self):
+        text = self.ROOM_PAGE.read_text()
+        assert "const handleSourceExpired" in text
+        handler = text.split("const handleSourceExpired", 1)[1]
+        handler = handler.split("const getFinalVideoUrl", 1)[0]
+        assert "resolveUrl(original)" in handler, (
+            "the expiry handler must re-resolve the original URL — nothing "
+            "else can mint a fresh signed stream URL"
+        )
+        assert "onSourceExpired={handleSourceExpired}" in text, (
+            "the handler is not wired into the player"
+        )

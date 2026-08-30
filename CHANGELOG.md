@@ -64,6 +64,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Live Streams Died Mid-Session With No Way Back**: a live stream's signed
+  playlist URL expires on the CDN's clock, and once it did (Twitch, mid-watch)
+  every proxied fetch answered 403 while the player burned its whole retry
+  budget re-requesting the same dead URL. Live formats are now cached for
+  minutes instead of hours — enforced on read as well, so entries written
+  before this change cannot outlive their token either — and the player treats
+  an upstream 403/410 as "this URL is dead": it asks the room page for a fresh
+  resolve and reloads seamlessly instead of giving up.
+
 - **Renaming A Room Looked Like It Did Nothing**: the rename worked, but
   nothing said so — the settings modal hides the header, the input already
   shows what was typed, and the address deliberately never changes. The

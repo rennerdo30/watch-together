@@ -21,6 +21,8 @@ interface CustomPlayerProps {
     onPause?: () => void;
     onSeeked?: (time: number) => void;
     onEnd?: () => void;
+    /** The CDN rejected the stream URL (403/410) — it needs re-resolving. */
+    onSourceExpired?: () => void;
     playerRef?: React.MutableRefObject<PlayerAPI | null>;
     onTimeUpdate?: (time: number, isPlaying: boolean) => void;
     syncThreshold?: number;
@@ -78,6 +80,7 @@ export function CustomPlayer({
     onPause,
     onSeeked,
     onEnd,
+    onSourceExpired,
     playerRef,
     onTimeUpdate,
     syncThreshold,
@@ -163,6 +166,7 @@ export function CustomPlayer({
         },
         onLevelSwitch: setHlsCurrentQuality,
         onError: setError,
+        onSourceExpired,
         onLoadingChange: setHlsLoading,
         onPlaybackStart: setPlaybackGate,
     });

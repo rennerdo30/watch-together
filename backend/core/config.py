@@ -52,6 +52,13 @@ PREFETCH_SESSION_TTL = 300  # 5 minutes - cleanup inactive prefetch sessions
 
 # Format cache configuration
 FORMAT_CACHE_TTL_SECONDS = 7200  # 2 hours - YouTube URLs typically valid for 6 hours
+# Live streams get a much shorter entry. A live playlist URL carries a signed
+# token with its own expiry (Twitch usher tokens died mid-session in
+# production, turning every proxied fetch into a 403), and a cached live
+# format keeps handing that dead URL to every viewer who re-resolves. Five
+# minutes still deduplicates the resolve fan-out when a room full of members
+# receives the same set_video broadcast.
+FORMAT_CACHE_LIVE_TTL_SECONDS = 300
 
 # PO token provider (bgutil) for YouTube.
 #

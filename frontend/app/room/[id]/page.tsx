@@ -636,6 +636,34 @@ export default function RoomPage() {
         } finally { setLoading(false); }
     };
 
+    // A live stream outlives its signed playlist URL: the CDN starts
+    // answering 403 partway through the session, and retrying the dead URL
+    // can never succeed. The only fix is a fresh resolve. The cooldown keeps
+    // a stream that is genuinely gone (the fresh URL is rejected too) from
+    // looping — the second failure inside the window surfaces as an error.
+    const SOURCE_REFRESH_COOLDOWN_MS = 30_000;
+    const lastSourceRefreshRef = useRef(0);
+    const handleSourceExpired = useCallback(() => {
+        const original = videoDataRef.current?.original_url;
+        if (!original) return;
+        const now = Date.now();
+        if (now - lastSourceRefreshRef.current < SOURCE_REFRESH_COOLDOWN_MS) {
+            toast.error('The stream keeps rejecting playback — it may have ended.');
+            return;
+        }
+        lastSourceRefreshRef.current = now;
+        console.log('[Room] Stream URL expired upstream, re-resolving...');
+        resolveUrl(original)
+            .then((fresh) => {
+                console.log('[Room] Got fresh stream after expiry:', fresh.stream_type, fresh.quality);
+                setVideoData(fresh);
+            })
+            .catch((err: unknown) => {
+                console.warn('[Room] Re-resolve after expiry failed:', err);
+                toast.error(getErrorMessage(err, 'Could not refresh the stream'));
+            });
+    }, []);
+
     const getFinalVideoUrl = () => {
         if (!videoData) return "";
         const rawUrl = videoData.stream_url;
@@ -790,6 +818,7 @@ export default function RoomPage() {
                                     key={`${videoData.original_url}-${useProxy}-${videoData.stream_type}`}
                                     url={getFinalVideoUrl()}
                                     isLive={videoData.is_live}
+                                    onSourceExpired={handleSourceExpired}
                                     poster={videoData.thumbnail}
                                     autoPlay={syncState.isPlaying}
                                     initialTime={syncState.timestamp} // Pass initial sync timestamp

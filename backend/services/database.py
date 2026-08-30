@@ -408,16 +408,18 @@ async def get_cached_format(original_url: str) -> Optional[Dict[str, Any]]:
     import time
     now = time.time()
     
+    from core.config import FORMAT_CACHE_LIVE_TTL_SECONDS
+
     async with get_async_db() as db:
         cursor = await db.execute(
-            "SELECT video_data, expires_at FROM format_cache WHERE original_url = ?",
+            "SELECT video_data, expires_at, created_at FROM format_cache WHERE original_url = ?",
             (original_url,)
         )
         row = await cursor.fetchone()
-        
+
         if not row:
             return None
-        
+
         # Check if expired
         if row["expires_at"] and now > row["expires_at"]:
             # Expired, delete and return None
@@ -425,20 +427,43 @@ async def get_cached_format(original_url: str) -> Optional[Dict[str, Any]]:
             await db.commit()
             logger.info(f"Format cache expired for: {original_url[:60]}...")
             return None
-        
-        logger.info(f"Format cache HIT for: {original_url[:60]}...")
+
         try:
-            return json.loads(row["video_data"])
+            data = json.loads(row["video_data"])
         except (json.JSONDecodeError, TypeError) as e:
             logger.error(f"Corrupt format cache entry for {original_url[:60]}: {e}")
             return None
 
+        # The live TTL is enforced on read as well as write: an entry written
+        # with the long VOD TTL (before the writer knew better, or by an old
+        # deployment) must not keep serving a live URL whose signed token has
+        # already died upstream.
+        if data.get("is_live") and row["created_at"] is not None:
+            age = now - row["created_at"]
+            if age > FORMAT_CACHE_LIVE_TTL_SECONDS:
+                await db.execute("DELETE FROM format_cache WHERE original_url = ?", (original_url,))
+                await db.commit()
+                logger.info(f"Live format cache entry too old ({age:.0f}s), discarded: {original_url[:60]}...")
+                return None
+
+        logger.info(f"Format cache HIT for: {original_url[:60]}...")
+        return data
+
 
 async def cache_format(original_url: str, video_data: Dict[str, Any], ttl_seconds: int = None) -> None:
-    """Cache video format with TTL. Default uses FORMAT_CACHE_TTL_SECONDS from config (2 hours)."""
-    from core.config import FORMAT_CACHE_TTL_SECONDS
+    """Cache video format with TTL. Default uses FORMAT_CACHE_TTL_SECONDS from config (2 hours).
+
+    Live formats default to the much shorter FORMAT_CACHE_LIVE_TTL_SECONDS:
+    their playlist URLs carry signed tokens that expire on the CDN's clock,
+    and a long-lived cache entry keeps serving the dead URL to every viewer.
+    """
+    from core.config import FORMAT_CACHE_TTL_SECONDS, FORMAT_CACHE_LIVE_TTL_SECONDS
     if ttl_seconds is None:
-        ttl_seconds = FORMAT_CACHE_TTL_SECONDS
+        ttl_seconds = (
+            FORMAT_CACHE_LIVE_TTL_SECONDS
+            if video_data.get("is_live")
+            else FORMAT_CACHE_TTL_SECONDS
+        )
     import time
     now = time.time()
     expires_at = now + ttl_seconds
