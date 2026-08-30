@@ -98,6 +98,14 @@ export function CustomPlayer({
     }, []);
     const containerRef = useRef<HTMLDivElement>(null);
     const isAutoPlayingRef = useRef(false);
+    // Seeks commanded through the player API (sync corrections, server
+    // broadcasts) rather than by this viewer. `seeked` fires only when the
+    // seek completes — after buffering, which can be seconds — so a fixed
+    // suppression window cannot tell the two apart: it swallowed user seeks
+    // that completed near an incoming message and echoed server seeks that
+    // completed after the window. Matching the landing position against the
+    // commanded targets can.
+    const pendingProgrammaticSeeksRef = useRef<{ time: number; at: number }[]>([]);
 
     // Adaptive streams play through one media element, fed by the generated
     // manifest, so the browser muxes audio and video against a single clock.
@@ -214,7 +222,20 @@ export function CustomPlayer({
             onPause?.();
         };
         const handleVideoSeeked = () => {
-            if (!isAutoPlayingRef.current) onSeeked?.(video.currentTime);
+            const landed = video.currentTime;
+            const pending = pendingProgrammaticSeeksRef.current;
+            const now = Date.now();
+            // A superseded correction never fires its own `seeked`; expire it
+            // so it cannot swallow a genuine user seek near the same spot.
+            pendingProgrammaticSeeksRef.current = pending.filter(
+                (entry) => now - entry.at < 10_000);
+            const index = pendingProgrammaticSeeksRef.current.findIndex(
+                (entry) => Math.abs(entry.time - landed) < 1.0);
+            if (index !== -1) {
+                pendingProgrammaticSeeksRef.current.splice(index, 1);
+                return;
+            }
+            if (!isAutoPlayingRef.current) onSeeked?.(landed);
         };
         const handleVideoEnded = () => {
             setIsPlaying(false);
@@ -263,6 +284,8 @@ export function CustomPlayer({
                 pause: () => isLive ? undefined : videoRef.current?.pause(),
                 currentTime: (time?: number) => {
                     if (time !== undefined && videoRef.current) {
+                        pendingProgrammaticSeeksRef.current.push(
+                            { time, at: Date.now() });
                         videoRef.current.currentTime = time;
                     }
                     return videoRef.current?.currentTime || 0;

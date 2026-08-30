@@ -156,6 +156,12 @@ export default function RoomPage() {
 
     // Latency tracking for sync compensation
     const latencyRef = useRef<number>(0); // Average latency in ms
+    // When this viewer last moved the playhead themselves. A heartbeat with
+    // the pre-seek timestamp can already be in flight when the seek message
+    // reaches the server — Germany to Japan is a quarter second each way —
+    // and correcting against it yanks the viewer straight back to where they
+    // seeked away from.
+    const lastLocalSeekAtRef = useRef(0);
     const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
     const videoElementRef = useRef<HTMLVideoElement | null>(null);
 
@@ -406,6 +412,7 @@ export default function RoomPage() {
                 if (payload.your_email) setCurrentUser(payload.your_email);
                 if (typeof payload.playing_index === 'number') setPlayingIndex(payload.playing_index);
                 if (typeof payload.permanent === 'boolean') setIsPermanent(payload.permanent);
+                if (typeof payload.name === 'string') setRoomName(payload.name);
 
                 if (playerRef.current && payload.video_data) {
                     const serverTimestamp = typeof payload.timestamp === 'number' ? payload.timestamp : 0;
@@ -501,6 +508,7 @@ export default function RoomPage() {
                 break;
             case 'room_settings_update':
                 if (typeof payload.permanent === 'boolean') setIsPermanent(payload.permanent);
+                if (typeof payload.name === 'string') setRoomName(payload.name);
                 break;
             case 'pong':
                 // Calculate round-trip latency
@@ -521,7 +529,16 @@ export default function RoomPage() {
                     const drift = compensatedTimestamp - currentTime;
 
                     const video = playerRef.current.getVideoElement?.();
-                    if (video) {
+                    // A heartbeat carrying the pre-seek timestamp can still
+                    // be in flight when the seek reaches the server, and a
+                    // seek still buffering reports its new position before
+                    // the server has confirmed it. Correcting against either
+                    // snaps the viewer back to where they seeked away from.
+                    const settling = Boolean(video?.seeking) ||
+                        Date.now() - lastLocalSeekAtRef.current < 3000;
+                    if (video && settling) {
+                        video.playbackRate = 1.0;
+                    } else if (video) {
                         if (Math.abs(drift) > 3) {
                             // Large drift - hard seek
                             playerRef.current.currentTime(compensatedTimestamp);
@@ -775,10 +792,15 @@ export default function RoomPage() {
                                         }
                                     }}
                                     onSeeked={(time: number) => {
-                                        if (internalUpdateCount.current === 0) {
-                                            sendMsg('seek', { timestamp: time });
-                                            setSyncState(prev => ({ ...prev, timestamp: time, lastSync: new Date().toLocaleTimeString() }));
-                                        }
+                                        // Never gated on the message counter: `seeked`
+                                        // completes only after buffering, so it can land
+                                        // beside an unrelated heartbeat or queue update —
+                                        // and a swallowed seek leaves the server on the
+                                        // old timestamp, whose next heartbeat yanks the
+                                        // viewer back to where they seeked away from.
+                                        lastLocalSeekAtRef.current = Date.now();
+                                        sendMsg('seek', { timestamp: time });
+                                        setSyncState(prev => ({ ...prev, timestamp: time, lastSync: new Date().toLocaleTimeString() }));
                                     }}
                                     onEnd={() => { if (internalUpdateCount.current === 0) sendMsg('video_ended'); }}
                                     onTimeUpdate={(time: number, isPlaying: boolean) => {
