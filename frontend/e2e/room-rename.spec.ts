@@ -31,6 +31,10 @@ test('renaming a room updates every member without changing the link', async ({ 
   await input.fill('Movie Night');
   await admin.getByRole('button', { name: 'Save', exact: true }).click();
 
+  // The renamer is told it worked: the modal hides the header and the
+  // address never changes, so without this the button reads as broken.
+  await expect(admin.getByText(/Room renamed to "Movie Night"/)).toBeVisible({ timeout: 10_000 });
+
   // Both headers show the label; the address bar keeps the id.
   await expect(admin.getByText('Movie Night').first()).toBeVisible({ timeout: 10_000 });
   await expect(member.getByText('Movie Night').first()).toBeVisible({ timeout: 10_000 });

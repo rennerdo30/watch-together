@@ -1221,6 +1221,15 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                             "name": state.get("name", ""),
                         }
                     }, room_id)
+                else:
+                    # Refusing in silence reads as a broken button: the
+                    # header sits behind the settings modal and the address
+                    # never changes, so the sender sees nothing at all.
+                    logger.info(f"Refused rename of {room_id} by {user_email}")
+                    await websocket.send_json({
+                        "type": "error",
+                        "payload": {"message": "Only the room admin can rename this room"},
+                    })
             
             elif msg_type == "quality_change":
                 # User switched video quality - prefetch segments for new quality

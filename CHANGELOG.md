@@ -64,6 +64,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Renaming A Room Looked Like It Did Nothing**: the rename worked, but
+  nothing said so — the settings modal hides the header, the input already
+  shows what was typed, and the address deliberately never changes. The
+  renamer now gets a confirmation toast, and a refused rename (non-admins)
+  answers the sender with an error instead of silence.
+
 - **Theme Cards All Previewed The Same Colour**: the restyle routed every
   theme's accent class through the live `--accent-primary` token so the whole
   app recolours on switch — correct everywhere except the picker, where all six
