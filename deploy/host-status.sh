@@ -214,6 +214,13 @@ print("size           %.1f MB of %.0f MB budget" % (
 ok, free = check_disk_space()
 print("host disk      %.1f GB free%s" % (
     free / 1e9, "" if ok else "  -- BELOW THE FLOOR, caching is disabled"))
+try:
+    from services.cache import make_room  # noqa: F401
+    from core.config import CACHE_EVICTION_BATCH_BYTES
+    print("when full      evicts oldest first, %d MB per pass"
+          % (CACHE_EVICTION_BATCH_BYTES // (1024 * 1024)))
+except ImportError:
+    print("when full      STOPS CACHING until the janitor sweeps")
 if oldest:
     print("oldest entry   %.1f hours" % ((time.time() - oldest) / 3600))
 PYEOF
