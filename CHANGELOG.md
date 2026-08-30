@@ -60,6 +60,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Seeking Snapped Back After Buffering**: every incoming WebSocket message —
+  heartbeats fire every five seconds — raised a 300 ms suppression window, and
+  a viewer's seek completing inside it was silently dropped. The server then
+  kept the old position and its next heartbeat saw over three seconds of drift
+  and yanked the viewer back to where they seeked away from. The window was
+  wrong both ways, since `seeked` fires only after buffering: server-commanded
+  seeks completing late were echoed back as user seeks. Programmatic seeks are
+  now matched by their landing position, a viewer's seek always reaches the
+  room, and drift correction waits out an in-flight seek instead of correcting
+  against a stale heartbeat.
+
 - **Every Member Paid A Full Extraction For The Same Video**: `/api/resolve`
   never consulted its own cache, so the sender extracted once to paste, then
   the `set_video` broadcast made every member — sender included — extract the

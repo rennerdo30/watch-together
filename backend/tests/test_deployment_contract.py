@@ -440,3 +440,52 @@ class TestContactDetailsAreReal:
         text = (REPO_ROOT / "SECURITY.md").read_text().lower()
         for promise in ("within 72 hours", "within 7 days", "within 24 hours"):
             assert promise not in text
+
+
+class TestSeeksAreNotSwallowedBySync:
+    """A user's seek must always reach the room, and never be undone.
+
+    Every incoming WebSocket message — heartbeats fire every five seconds —
+    used to raise a 300 ms suppression window, and a local seek completing
+    inside it was silently dropped. The server then kept the old timestamp,
+    and its next heartbeat saw more than three seconds of drift and yanked
+    the viewer back to where they had seeked away from: skip, buffer, snap
+    back. The window was wrong in the other direction too, because `seeked`
+    fires only when a seek finishes buffering — a server-commanded seek
+    completing after 300 ms was re-broadcast as though the user made it.
+    """
+
+    ROOM_PAGE = REPO_ROOT / "frontend" / "app" / "room" / "[id]" / "page.tsx"
+    PLAYER = REPO_ROOT / "frontend" / "components" / "custom-player.tsx"
+
+    def test_seek_broadcast_is_not_gated_on_the_message_counter(self):
+        text = self.ROOM_PAGE.read_text()
+        on_seeked = text.split("onSeeked={", 1)[1].split("}}", 1)[0]
+        assert "internalUpdateCount" not in on_seeked, (
+            "a seek completing near any incoming message is swallowed again"
+        )
+        assert "sendMsg('seek'" in on_seeked
+        assert "lastLocalSeekAtRef.current = Date.now()" in on_seeked
+
+    def test_heartbeat_correction_waits_out_a_local_seek(self):
+        """A stale heartbeat can be in flight when the seek reaches the server."""
+        text = self.ROOM_PAGE.read_text()
+        heartbeat = text.split("case 'heartbeat':", 1)[1].split("break;", 1)[0]
+        assert "lastLocalSeekAtRef" in heartbeat, (
+            "nothing stops a pre-seek heartbeat from snapping the viewer back"
+        )
+        assert "video?.seeking" in heartbeat, (
+            "a seek still buffering must not be corrected against"
+        )
+
+    def test_programmatic_seeks_are_matched_by_landing_position(self):
+        """Sync corrections must not echo back to the room as user seeks."""
+        text = self.PLAYER.read_text()
+        assert "pendingProgrammaticSeeksRef" in text
+        # Anchor inside the implementation: the PlayerAPI interface above it
+        # declares the same signature.
+        implementation = text.split("playerRef.current = {", 1)[1]
+        setter = implementation.split("currentTime: (time?: number) =>", 1)[1].split("},", 1)[0]
+        assert "pendingProgrammaticSeeksRef.current.push" in setter
+        seeked = text.split("const handleVideoSeeked", 1)[1].split("};", 1)[0]
+        assert "pendingProgrammaticSeeksRef" in seeked
