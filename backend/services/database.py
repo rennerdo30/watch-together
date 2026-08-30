@@ -117,6 +117,10 @@ def init_database():
         """
         CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_email)
         """,
+        # Version 6: Admin-set room display name; the id remains the address
+        """
+        ALTER TABLE rooms ADD COLUMN name TEXT DEFAULT ''
+        """,
     ]
     
     import time
@@ -293,8 +297,8 @@ async def save_room(room_id: str, state: Dict[str, Any]) -> None:
     async with get_async_db() as db:
         await db.execute("""
             INSERT INTO rooms (id, video_data, is_playing, timestamp, queue, 
-                               playing_index, roles, permanent, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               playing_index, roles, permanent, name, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 video_data = excluded.video_data,
                 is_playing = excluded.is_playing,
@@ -303,6 +307,7 @@ async def save_room(room_id: str, state: Dict[str, Any]) -> None:
                 playing_index = excluded.playing_index,
                 roles = excluded.roles,
                 permanent = excluded.permanent,
+                name = excluded.name,
                 updated_at = excluded.updated_at
         """, (
             room_id,
@@ -313,6 +318,7 @@ async def save_room(room_id: str, state: Dict[str, Any]) -> None:
             state.get("playing_index", -1),
             json.dumps(state.get("roles", {})),
             1 if state.get("permanent") else 0,
+            state.get("name", ""),
             now,
             now
         ))
@@ -342,6 +348,7 @@ async def get_all_rooms() -> Dict[str, Dict[str, Any]]:
                 "playing_index": row["playing_index"],
                 "roles": json.loads(row["roles"]) if row["roles"] else {},
                 "permanent": bool(row["permanent"]),
+                "name": row["name"] or "",
             }
         return rooms
 

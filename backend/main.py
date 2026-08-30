@@ -1210,6 +1210,17 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         "type": "room_settings_update",
                         "payload": {"permanent": state.get("permanent", False)}
                     }, room_id)
+
+            elif msg_type == "rename_room":
+                if await manager.rename_room(room_id, user_email, payload.get("name")):
+                    state = manager.room_states.get(room_id, {})
+                    await manager.broadcast({
+                        "type": "room_settings_update",
+                        "payload": {
+                            "permanent": state.get("permanent", False),
+                            "name": state.get("name", ""),
+                        }
+                    }, room_id)
             
             elif msg_type == "quality_change":
                 # User switched video quality - prefetch segments for new quality
