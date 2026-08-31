@@ -306,6 +306,13 @@ class ConnectionManager:
         known = room_id in self.room_states or room_id in self.active_connections
         if not known:
             return False
+        # Tell every member first: without an explicit notice a client
+        # cannot distinguish this from a network drop, reconnects three
+        # seconds later, and resurrects the room the admin just closed.
+        await self.broadcast({
+            "type": "room_closed",
+            "payload": {"message": "This room was closed by an administrator"},
+        }, room_id)
         for ws in list(self.active_connections.get(room_id, [])):
             try:
                 await ws.close(code=4001, reason="Room closed by an administrator")
