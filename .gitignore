@@ -47,3 +47,4 @@ coverage/
 
 # Deployment target (host address / login) — never committed.
 deploy/target.env
+test-results/
