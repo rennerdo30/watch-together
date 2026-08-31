@@ -298,6 +298,27 @@ class ConnectionManager:
             if orphan_locks:
                 logger.info(f"Cleaned up {len(orphan_locks)} orphan room locks")
     
+    async def close_room(self, room_id: str) -> bool:
+        """Force-close a room: disconnect everyone, drop its state and row.
+
+        Admin operation. Returns False when no such room exists.
+        """
+        known = room_id in self.room_states or room_id in self.active_connections
+        if not known:
+            return False
+        for ws in list(self.active_connections.get(room_id, [])):
+            try:
+                await ws.close(code=4001, reason="Room closed by an administrator")
+            except Exception:
+                pass
+        self.active_connections.pop(room_id, None)
+        async with self._state_lock:
+            self.room_states.pop(room_id, None)
+            self._room_locks.pop(room_id, None)
+        await delete_room(room_id)
+        logger.info(f"Room {room_id} force-closed by an administrator")
+        return True
+
     async def disconnect_and_notify(self, websocket: WebSocket, room_id: str):
         await self.disconnect(websocket, room_id)
         if room_id in self.room_states:

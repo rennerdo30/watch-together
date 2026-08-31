@@ -63,6 +63,7 @@ from api.routes.cookies import router as cookies_router
 from api.routes.rooms import router as rooms_router
 from api.routes.tokens import router as tokens_router
 from api.routes.extension import router as extension_router
+from api.routes.admin import router as admin_router
 from connection_manager import manager
 
 # Configure logging. LOG_LEVEL=DEBUG turns on the per-transfer proxy traces,
@@ -251,6 +252,7 @@ app.include_router(cookies_router)
 app.include_router(rooms_router)
 app.include_router(tokens_router)
 app.include_router(extension_router)
+app.include_router(admin_router)
 
 
 # ============================================================================

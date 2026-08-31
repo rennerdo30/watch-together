@@ -13,6 +13,8 @@ services:
     environment:
       - BGUTIL_YTDLP_POT_PROVIDER_URL=http://bgutil-provider:4416
       - DEVELOPMENT_MODE=${DEVELOPMENT_MODE:-false}
+      # Verified identities allowed to use /api/admin. Empty disables it.
+      - ADMIN_EMAILS=${ADMIN_EMAILS:-}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-}
       # Set both to verify Cloudflare Access assertions instead of trusting
       # the identity header. Without them the header is accepted as-is.

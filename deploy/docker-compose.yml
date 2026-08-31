@@ -26,6 +26,9 @@ services:
       BGUTIL_YTDLP_POT_PROVIDER_URL: http://bgutil-provider:4416
       # Never enable in production: it lets ?user= set any identity.
       DEVELOPMENT_MODE: "false"
+      # Verified identities allowed to use /api/admin. Empty disables the
+      # admin panel entirely.
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://${WT_HOST:?required}}
       # Verify Cloudflare Access assertions rather than trusting the plain
       # identity header, which anyone reaching the origin directly can send.
