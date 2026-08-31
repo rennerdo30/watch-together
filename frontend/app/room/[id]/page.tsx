@@ -66,6 +66,12 @@ interface WsMessage {
     payload?: WsPayload;
 }
 
+// An admin force-close ends the room for good: the server says so in-band
+// (a room_closed message) and closes the socket with this code. Either
+// signal means "do not reconnect" — reconnecting recreates the room.
+const ROOM_CLOSED_WS_CODE = 4001;
+const ROOM_CLOSED_REDIRECT_DELAY_MS = 2000;
+
 const getErrorMessage = (error: unknown, fallback: string): string => {
     if (error instanceof Error) return error.message;
     return fallback;
@@ -154,6 +160,8 @@ export default function RoomPage() {
     const playerRef = useRef<RoomPlayer | null>(null);
     const internalUpdateCount = useRef(0); // Counter to prevent feedback loops during sync
     const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
+    // Set when the server closes the room for good; blocks the reconnect.
+    const roomClosedRef = useRef(false);
 
     // Latency tracking for sync compensation
     const latencyRef = useRef<number>(0); // Average latency in ms
@@ -284,9 +292,15 @@ export default function RoomPage() {
             try { handleWsMessage(JSON.parse(event.data)); }
             catch (e) { console.error("Failed to parse WS message", e); }
         };
-        ws.onclose = () => {
+        ws.onclose = (event) => {
             setConnected(false);
             if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+            // An admin close is final. Reconnecting here recreated the room
+            // seconds after it was closed, making the close look like a no-op.
+            if (roomClosedRef.current || event.code === ROOM_CLOSED_WS_CODE) {
+                roomClosedRef.current = true;
+                return;
+            }
             reconnectTimer.current = setTimeout(connect, 3000);
         };
         ws.onerror = () => ws.close();
@@ -525,6 +539,16 @@ export default function RoomPage() {
                     }
                 }
                 break;
+            case 'room_closed': {
+                roomClosedRef.current = true;
+                if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+                const message = typeof payload.message === 'string' && payload.message
+                    ? payload.message
+                    : 'This room was closed by an administrator';
+                toast.error(message);
+                setTimeout(() => router.push('/'), ROOM_CLOSED_REDIRECT_DELAY_MS);
+                break;
+            }
             case 'error':
                 // The server refuses quietly otherwise, and a click that
                 // does nothing visible reads as a broken button.

@@ -531,3 +531,28 @@ class TestLiveStreamExpiryIsRecoverable:
         assert "onSourceExpired={handleSourceExpired}" in text, (
             "the handler is not wired into the player"
         )
+
+
+class TestAdminCloseIsNotResurrected:
+    """Closing a room from the admin panel looked like a no-op.
+
+    The backend closed every socket and deleted the room, but the room
+    page's onclose handler reconnected unconditionally three seconds
+    later — recreating the room. The close must be announced in-band and
+    the reconnect must honour it.
+    """
+    ROOM_PAGE = REPO_ROOT / "frontend" / "app" / "room" / "[id]" / "page.tsx"
+
+    def test_the_reconnect_honours_a_deliberate_close(self):
+        text = self.ROOM_PAGE.read_text()
+        assert "case 'room_closed'" in text, "the close notice is not handled"
+
+        handler = text.split("ws.onclose", 1)[1]
+        handler = handler.split("};", 1)[0]
+        assert "setTimeout(connect" in handler, "the reconnect moved; update this test"
+        guard_at = handler.index("roomClosedRef")
+        reconnect_at = handler.index("setTimeout(connect")
+        assert guard_at < reconnect_at, (
+            "onclose reconnects unconditionally: an admin-closed room is "
+            "recreated three seconds after it was closed"
+        )

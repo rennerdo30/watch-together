@@ -162,3 +162,36 @@ class TestAdminMaintenance:
 
         # Closing it again reports that there is nothing to close.
         assert client.delete(f"/api/admin/rooms/{room_id}?user={ADMIN}").status_code == 404
+
+    def test_members_are_told_before_the_room_closes(self, client, admin_configured):
+        """Silently closing the socket resurrects the room.
+
+        A client that only sees its socket die treats it as a network
+        drop and reconnects three seconds later — recreating the room the
+        admin just closed. The close must therefore be announced in-band
+        before the sockets go away.
+        """
+        from starlette.websockets import WebSocketDisconnect
+
+        room_id = "admin-close-live"
+        with client.websocket_connect(f"/ws/{room_id}?user={NON_ADMIN}") as ws:
+            ws.receive_json()  # sync snapshot
+
+            response = client.delete(f"/api/admin/rooms/{room_id}?user={ADMIN}")
+            assert response.status_code == 200
+
+            for _ in range(10):
+                try:
+                    message = ws.receive_json()
+                except WebSocketDisconnect:
+                    raise AssertionError(
+                        "the socket closed without a room_closed notice — the "
+                        "client cannot tell an admin close from a network drop"
+                    )
+                if message.get("type") == "room_closed":
+                    break
+            else:
+                raise AssertionError("no room_closed notice arrived")
+
+        listing = client.get("/api/rooms").json()
+        assert all(r["id"] != room_id for r in listing)

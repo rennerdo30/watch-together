@@ -75,6 +75,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Closing A Room From The Admin Panel Looked Like A No-Op**: the backend
+  closed every socket and deleted the room, but each member's page treated
+  the dead socket as a network drop and reconnected three seconds later —
+  recreating the room. The close is now announced in-band: members see why,
+  are sent back to the start page, and nothing reconnects.
+
 - **Live Streams Died Mid-Session With No Way Back**: a live stream's signed
   playlist URL expires on the CDN's clock, and once it did (Twitch, mid-watch)
   every proxied fetch answered 403 while the player burned its whole retry
