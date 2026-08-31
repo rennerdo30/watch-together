@@ -175,9 +175,20 @@ export default function AdminPage() {
       try {
         await action();
         toast.success(success);
-        await load();
       } catch (error) {
-        toast.error(error instanceof Error ? error.message : 'The action failed.');
+        if (error instanceof ApiError && error.status === 404) {
+          // The target vanished between the last refresh and the click —
+          // a room already closed, an entry already evicted. Not a failure,
+          // just a stale view; say so and let the reload below correct it.
+          toast('Already gone — refreshing the list.');
+        } else {
+          toast.error(error instanceof Error ? error.message : 'The action failed.');
+        }
+      } finally {
+        // Refresh after failures too: a failed action usually means the
+        // view no longer matches the server, which is exactly when a stale
+        // list must not keep being shown.
+        await load();
       }
     },
     [load],
