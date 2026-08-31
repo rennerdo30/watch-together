@@ -556,3 +556,26 @@ class TestAdminCloseIsNotResurrected:
             "onclose reconnects unconditionally: an admin-closed room is "
             "recreated three seconds after it was closed"
         )
+
+
+class TestAdminPanelSelfHeals:
+    """A failed panel action left the stale list standing.
+
+    Closing a room that had already vanished server-side answered 404 —
+    truthfully — but the panel only reloaded after successes, so the dead
+    room stayed in the list and every further click repeated the same
+    "No such room". A failed action is precisely the moment the view is
+    known to disagree with the server, so it must refresh then too.
+    """
+    ADMIN_PAGE = REPO_ROOT / "frontend" / "app" / "admin" / "page.tsx"
+
+    def test_actions_reload_even_when_they_fail(self):
+        text = self.ADMIN_PAGE.read_text()
+        run_action = text.split("const runAction", 1)[1]
+        run_action = run_action.split("[load]", 1)[0]
+        finally_at = run_action.find("finally")
+        assert finally_at != -1, "runAction has no finally block"
+        assert "load()" in run_action[finally_at:], (
+            "the reload is not in the finally block: a failed action leaves "
+            "the stale list standing"
+        )

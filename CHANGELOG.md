@@ -75,6 +75,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The Admin Panel Kept Showing Rooms The Server No Longer Had**: an action
+  that failed (closing a room that was already gone answers 404) left the
+  stale list standing, so the dead room stayed clickable and every click
+  repeated "No such room". Actions now refresh the panel whether they
+  succeed or fail, and a 404 is reported as "already gone" rather than as an
+  error.
+
 - **Closing A Room From The Admin Panel Looked Like A No-Op**: the backend
   closed every socket and deleted the room, but each member's page treated
   the dead socket as a network drop and reconnected three seconds later —
