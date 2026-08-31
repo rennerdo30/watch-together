@@ -450,6 +450,82 @@ def get_current_cache_size(max_age_seconds: float = CACHE_SIZE_MEASURE_TTL_SECON
     return size
 
 
+def disk_cache_report(max_entries: int = 50) -> dict:
+    """Inspect the segment cache: totals plus the newest entries.
+
+    Admin panel use. Scans the directory, so callers should treat it as
+    a diagnostic rather than something to poll every request.
+    """
+    import shutil as _shutil
+    now = time.time()
+    entries = []
+    total_bytes = 0
+    oldest_mtime = None
+    try:
+        with os.scandir(CACHE_DIR) as it:
+            for entry in it:
+                if not entry.is_file():
+                    continue
+                if entry.name.endswith(('.tmp', '.meta')):
+                    continue
+                try:
+                    stat = entry.stat()
+                except OSError:
+                    continue
+                total_bytes += stat.st_size
+                if oldest_mtime is None or stat.st_mtime < oldest_mtime:
+                    oldest_mtime = stat.st_mtime
+                entries.append({
+                    "name": entry.name,
+                    "bytes": stat.st_size,
+                    "age_seconds": round(now - stat.st_mtime, 1),
+                })
+    except FileNotFoundError:
+        pass
+
+    try:
+        disk_free = _shutil.disk_usage(CACHE_DIR).free
+    except OSError:
+        disk_free = None
+
+    entries.sort(key=lambda e: e["age_seconds"])
+    return {
+        "entries_total": len(entries),
+        "bytes_total": total_bytes,
+        "budget_bytes": MAX_CACHE_SIZE_BYTES,
+        "oldest_age_seconds": round(now - oldest_mtime, 1) if oldest_mtime else None,
+        "disk_free_bytes": disk_free,
+        "entries": entries[:max_entries],
+    }
+
+
+def clear_disk_cache() -> dict:
+    """Delete every cached segment: bodies, sidecars and leftover temps.
+
+    Admin operation. Publishes the emptied size so the proxy resumes
+    caching immediately instead of waiting for the next measurement.
+    """
+    removed = 0
+    freed_bytes = 0
+    try:
+        with os.scandir(CACHE_DIR) as it:
+            for entry in it:
+                if not entry.is_file():
+                    continue
+                try:
+                    size = entry.stat().st_size
+                    os.remove(entry.path)
+                except OSError:
+                    continue
+                removed += 1
+                freed_bytes += size
+    except FileNotFoundError:
+        pass
+    _publish_cache_size(0)
+    logger.info(f"Disk cache cleared: {removed} files, {freed_bytes} bytes freed")
+    return {"removed": removed, "freed_bytes": freed_bytes}
+
+
 async def cache_cleanup_task():
     """
     Background task to enforce cache limits (size and TTL).

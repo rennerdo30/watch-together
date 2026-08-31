@@ -46,6 +46,7 @@ export default defineConfig({
       env: {
         DEVELOPMENT_MODE: 'true',
         ALLOWED_ORIGINS: '*',
+        ADMIN_EMAILS: 'admin@example.com',
       },
     },
     {

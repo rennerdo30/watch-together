@@ -85,6 +85,118 @@ export async function fetchRooms(): Promise<RoomSummary[]> {
 }
 
 // ============================================================================
+// Admin API
+// ============================================================================
+
+export class ApiError extends Error {
+    status: number;
+    constructor(message: string, status: number) {
+        super(message);
+        this.status = status;
+    }
+}
+
+export interface AdminRoom {
+    id: string;
+    name: string;
+    active_users: number;
+    members: string[];
+    current_video: string | null;
+    is_live: boolean;
+    is_playing: boolean;
+    queue_size: number;
+    permanent: boolean;
+}
+
+export interface AdminOverview {
+    requested_by: string;
+    uptime_seconds: number;
+    totals: { rooms: number; viewers: number };
+    rooms: AdminRoom[];
+    cookie_users: string[];
+}
+
+export interface AdminSegmentEntry {
+    name: string;
+    bytes: number;
+    age_seconds: number;
+}
+
+export interface AdminFormatEntry {
+    original_url: string;
+    title: string | null;
+    is_live: boolean;
+    stream_type: string | null;
+    created_at: number | null;
+    expires_at: number | null;
+    age_seconds: number | null;
+    expires_in_seconds: number | null;
+}
+
+export interface AdminCacheReport {
+    segments: {
+        entries_total: number;
+        bytes_total: number;
+        budget_bytes: number;
+        oldest_age_seconds: number | null;
+        disk_free_bytes: number | null;
+        entries: AdminSegmentEntry[];
+    };
+    memory: {
+        items: number;
+        size_mb: number;
+        max_mb: number;
+        audio_items: number;
+        hits: number;
+        misses: number;
+        hit_rate_percent: number;
+    };
+    formats: AdminFormatEntry[];
+    proxy: {
+        uptime_seconds: number;
+        totals: Record<string, number>;
+        by_outcome: Record<string, number>;
+        by_host: Record<string, Record<string, number>>;
+        recent_failures: Record<string, unknown>[];
+        recent_samples: Record<string, unknown>[];
+    };
+}
+
+// Identity travels as a query parameter in development mode, the same way
+// the other client calls carry it.
+const devUserSuffix = (leading: '?' | '&'): string => {
+    if (typeof window === 'undefined') return '';
+    const user = new URLSearchParams(window.location.search).get('user');
+    return user ? `${leading}user=${encodeURIComponent(user)}` : '';
+};
+
+async function adminFetch<T>(path: string, init?: RequestInit): Promise<T> {
+    const suffix = devUserSuffix(path.includes('?') ? '&' : '?');
+    const res = await fetch(`${API_BASE_URL}${path}${suffix}`, { cache: 'no-store', ...init });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({ detail: null }));
+        throw new ApiError(body.detail || `Request failed (${res.status})`, res.status);
+    }
+    return res.json() as Promise<T>;
+}
+
+export function fetchAdminOverview(): Promise<AdminOverview> {
+    return adminFetch<AdminOverview>('/api/admin/overview');
+}
+
+export function fetchAdminCache(): Promise<AdminCacheReport> {
+    return adminFetch<AdminCacheReport>('/api/admin/cache');
+}
+
+export function clearAdminCache(target: 'segments' | 'formats' | 'memory'): Promise<Record<string, number>> {
+    return adminFetch<Record<string, number>>(`/api/admin/cache/${target}`, { method: 'DELETE' });
+}
+
+export function closeAdminRoom(roomId: string): Promise<{ closed: string }> {
+    return adminFetch<{ closed: string }>(`/api/admin/rooms/${encodeURIComponent(roomId)}`, { method: 'DELETE' });
+}
+
+// ============================================================================
 // Extension Token API
 // ============================================================================
 

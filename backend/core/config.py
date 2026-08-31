@@ -111,6 +111,19 @@ UPSTREAM_MAX_REDIRECTS = 3  # Redirect hops followed, each one re-validated
 UPSTREAM_ALLOWED_SCHEMES = ("http", "https")
 UPSTREAM_ALLOWED_PORTS = (80, 443, 8080, 8443)
 
+# Admin panel access. Comma-separated list of verified identities allowed to
+# call /api/admin. Empty (the default) disables the panel entirely — no
+# identity matches — so granting access is always an explicit deployment
+# decision rather than a value baked into the repo.
+ADMIN_EMAILS = frozenset(
+    email.strip().lower()
+    for email in os.environ.get("ADMIN_EMAILS", "").split(",")
+    if email.strip()
+)
+# How much detail the cache inspection returns per request.
+ADMIN_SEGMENT_LIST_LIMIT = 50   # Newest segment cache entries listed
+ADMIN_PROXY_SAMPLE_LIMIT = 20   # Recent proxy transfer samples included
+
 # Cloudflare Access authentication
 # Team domain, e.g. "https://example.cloudflareaccess.com", and the
 # Access application's AUD tag. Both are required to verify assertions;

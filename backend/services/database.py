@@ -450,6 +450,46 @@ async def get_cached_format(original_url: str) -> Optional[Dict[str, Any]]:
         return data
 
 
+async def get_all_cached_formats() -> list:
+    """Inspect every format cache entry. Admin panel use."""
+    import time
+    now = time.time()
+    async with get_async_db() as db:
+        cursor = await db.execute(
+            "SELECT original_url, video_data, expires_at, created_at "
+            "FROM format_cache ORDER BY created_at DESC"
+        )
+        rows = await cursor.fetchall()
+
+    entries = []
+    for row in rows:
+        try:
+            data = json.loads(row["video_data"])
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+        created_at = row["created_at"]
+        expires_at = row["expires_at"]
+        entries.append({
+            "original_url": row["original_url"],
+            "title": data.get("title"),
+            "is_live": bool(data.get("is_live")),
+            "stream_type": data.get("stream_type"),
+            "created_at": created_at,
+            "expires_at": expires_at,
+            "age_seconds": round(now - created_at, 1) if created_at else None,
+            "expires_in_seconds": round(expires_at - now, 1) if expires_at else None,
+        })
+    return entries
+
+
+async def clear_format_cache() -> int:
+    """Drop every format cache entry. Returns how many were removed."""
+    async with get_async_db() as db:
+        cursor = await db.execute("DELETE FROM format_cache")
+        await db.commit()
+        return cursor.rowcount
+
+
 async def cache_format(original_url: str, video_data: Dict[str, Any], ttl_seconds: int = None) -> None:
     """Cache video format with TTL. Default uses FORMAT_CACHE_TTL_SECONDS from config (2 hours).
 

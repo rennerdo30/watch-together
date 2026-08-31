@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Admin Panel** at `/admin`: live rooms with connected members and a
+  force-close action, plus full cache inspection — the disk segment cache
+  (usage against budget, newest entries, oldest age, disk free), the
+  in-memory segment cache (size, hit rate), every cached format resolution
+  (age, expiry, live flag) and the proxy transfer outcomes — each tier with
+  its own clear action. Access is limited to the verified identities listed
+  in the `ADMIN_EMAILS` environment variable; the default is empty, which
+  disables the panel entirely.
+
 ### Changed
 
 - **Visual Language**: the palette moves from a violet accent on pure-neutral
