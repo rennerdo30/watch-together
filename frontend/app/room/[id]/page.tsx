@@ -440,8 +440,12 @@ export default function RoomPage() {
                     else playerRef.current.pause?.();
 
                     const isLive = payload.video_data.is_live;
-                    if (isLive && serverTimestamp === 0) {
-                        // Stay at live edge
+                    if (isLive) {
+                        // Live positions are per client — hls.js anchors the
+                        // timeline at *this* viewer's first playlist load —
+                        // so no stored number is meaningful here. The live
+                        // edge is the shared position and every player
+                        // reaches it on its own.
                     } else if (playerRef.current) {
                         const playerTime = playerRef.current.currentTime();
                         const diff = Math.abs(playerTime - serverTimestamp);
@@ -495,7 +499,9 @@ export default function RoomPage() {
             case 'play':
                 if (playerRef.current) {
                     const serverTimestamp = typeof payload.timestamp === 'number' ? payload.timestamp : 0;
-                    if (!(payload.video_data?.is_live && serverTimestamp === 0)) {
+                    // Play/pause messages carry no video_data: the live check
+                    // has to come from the room's own state.
+                    if (!videoDataRef.current?.is_live) {
                         playerRef.current.currentTime(serverTimestamp);
                     }
                     playerRef.current.play();
@@ -505,14 +511,16 @@ export default function RoomPage() {
                 if (playerRef.current) {
                     const serverTimestamp = typeof payload.timestamp === 'number' ? payload.timestamp : 0;
                     playerRef.current.pause();
-                    if (!(payload.video_data?.is_live && serverTimestamp === 0)) {
+                    if (!videoDataRef.current?.is_live) {
                         playerRef.current.currentTime(serverTimestamp);
                     }
                 }
                 break;
             case 'seek':
-                // Intentional seek - always hard jump
-                if (playerRef.current && typeof payload.timestamp === 'number') {
+                // Intentional seek - always hard jump. Except on a live
+                // stream, where another viewer's position means nothing in
+                // this player's timeline.
+                if (playerRef.current && typeof payload.timestamp === 'number' && !videoDataRef.current?.is_live) {
                     playerRef.current.currentTime(payload.timestamp);
                 }
                 // Reset playback rate after seek
@@ -567,8 +575,15 @@ export default function RoomPage() {
                 }
                 break;
             case 'heartbeat':
-                // Gradual sync - adjust playback rate instead of jumping for small drifts
-                if (playerRef.current && payload.is_playing && typeof payload.timestamp === 'number') {
+                // A live stream is never position-synced: the server's
+                // timestamp is some viewer's window-relative position, and
+                // correcting towards it every five seconds dragged a DVR
+                // stream back to the start of its window on every beat.
+                if (videoDataRef.current?.is_live) {
+                    const liveVideo = playerRef.current?.getVideoElement?.();
+                    if (liveVideo) liveVideo.playbackRate = 1.0;
+                } else if (playerRef.current && payload.is_playing && typeof payload.timestamp === 'number') {
+                    // Gradual sync - adjust playback rate instead of jumping for small drifts
                     const currentTime = playerRef.current.currentTime();
                     // Compensate for latency (one-way delay)
                     const compensatedTimestamp = payload.timestamp + (latencyRef.current / 1000);
@@ -854,19 +869,24 @@ export default function RoomPage() {
                                     availableQualities={getDashUrls()?.availableQualities}
                                     onPlay={() => {
                                         if (internalUpdateCount.current === 0) {
-                                            const t = playerRef.current?.currentTime() || 0;
+                                            // A live position is only meaningful in this
+                                            // player's timeline; never publish it.
+                                            const t = videoData.is_live ? 0 : (playerRef.current?.currentTime() || 0);
                                             sendMsg('play', { timestamp: t });
                                             setSyncState(prev => ({ ...prev, isPlaying: true, timestamp: t, lastSync: new Date().toLocaleTimeString() }));
                                         }
                                     }}
                                     onPause={() => {
                                         if (internalUpdateCount.current === 0) {
-                                            const t = playerRef.current?.currentTime() || 0;
+                                            const t = videoData.is_live ? 0 : (playerRef.current?.currentTime() || 0);
                                             sendMsg('pause', { timestamp: t });
                                             setSyncState(prev => ({ ...prev, isPlaying: false, timestamp: t, lastSync: new Date().toLocaleTimeString() }));
                                         }
                                     }}
                                     onSeeked={(time: number) => {
+                                        // Scrubbing a DVR window is a local affair: the
+                                        // position does not translate to other players.
+                                        if (videoData.is_live) return;
                                         // Never gated on the message counter: `seeked`
                                         // completes only after buffering, so it can land
                                         // beside an unrelated heartbeat or queue update —

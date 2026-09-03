@@ -579,3 +579,41 @@ class TestAdminPanelSelfHeals:
             "the reload is not in the finally block: a failed action leaves "
             "the stale list standing"
         )
+
+
+class TestLiveStreamsAreNotPositionSynced:
+    """A DVR live stream kept jumping back to the start of its window.
+
+    On a live stream every player's `currentTime` is relative to when
+    *that* player loaded the playlist, so no position is comparable across
+    viewers. The room nevertheless stored one viewer's position and the
+    heartbeat corrected everyone towards it every five seconds — a hard
+    seek to (near) the start of the DVR window, followed by a rebuffer.
+    Live rooms share only the live edge, which each player reaches alone.
+    """
+    ROOM_PAGE = REPO_ROOT / "frontend" / "app" / "room" / "[id]" / "page.tsx"
+
+    def _case(self, text: str, name: str) -> str:
+        body = text.split(f"case '{name}':", 1)[1]
+        return body.split("\n            case '", 1)[0]
+
+    def test_incoming_positions_are_ignored_for_live_streams(self):
+        text = self.ROOM_PAGE.read_text()
+        for name in ("play", "pause", "seek", "heartbeat"):
+            body = self._case(text, name)
+            assert "is_live" in body, (
+                f"the '{name}' handler seeks a live stream to another viewer's position"
+            )
+        heartbeat = self._case(text, "heartbeat")
+        assert heartbeat.index("is_live") < heartbeat.index("playbackRate = 1.05"), (
+            "the live guard must come before drift correction"
+        )
+        # The old check read a field play/pause messages never carry.
+        assert "payload.video_data?.is_live && serverTimestamp === 0" not in text
+        assert "isLive && serverTimestamp === 0" not in text
+
+    def test_live_positions_are_never_published(self):
+        text = self.ROOM_PAGE.read_text()
+        for handler in ("onPlay={", "onPause={", "onSeeked={"):
+            body = text.split(handler, 1)[1].split("}}", 1)[0]
+            assert "is_live" in body, f"{handler} publishes a live position"
