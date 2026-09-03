@@ -75,6 +75,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **DVR Live Streams Jumped Back To The Start Of Their Window**: on a live
+  stream every player's position is relative to when *it* loaded the
+  playlist, so no position is comparable across viewers — yet the room
+  stored one viewer's position and the heartbeat hard-seeked everyone towards
+  it every five seconds, dragging a YouTube DVR stream to the start of its
+  window and rebuffering. Live rooms no longer sync positions at all: play and
+  pause still propagate, but the live edge is the shared position and each
+  player reaches it on its own. Scrubbing a DVR window stays local.
+
 - **The Admin Panel Kept Showing Rooms The Server No Longer Had**: an action
   that failed (closing a room that was already gone answers 404) left the
   stale list standing, so the dead room stayed clickable and every click
