@@ -4,7 +4,13 @@ import { PNG } from 'pngjs';
 
 // Full Chromium's new headless mode includes the normal GPU process. The
 // headless-shell executable can advertise an adapter then lose it immediately.
-test.use({ launchOptions: { channel: 'chromium', args: ['--enable-unsafe-swiftshader', '--enable-unsafe-webgpu'] } });
+test.use({ launchOptions: { channel: 'chromium', args: [
+  '--enable-unsafe-swiftshader', '--enable-unsafe-webgpu',
+  // Linux CI has no physical GPU. Use Chromium's software Vulkan adapter
+  // explicitly instead of an advertised hardware adapter that loses its device.
+  ...(process.platform === 'linux' ? ['--enable-features=Vulkan', '--use-angle=vulkan',
+    '--use-vulkan=swiftshader', '--use-webgpu-adapter=swiftshader', '--disable-vulkan-surface'] : []),
+] } });
 
 async function openVideo(page: Page, label: string, disableWebGPU = false) {
   if (disableWebGPU) await page.addInitScript(() => Object.defineProperty(navigator, 'gpu', { value: undefined }));
@@ -82,6 +88,7 @@ test('model download failure falls back to spatial rendering without a stream re
 });
 
 test('the player integrates the real neural renderer without changing its media clock', async ({ page }) => {
+  test.setTimeout(60_000);
   const { select, video, layer, requests, status } = await openVideo(page, 'neural-player');
   const capable = await page.evaluate(async () => !!navigator.gpu && !!await navigator.gpu.requestAdapter());
   test.skip(!capable, 'No WebGPU adapter in this browser environment');
@@ -92,8 +99,10 @@ test('the player integrates the real neural renderer without changing its media 
   await expect(layer.locator('canvas')).toBeVisible();
   await select.selectOption('general');
   await expect(status).toContainText('General · AI 2×');
-  await video.evaluate((v: HTMLVideoElement) => { v.muted = true; return v.play(); });
-  await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.currentTime)).toBeGreaterThan(1);
+  // Software GPU throughput is not representative of a viewer's hardware.
+  // Keep actual rendering and playback, but feed fewer frames in this test.
+  await video.evaluate((v: HTMLVideoElement) => { v.playbackRate = 0.1; v.muted = true; return v.play(); });
+  await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.currentTime)).toBeGreaterThan(0.2);
   await expect(layer).toHaveAttribute('data-video-enhancement', 'active');
   expect(requests.length).toBe(baseline);
   expect(await video.getAttribute('data-identity')).toBe('original');
@@ -152,7 +161,8 @@ test('automatic mode uses confident local classifications and manual selection o
   const { select, status, video, requests } = await openVideo(page, 'automatic', true);
   const baseline = requests.length;
   await select.selectOption('auto');
-  await video.evaluate((v: HTMLVideoElement) => { v.muted = true; return v.play(); });
+  // Test classification hysteresis without benchmarking the CI software GPU.
+  await video.evaluate((v: HTMLVideoElement) => { v.playbackRate = 0.1; v.muted = true; return v.play(); });
   await expect(status).toContainText('Animation', { timeout: 25_000 });
   await select.selectOption('general');
   await expect(status).toContainText('General');
