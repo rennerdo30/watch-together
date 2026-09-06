@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Generated vendor workers and WASM loaders; lint their owned source instead.
+    "public/upscaling/**",
   ]),
 ]);
 
