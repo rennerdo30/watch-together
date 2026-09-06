@@ -8,7 +8,10 @@
     "start": "next start",
     "lint": "eslint",
     "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui"
+    "test:e2e:ui": "playwright test --ui",
+    "build:upscaling": "node scripts/build-upscaling.mjs",
+    "predev": "npm run build:upscaling",
+    "prebuild": "npm run build:upscaling"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -22,7 +25,9 @@
     "react-dom": "19.2.8",
     "react-hot-toast": "^2.6.0",
     "shaka-player": "^5.2.7",
-    "tailwind-merge": "^3.6.0"
+    "tailwind-merge": "^3.6.0",
+    "@litertjs/core": "2.5.3",
+    "@websr/websr": "0.0.16"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
@@ -33,6 +38,10 @@
     "eslint": "^9",
     "eslint-config-next": "16.3.3",
     "tailwindcss": "^4",
-    "typescript": "^6"
+    "typescript": "^6",
+    "@types/pngjs": "6.0.5",
+    "@webgpu/types": "^0.1.72",
+    "esbuild": "0.28.2",
+    "pngjs": "7.0.0"
   }
 }

@@ -19,6 +19,7 @@ A real-time video synchronization platform for watching YouTube, Twitch, and 180
 - **Cookie Authentication**: Bypass age-restrictions and regional blocks with your own cookies
 - **Browser Extension**: Automatic cookie sync from your browser (Chrome/Firefox)
 - **Audio Normalization**: "Night mode" audio with configurable gain boost
+- **Client-side Video Enhancement (Beta)**: Opt-in local upscaling with automatic animation/live-action selection, WebGPU neural processing and a lightweight WebGL fallback. Open player settings → Video enhancement. [Compatibility and implementation details](frontend/lib/upscaling/README.md).
 - **Modern UI**: Light and dark colour schemes (following the OS by default), six accent themes plus a custom one, drag-and-drop queue management
 - **Cloudflare Integration**: Zero Trust authentication and tunnel support
 

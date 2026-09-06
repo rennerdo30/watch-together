@@ -8,6 +8,7 @@ import { QualityOption } from '@/lib/api';
 import { useAudioNormalization, useHlsPlayer, useShakaPlayer, HlsQualityLevel } from './player/hooks';
 import { startPlayback, type PlaybackStart } from '@/lib/playback';
 import { useLocalStorageState } from '@/lib/hooks/useLocalStorageState';
+import { useVideoEnhancement } from './player/hooks/useVideoEnhancement';
 
 interface CustomPlayerProps {
     url: string | { src: string; type: string };
@@ -114,6 +115,8 @@ export function CustomPlayer({
     // manifest, so the browser muxes audio and video against a single clock.
     const isMseMode = streamType === 'dash' && !!manifestUrl;
     const src = typeof url === 'string' ? url : url.src;
+    const { hostRef: enhancementHostRef, mode: enhancementMode, setMode: setEnhancementMode, status: enhancementStatus } =
+        useVideoEnhancement(mediaElement, isMseMode ? manifestUrl! : src);
 
     // === UI STATE ===
     const [showControls, setShowControls] = useState(true);
@@ -419,6 +422,9 @@ export function CustomPlayer({
                 }}
             />
 
+            <div ref={enhancementHostRef} data-video-enhancement={enhancementStatus.state} data-enhancement-backend={enhancementStatus.backend}
+                className="absolute inset-0 pointer-events-none" aria-hidden="true" />
+
             {/* Loading Overlay */}
             {isLoading && (
                 <div role="status" aria-label="Loading the stream" className="absolute inset-0 flex items-center justify-center pointer-events-none z-50">
@@ -567,7 +573,10 @@ export function CustomPlayer({
                 currentQuality={currentQuality}
                 qualities={qualities}
                 seekableForDVR={isLive ? seekableRange : undefined}
-                visible={showControls || !isPlaying}
+                visible={showControls || !isPlaying || showSettings}
+                enhancementMode={enhancementMode}
+                onEnhancementModeChange={setEnhancementMode}
+                enhancementStatus={enhancementStatus.message}
                 normalizationActive={isNormalizationEnabled}
                 onToggleNormalization={toggleNormalization}
                 normalizationGain={normalizationGain}

@@ -48,3 +48,5 @@ coverage/
 # Deployment target (host address / login) — never committed.
 deploy/target.env
 test-results/
+# Reproducibly built from pinned npm dependencies by predev/prebuild.
+frontend/public/upscaling/

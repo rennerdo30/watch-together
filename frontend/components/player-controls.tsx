@@ -1,7 +1,9 @@
 'use client';
 
+import { useId } from 'react';
 import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, Settings, Activity, PictureInPicture, Ear } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { parseUpscaleMode, type UpscaleMode } from '@/lib/upscaling/policy';
 
 
 interface PlayerControlsProps {
@@ -35,6 +37,9 @@ interface PlayerControlsProps {
     isLive?: boolean;
     syncThreshold?: number;
     onSyncThresholdChange?: (val: number) => void;
+    enhancementMode?: UpscaleMode;
+    onEnhancementModeChange?: (mode: UpscaleMode) => void;
+    enhancementStatus?: string;
 }
 
 export function PlayerControls({
@@ -67,8 +72,12 @@ export function PlayerControls({
     onNormalizationGainChange,
     isLive,
     syncThreshold,
-    onSyncThresholdChange
+    onSyncThresholdChange,
+    enhancementMode = 'off',
+    onEnhancementModeChange,
+    enhancementStatus,
 }: PlayerControlsProps) {
+    const enhancementSelectId = useId();
 
     const formatTime = (seconds: number) => {
         if (!seconds || isNaN(seconds)) return '0:00';
@@ -89,10 +98,11 @@ export function PlayerControls({
 
     return (
         <div className={cn(
-            "absolute bottom-0 left-0 right-0 transition-all duration-300 z-40",
+            "absolute inset-0 pointer-events-none transition-all duration-300 z-40",
             visible ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0 pointer-events-none",
             className
         )}>
+            <div className={cn("absolute bottom-0 left-0 right-0", visible && "pointer-events-auto")}>
             {/* Gradient Background */}
             <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/50 to-transparent pointer-events-none" />
 
@@ -281,15 +291,39 @@ export function PlayerControls({
                     </div>
                 </div>
             </div>
+            </div>
 
             {/* Quality Settings Panel */}
             {showSettings && (
-                <div aria-label="Quality and sync settings" className="absolute bottom-full right-4 mb-2 w-56 bg-zinc-900/95 backdrop-blur-xl border border-white/10 rounded-xl overflow-hidden shadow-2xl">
-                    <div className="px-4 py-3 border-b border-white/5">
+                <div aria-label="Quality and sync settings" className="absolute bottom-20 right-2 sm:right-4 w-56 max-w-[calc(100%-1rem)] max-h-[calc(100%-5.5rem)] flex flex-col pointer-events-auto bg-zinc-900/95 backdrop-blur-xl border border-white/10 rounded-xl overflow-hidden shadow-2xl">
+                    <div className="px-4 py-3 border-b border-white/5 shrink-0">
                         <span className="text-xs font-medium text-white">Quality</span>
                     </div>
 
-                    <div className="p-2 max-h-64 overflow-y-auto">
+                    <div className="p-2 min-h-0 overflow-y-auto">
+                        {onEnhancementModeChange && (
+                            <div className="px-3 py-2 border-b border-white/5 mb-2">
+                                <label htmlFor={enhancementSelectId} className="flex items-center justify-between text-xs text-white mb-2">
+                                    Video enhancement
+                                    <span className="text-[10px] rounded px-1.5 py-0.5 bg-amber-400/10 text-amber-300">Beta</span>
+                                </label>
+                                <select id={enhancementSelectId} aria-label="Video enhancement (beta)"
+                                    value={enhancementMode}
+                                    onChange={event => onEnhancementModeChange(parseUpscaleMode(event.target.value))}
+                                    className="w-full rounded-md border border-white/15 bg-zinc-800 px-2 py-2 text-xs text-white focus-visible:outline-2 focus-visible:outline-[color:var(--accent-primary)]">
+                                    <option value="off">Off</option>
+                                    <option value="auto">Auto — detect content</option>
+                                    <option value="animation">Animation</option>
+                                    <option value="general">General / live action</option>
+                                </select>
+                                <p className="mt-2 text-[10px] leading-relaxed text-zinc-400">Runs on your device. Applies only to your picture. May increase battery use.</p>
+                                {enhancementMode !== 'off' && (
+                                    <p role="status" aria-label="Video enhancement status" className="mt-2 text-[10px] leading-relaxed text-amber-200/90">
+                                        {enhancementStatus}
+                                    </p>
+                                )}
+                            </div>
+                        )}
                         {/* Normalization Gain */}
                         {normalizationActive && onNormalizationGainChange && typeof normalizationGain === 'number' && (
                             <div className="px-3 py-2 border-b border-white/5 mb-2">
