@@ -11,7 +11,9 @@ test.use({ launchOptions: { channel: 'chromium', headless: !(process.platform ==
   // ANGLE must use its SwiftShader display path. Forcing ANGLE's generic
   // Vulkan display requires surface extensions absent from Chromium's bundled
   // SwiftShader ICD and crashes the GPU process before a shader can run.
-  ...(process.platform === 'linux' ? ['--use-angle=swiftshader', '--use-webgpu-adapter=swiftshader'] : []),
+  // The compositor also needs Vulkan to share WebGPU swapchain images.
+  ...(process.platform === 'linux' ? ['--use-angle=swiftshader', '--use-webgpu-adapter=swiftshader',
+    '--enable-features=Vulkan', '--use-vulkan=swiftshader', '--disable-vulkan-surface'] : []),
 ] } });
 
 async function openVideo(page: Page, label: string, disableWebGPU = false) {
