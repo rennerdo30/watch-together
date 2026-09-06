@@ -8,8 +8,10 @@ test.use({ launchOptions: { channel: 'chromium', headless: !(process.platform ==
   '--enable-unsafe-swiftshader', '--enable-unsafe-webgpu',
   // Linux CI has no physical GPU. Use Chromium's software Vulkan adapter
   // explicitly instead of an advertised hardware adapter that loses its device.
-  ...(process.platform === 'linux' ? ['--enable-features=Vulkan', '--use-angle=vulkan',
-    '--use-vulkan=swiftshader', '--use-webgpu-adapter=swiftshader', '--disable-vulkan-surface'] : []),
+  // ANGLE must use its SwiftShader display path. Forcing ANGLE's generic
+  // Vulkan display requires surface extensions absent from Chromium's bundled
+  // SwiftShader ICD and crashes the GPU process before a shader can run.
+  ...(process.platform === 'linux' ? ['--use-angle=swiftshader', '--use-webgpu-adapter=swiftshader'] : []),
 ] } });
 
 async function openVideo(page: Page, label: string, disableWebGPU = false) {
