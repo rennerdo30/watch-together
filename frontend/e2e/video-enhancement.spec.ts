@@ -4,7 +4,7 @@ import { PNG } from 'pngjs';
 
 // Full Chromium's new headless mode includes the normal GPU process. The
 // headless-shell executable can advertise an adapter then lose it immediately.
-test.use({ launchOptions: { channel: 'chromium', args: [
+test.use({ launchOptions: { channel: 'chromium', headless: !(process.platform === 'linux' && process.env.CI), args: [
   '--enable-unsafe-swiftshader', '--enable-unsafe-webgpu',
   // Linux CI has no physical GPU. Use Chromium's software Vulkan adapter
   // explicitly instead of an advertised hardware adapter that loses its device.
@@ -156,6 +156,14 @@ test('disabling enhancement during a delayed worker response does not resurrect 
 
 test('automatic mode uses confident local classifications and manual selection overrides it', async ({ page }) => {
   test.setTimeout(45_000);
+  // Limit decoded-frame callbacks deterministically: room synchronization can
+  // restore playbackRate, so slowing the media clock alone is insufficient.
+  await page.addInitScript(() => {
+    const request = HTMLVideoElement.prototype.requestVideoFrameCallback;
+    HTMLVideoElement.prototype.requestVideoFrameCallback = function(callback) {
+      return request.call(this, (now, metadata) => setTimeout(() => callback(now, metadata), 750));
+    };
+  });
   await page.route('**/upscaling/v1/classifier.worker.js', route => route.fulfill({ contentType: 'text/javascript',
     body: `self.onmessage=({data})=>{if(data.type!=='dispose') self.postMessage({id:data.id,probability:0.99});};` }));
   const { select, status, video, requests } = await openVideo(page, 'automatic', true);
