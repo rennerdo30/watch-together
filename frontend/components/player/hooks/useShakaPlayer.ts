@@ -3,11 +3,14 @@
 import { useRef, useEffect, useCallback, useState } from 'react';
 
 import { startPlayback, type PlaybackStart } from '@/lib/playback';
+import { latencyAwareAbrFactory } from '@/lib/abr';
 import {
+    ABR_CACHE_LOAD_THRESHOLD_MS,
     SHAKA_BUFFER_GOAL_SECONDS,
     SHAKA_BUFFER_BEHIND_SECONDS,
     SHAKA_REBUFFER_GOAL_SECONDS,
     SHAKA_INITIAL_BANDWIDTH_ESTIMATE,
+    SHAKA_SWITCH_INTERVAL_SECONDS,
     SHAKA_SEGMENT_RETRIES,
     SHAKA_RETRY_BASE_DELAY_MS,
     SHAKA_REQUEST_TIMEOUT_MS,
@@ -36,7 +39,10 @@ export interface ShakaQualityLevel {
 }
 
 export interface ShakaStats {
+    /** Declared bitrate of the active variant, in bits per second. */
     bandwidth: number;
+    /** Height of the active variant, or 0 before one is chosen. */
+    height: number;
     droppedFrames: number;
     videoCodec: string;
     audioCodec: string;
@@ -69,12 +75,13 @@ export interface UseShakaPlayerReturn {
 
 const EMPTY_STATS: ShakaStats = {
     bandwidth: 0,
+    height: 0,
     droppedFrames: 0,
     videoCodec: '',
     audioCodec: '',
 };
 
-const AUTO_QUALITY = -1;
+export const AUTO_QUALITY = -1;
 
 /**
  * The slice of Shaka's API this hook uses.
@@ -213,6 +220,7 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
             const active = variants.find((track) => track.active);
             setStats({
                 bandwidth: active?.bandwidth ?? 0,
+                height: active?.height ?? 0,
                 droppedFrames: 0,
                 videoCodec: active?.videoCodec ?? '',
                 audioCodec: active?.audioCodec ?? '',
@@ -254,11 +262,21 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
                         timeout: SHAKA_REQUEST_TIMEOUT_MS,
                     },
                 },
+                // Stock variant selection fed with samples that exclude the
+                // wait for each response's headers; see lib/abr.ts.
+                abrFactory: latencyAwareAbrFactory(shaka),
                 abr: {
                     // Start from a conservative guess and let measurements
                     // raise it. Shaka's default opens on the highest rendition,
                     // which stalls immediately on a long-haul link.
                     defaultBandwidthEstimate: SHAKA_INITIAL_BANDWIDTH_ESTIMATE,
+                    // Chrome's navigator.connection.downlink is a coarse guess
+                    // capped at 10 Mbps. With this on, Shaka takes it over the
+                    // estimate above and throws away every measurement each
+                    // time the guess changes, which it does constantly.
+                    useNetworkInformation: false,
+                    switchInterval: SHAKA_SWITCH_INTERVAL_SECONDS,
+                    cacheLoadThreshold: ABR_CACHE_LOAD_THRESHOLD_MS,
                 },
                 // The player adapts within one codec family, so prefer the
                 // one that carries the same picture in the fewest bits.
