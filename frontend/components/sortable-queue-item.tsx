@@ -1,7 +1,9 @@
 import React from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Trash2, ListVideo, Pin, Play, Loader2 } from 'lucide-react';
+import { Trash2, ListVideo, Pin, Play, Loader2, ExternalLink } from 'lucide-react';
+
+import { displayHost } from '@/lib/utils';
 
 interface ResolveResponse {
     original_url: string;
@@ -15,15 +17,6 @@ interface ResolveResponse {
 
 const LIVE_BADGE_CLASSES =
     'absolute top-1 left-1 px-1.5 py-0.5 bg-[color:var(--accent-primary)] text-[10px] font-semibold on-accent-light rounded';
-
-/** Host name for display, tolerating anything the resolver hands back. */
-function displayHost(url: string): string {
-    try {
-        return new URL(url).hostname.replace('www.', '');
-    } catch {
-        return url;
-    }
-}
 
 interface SortableQueueItemProps {
     id: string;
@@ -143,6 +136,21 @@ export function SortableQueueItem({
 
             {/* Actions */}
             <div className="flex items-center gap-0.5 shrink-0">
+                <a
+                    href={item.original_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    // The row itself plays on click and is a drag handle; the
+                    // link must do neither.
+                    onClick={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => e.stopPropagation()}
+                    className="p-1 rounded-lg transition-all opacity-0 group-hover:opacity-100 focus-visible:opacity-100 text-neutral-400 hover:text-white hover:bg-white/10"
+                    title={`Open on ${displayHost(item.original_url)}`}
+                    aria-label={`Open ${item.title} on ${displayHost(item.original_url)}`}
+                >
+                    <ExternalLink aria-hidden="true" className="w-3 h-3" />
+                </a>
                 {onPin && (
                     <button
                         onClick={(e) => {
