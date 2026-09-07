@@ -65,8 +65,30 @@ export const SHAKA_REBUFFER_GOAL_SECONDS = 4;
  * immediately stall on a long-haul link. Starting low costs a few seconds of
  * lower quality and lets the estimate climb from measurements instead of
  * from a guess.
+ *
+ * Only honoured with `useNetworkInformation` off: otherwise Chrome's
+ * `navigator.connection.downlink` — a coarse guess, capped at 10 Mbps —
+ * silently replaces it, and Shaka discards every measurement so far each
+ * time that guess changes.
  */
 export const SHAKA_INITIAL_BANDWIDTH_ESTIMATE = 700_000;
+
+/**
+ * Minimum seconds between automatic quality switches.
+ *
+ * Shaka's default of 8 keeps a viewer on the cautious opening rendition for
+ * that long after the estimate already says a better one is affordable.
+ * Four still leaves the estimate enough time to settle between switches.
+ */
+export const SHAKA_SWITCH_INTERVAL_SECONDS = 4;
+
+/**
+ * A sample that completes faster than this, in milliseconds, is treated as
+ * served from cache and excluded from bandwidth estimation. It is also the
+ * floor for a latency-corrected sample (see `lib/abr.ts`), so a body that
+ * arrived together with its headers still yields a finite throughput.
+ */
+export const ABR_CACHE_LOAD_THRESHOLD_MS = 20;
 
 /**
  * Codec preference, most efficient first.

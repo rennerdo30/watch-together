@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 import { Loader2, Info, Activity, Play, VolumeX } from 'lucide-react';
 import { PlayerControls } from './player-controls';
 import { QualityOption } from '@/lib/api';
-import { useAudioNormalization, useHlsPlayer, useShakaPlayer, HlsQualityLevel } from './player/hooks';
+import { useAudioNormalization, useHlsPlayer, useShakaPlayer, HlsQualityLevel, AUTO_QUALITY } from './player/hooks';
 import { startPlayback, type PlaybackStart } from '@/lib/playback';
 import { useLocalStorageState } from '@/lib/hooks/useLocalStorageState';
 import { useVideoEnhancement } from './player/hooks/useVideoEnhancement';
@@ -507,7 +507,9 @@ export function CustomPlayer({
                                 <div className="flex justify-between">
                                     <span className="text-zinc-500">Quality</span>
                                     <span className="text-right text-zinc-300">
-                                        {qualities.find((q) => q.index === currentQuality)?.height ?? 'auto'}
+                                        {currentQuality === AUTO_QUALITY
+                                            ? `auto (${shakaPlayer.stats.height}p)`
+                                            : qualities.find((q) => q.index === currentQuality)?.height ?? 'auto'}
                                     </span>
                                 </div>
                                 <div className="flex justify-between">

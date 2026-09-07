@@ -18,8 +18,35 @@ export const FIXTURE_VIDEO_URL = 'https://cdn.test/fixtures/video.mp4';
 export const FIXTURE_AUDIO_URL = 'https://cdn.test/fixtures/audio.mp4';
 export const FIXTURE_DURATION_SECONDS = 6;
 
-/** Build the manifest with the backend's own generator, via its Python API. */
-export function buildManifest(proxyBase = 'http://localhost:3100/api/proxy?url='): string {
+/** One video rendition of the fixture's quality ladder. */
+export interface VideoRung {
+  id: string;
+  height: number;
+  /** Declared bitrate in kbit/s, the unit yt-dlp reports. */
+  tbr: number;
+}
+
+/** The single rendition most tests need; matches the fixture's real geometry. */
+export const DEFAULT_VIDEO_LADDER: VideoRung[] = [{ id: 'v0', height: 240, tbr: 200 }];
+
+const FIXTURE_ASPECT = 4 / 3;
+
+/**
+ * Build the manifest with the backend's own generator, via its Python API.
+ *
+ * Every rung of the ladder points at the same fixture bytes: a test about
+ * which rendition the player *chooses* needs distinguishable declarations,
+ * not distinguishable pictures.
+ */
+export function buildManifest(
+  proxyBase = 'http://localhost:3100/api/proxy?url=',
+  videoLadder: VideoRung[] = DEFAULT_VIDEO_LADDER,
+): string {
+  const videoReps = videoLadder.map((rung) =>
+    `{'id':${JSON.stringify(rung.id)},'url':${JSON.stringify(FIXTURE_VIDEO_URL)},` +
+    `'width':${Math.round(rung.height * FIXTURE_ASPECT)},'height':${rung.height},` +
+    `'vcodec':'avc1.42c015','tbr':${rung.tbr},'fps':15,'index':video_index}`,
+  );
   const script = `
 import sys
 sys.path.insert(0, '.')
@@ -30,8 +57,7 @@ video_index = parse_index(open('tests/fixtures/video.mp4','rb').read(65536))
 audio_index = parse_index(open('tests/fixtures/audio.mp4','rb').read(65536))
 mpd = build_mpd(
     ${FIXTURE_DURATION_SECONDS}.0,
-    [{'id':'v0','url':${JSON.stringify(FIXTURE_VIDEO_URL)},'width':320,'height':240,
-      'vcodec':'avc1.42c015','tbr':200,'fps':15,'index':video_index}],
+    [${videoReps.join(',\n     ')}],
     [{'id':'a0','url':${JSON.stringify(FIXTURE_AUDIO_URL)},'acodec':'mp4a.40.2',
       'abr':128,'asr':44100,'audio_channels':1,'index':audio_index}],
     ${JSON.stringify(proxyBase)},
@@ -50,8 +76,9 @@ sys.stdout.write(mpd)
 export async function stubAdaptiveStream(
   page: import('@playwright/test').Page,
   originalUrl: string,
+  videoLadder: VideoRung[] = DEFAULT_VIDEO_LADDER,
 ): Promise<string[]> {
-  const manifest = buildManifest();
+  const manifest = buildManifest(undefined, videoLadder);
   const video = readFileSync(path.join(FIXTURES, 'video.mp4'));
   const audio = readFileSync(path.join(FIXTURES, 'audio.mp4'));
   const manifestRequests: string[] = [];
