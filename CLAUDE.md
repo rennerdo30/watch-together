@@ -84,9 +84,11 @@ frontend/
 ├── components/
 │   ├── custom-player.tsx     # Main video player (MSE for DASH, hls.js for HLS)
 │   ├── player-controls.tsx   # Playback controls UI
-│   └── room/                 # Room-specific components
+│   ├── sortable-queue-item.tsx # Queue rows (drag to reorder, open original)
+│   └── player/hooks/         # useShakaPlayer, useHlsPlayer, useAudioNormalization
 └── lib/
     ├── api.ts               # Backend API client
+    ├── abr.ts               # Latency-aware bandwidth sampling for Shaka
     └── hooks/               # Custom React hooks (useRoomSettings, etc.)
 ```
 

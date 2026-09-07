@@ -92,11 +92,12 @@ watch-together/
 │   ├── components/
 │   │   ├── custom-player.tsx # Main video player
 │   │   ├── player-controls.tsx
-│   │   ├── player/hooks/     # useDashSync, useHlsPlayer, etc.
-│   │   └── room/             # Room-specific components
+│   │   ├── player/hooks/     # useShakaPlayer, useHlsPlayer, etc.
+│   │   └── sortable-queue-item.tsx
 │   └── lib/
 │       ├── api.ts            # Backend API client
-│       └── hooks/            # useRoomSync, useRoomSettings
+│       ├── abr.ts            # Latency-aware bandwidth sampling for Shaka
+│       └── hooks/            # useRoomSettings, useLocalStorageState
 ├── extension/                # Browser extension
 ├── nginx/                    # Nginx configuration
 └── docker-compose.yml
