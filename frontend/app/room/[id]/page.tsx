@@ -6,13 +6,14 @@ import {
     Loader2, Users, Link as LinkIcon,
     Plus, SkipForward,
     Play, ListVideo, Settings, X, Palette, ShieldCheck, Home, Bug,
-    Crown, Shield, User as UserIcon, ChevronDown, Lock, Copy, Check, Infinity, Sun
+    Crown, Shield, User as UserIcon, ChevronDown, Lock, Copy, Check, Infinity, Sun, ExternalLink
 } from 'lucide-react';
 import { ResolveResponse, resolveUrl, getExtensionToken, regenerateExtensionToken, ExtensionToken } from '@/lib/api';
 import { CustomPlayer } from '@/components/custom-player';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { THEMES, DEFAULT_THEME, getThemeById, loadCustomTheme, saveCustomTheme, createCustomTheme } from '@/lib/themes';
 import { ColorModeToggle } from '@/components/color-mode-toggle';
+import { displayHost } from '@/lib/utils';
 import {
     APP_NAME,
     BACKEND_ORIGIN,
@@ -801,6 +802,18 @@ export default function RoomPage() {
                                 {Math.floor(actualPlayerTime / 60)}:{Math.floor(actualPlayerTime % 60).toString().padStart(2, '0')}
                             </span>
                         </div>
+                    )}
+                    {videoData?.original_url && (
+                        <a
+                            href={videoData.original_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            aria-label={`Open ${videoData.title} on ${displayHost(videoData.original_url)}`}
+                            title={`Open on ${displayHost(videoData.original_url)}`}
+                            className="w-7 h-7 flex items-center justify-center hover:bg-neutral-800 rounded-lg transition-colors text-neutral-400 hover:text-white"
+                        >
+                            <ExternalLink aria-hidden="true" className="w-4 h-4" />
+                        </a>
                     )}
                     <div className="hidden sm:flex items-center gap-1.5 px-2 py-1 bg-neutral-800 rounded-md">
                         <Users className="w-3 h-3 text-neutral-500" />
