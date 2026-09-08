@@ -18,6 +18,8 @@ export type FetchRule = {
 type HarnessOptions = {
   local?: Record<string, unknown>;
   sync?: Record<string, unknown>;
+  /** Session storage: what a stopped-and-restarted worker still finds. */
+  session?: Record<string, unknown>;
   fetchRules?: FetchRule[];
 };
 
@@ -31,9 +33,10 @@ type HarnessOptions = {
  */
 export async function loadBackground(page: Page, options: HarnessOptions = {}) {
   await page.goto('about:blank');
-  await page.evaluate(({ local, sync, fetchRules }) => {
+  await page.evaluate(({ local, sync, session, fetchRules }) => {
     const localState: Record<string, unknown> = structuredClone(local);
     const syncState: Record<string, unknown> = structuredClone(sync);
+    const sessionState: Record<string, unknown> = structuredClone(session);
     const rules = structuredClone(fetchRules);
 
     function event() {
@@ -57,7 +60,9 @@ export async function loadBackground(page: Page, options: HarnessOptions = {}) {
               ? [keys]
               : Object.keys(keys);
           for (const key of wanted) {
-            if (key in state) result[key] = state[key];
+            // Copies, as the real API returns: a value read is a snapshot,
+            // and mutating it does not touch what is stored.
+            if (key in state) result[key] = structuredClone(state[key]);
             else if (typeof keys === 'object' && !Array.isArray(keys) && keys !== null) {
               result[key] = keys[key];
             }
@@ -88,8 +93,10 @@ export async function loadBackground(page: Page, options: HarnessOptions = {}) {
     Object.assign(window, {
       __extensionLocal: localState,
       __extensionSync: syncState,
+      __extensionSession: sessionState,
       __extensionEvents: {
         permissionsAdded, permissionsRemoved, onMessage, onInstalled,
+        onCompleted, onTabUpdated, onTabRemoved, onAlarm,
       },
       __removedPermissions: [] as string[],
     });
@@ -99,6 +106,7 @@ export async function loadBackground(page: Page, options: HarnessOptions = {}) {
         storage: {
           local: storageArea(localState),
           sync: storageArea(syncState),
+          session: storageArea(sessionState),
         },
         permissions: {
           async contains() { return true; },
@@ -146,6 +154,7 @@ export async function loadBackground(page: Page, options: HarnessOptions = {}) {
   }, {
     local: options.local ?? {},
     sync: options.sync ?? {},
+    session: options.session ?? {},
     fetchRules: options.fetchRules ?? [],
   });
 
