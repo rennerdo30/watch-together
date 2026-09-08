@@ -7,6 +7,7 @@ import { PlayerControls } from './player-controls';
 import { QualityOption } from '@/lib/api';
 import { useAudioNormalization, useHlsPlayer, useShakaPlayer, HlsQualityLevel, AUTO_QUALITY } from './player/hooks';
 import { startPlayback, type PlaybackStart } from '@/lib/playback';
+import type { SponsorSegment } from '@/lib/sponsorblock';
 import { useLocalStorageState } from '@/lib/hooks/useLocalStorageState';
 import { useVideoEnhancement } from './player/hooks/useVideoEnhancement';
 
@@ -37,6 +38,8 @@ interface CustomPlayerProps {
     availableQualities?: QualityOption[];
     // Callback for quality change notification (for prefetch optimization)
     onQualityChangeNotify?: (oldVideoUrl: string, newVideoUrl: string, audioUrl: string | undefined) => void;
+    /** SponsorBlock segments of this video, marked on the seek bar. */
+    sponsorSegments?: SponsorSegment[];
 }
 
 interface PlayerAPI {
@@ -92,6 +95,7 @@ export function CustomPlayer({
     manifestUrl,
     availableQualities,
     onQualityChangeNotify,
+    sponsorSegments,
 }: CustomPlayerProps) {
     // === REFS ===
     const videoRef = useRef<HTMLVideoElement>(null);
@@ -286,7 +290,12 @@ export function CustomPlayer({
                     // A `play` broadcast by another member is not a gesture
                     // from *this* viewer, so the policy applies to it exactly
                     // as it does to autoplay.
-                    setPlaybackGate(await startPlayback(video));
+                    const outcome = await startPlayback(video);
+                    // An element the policy muted earlier starts fine, so the
+                    // outcome reads 'started' — but the forced mute is still
+                    // in effect, and the controls must keep saying so.
+                    const stillForcedMute = outcome === 'started' && video.muted && !isMuted;
+                    setPlaybackGate(stillForcedMute ? 'muted-to-start' : outcome);
                 },
                 pause: () => isLive ? undefined : videoRef.current?.pause(),
                 currentTime: (time?: number) => {
@@ -301,7 +310,7 @@ export function CustomPlayer({
                 getVideoElement: () => videoRef.current,
             };
         }
-    }, [playerRef, isLive]);
+    }, [playerRef, isLive, isMuted]);
 
     // === CONTROL VISIBILITY TIMEOUT ===
     useEffect(() => {
@@ -367,14 +376,28 @@ export function CustomPlayer({
         setPlaybackGate('started');
     }, [setIsMuted]);
 
+    // The autoplay policy can mute the element behind React's back (see
+    // `startPlayback`), so the element, not `isMuted`, says whether there is
+    // sound right now. Toggling from the state instead re-muted an already
+    // muted element, and the viewer had to click twice to hear anything.
+    const isEffectivelyMuted = isMuted || playbackGate === 'muted-to-start';
+
     const handleMuteToggle = useCallback(() => {
-        setIsMuted(!isMuted);
-    }, [isMuted, setIsMuted]);
+        const video = videoRef.current;
+        const next = !(video ? video.muted : isEffectivelyMuted);
+        if (video) video.muted = next;
+        setIsMuted(next);
+        if (!next && playbackGate === 'muted-to-start') setPlaybackGate('started');
+    }, [isEffectivelyMuted, playbackGate, setIsMuted]);
 
     const handleVolumeChange = useCallback((val: number) => {
         setVolume(val);
-        if (val > 0 && isMuted) setIsMuted(false);
-    }, [isMuted, setIsMuted, setVolume]);
+        if (val > 0 && isEffectivelyMuted) {
+            if (videoRef.current) videoRef.current.muted = false;
+            setIsMuted(false);
+            if (playbackGate === 'muted-to-start') setPlaybackGate('started');
+        }
+    }, [isEffectivelyMuted, playbackGate, setIsMuted, setVolume]);
 
     const handleSeek = useCallback((time: number) => {
         if (videoRef.current) {
@@ -564,7 +587,7 @@ export function CustomPlayer({
             {/* Player Controls */}
             <PlayerControls
                 isPlaying={isPlaying}
-                isMuted={isMuted}
+                isMuted={isEffectivelyMuted}
                 volume={volume}
                 currentTime={currentTime}
                 duration={duration}
@@ -595,6 +618,7 @@ export function CustomPlayer({
                 onQualityChange={handleQualityChange}
                 onSeek={handleSeek}
                 isLive={isLive}
+                sponsorSegments={sponsorSegments}
             />
         </div>
     );
