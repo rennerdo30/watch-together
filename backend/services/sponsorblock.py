@@ -314,6 +314,10 @@ class SponsorSkipper:
         self._sleep = sleep
         self._tasks: Dict[str, asyncio.Task] = {}
         self._loads: Dict[str, asyncio.Task] = {}
+        # Called with the room id after every skip. A skip moves the room
+        # like a member's seek does, and whatever tracks position (the
+        # watch-history reporter) has to learn about it the same way.
+        self.on_skip: Optional[Callable[[str], None]] = None
 
     # ----- position helpers -------------------------------------------------
 
@@ -479,3 +483,5 @@ class SponsorSkipper:
                 },
             },
         }, room_id)
+        if self.on_skip is not None:
+            self.on_skip(room_id)

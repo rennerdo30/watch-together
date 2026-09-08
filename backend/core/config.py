@@ -170,6 +170,29 @@ SPONSORBLOCK_MIN_SEGMENT_SECONDS = 1.0
 # that lands within this distance of a segment's end is considered past it.
 SPONSORBLOCK_SKIP_TOLERANCE_SECONDS = 0.5
 
+# Browser identity presented to sites by yt-dlp and by requests made on a
+# member's behalf with their cookies. One value, so a session looks like one
+# browser throughout.
+DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+# YouTube watch history (opt-in per user, needs that user's cookies). The
+# room's position is reported the way YouTube's own player does it: one
+# playback ping when the video starts and a watch-time ping every so often,
+# carrying the range watched since the last one and the current position.
+YOUTUBE_HISTORY_PING_INTERVAL_SECONDS = 30.0
+YOUTUBE_HISTORY_TIMEOUT_SECONDS = 10.0
+# A watched range shorter than this is noise (a seek landing, a stutter) and
+# is not reported.
+YOUTUBE_HISTORY_MIN_RANGE_SECONDS = 1.0
+# A position that differs from the expected one by more than this was a seek.
+YOUTUBE_HISTORY_SEEK_THRESHOLD_SECONDS = 2.0
+YOUTUBE_HISTORY_CPN_LENGTH = 16  # Client playback nonce, as the web player generates it
+
+# Per-user preferences and their defaults. Anything not listed here is dropped.
+USER_SETTINGS_DEFAULTS = {
+    "youtube_history": False,
+}
+
 # Proxy metrics configuration
 METRICS_SAMPLE_CAPACITY = 500  # Recent proxy transfers kept in the ring buffer
 METRICS_SLOW_UPSTREAM_MS = 5000  # Upstream fetches slower than this are counted

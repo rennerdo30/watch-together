@@ -98,6 +98,31 @@ def offline_sponsorblock():
 
 
 @pytest.fixture(autouse=True)
+def offline_watch_history():
+    """Never run a real extraction or reach YouTube from a test.
+
+    The reporter's capture step is replaced by one that finds no tracking
+    URLs, so no session ever starts unless a test installs its own capture.
+    """
+    import httpx
+    from services import user_settings, watch_history
+
+    async def no_capture(original_url, cookie_path):
+        return None
+
+    def offline():
+        watch_history.reporter.configure(
+            capture=no_capture,
+            transport=httpx.MockTransport(lambda request: httpx.Response(204)),
+        )
+        user_settings.clear_cache()
+
+    offline()
+    yield
+    offline()
+
+
+@pytest.fixture(autouse=True)
 def reset_room_state():
     """Keep room state from leaking between tests."""
     from connection_manager import manager
