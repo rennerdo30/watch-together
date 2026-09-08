@@ -11,6 +11,9 @@ import { defineConfig, devices } from '@playwright/test';
 const FRONTEND_PORT = 3100;
 const BACKEND_PORT = 8100;
 const BACKEND_ORIGIN = `http://localhost:${BACKEND_PORT}`;
+// Stands in for sponsor.ajay.app so the suite never depends on the network.
+const SPONSORBLOCK_STUB_PORT = 8300;
+const SPONSORBLOCK_STUB_ORIGIN = `http://localhost:${SPONSORBLOCK_STUB_PORT}`;
 
 // CI installs backend dependencies into the job's interpreter; locally the
 // repo venv holds them.
@@ -38,6 +41,13 @@ export default defineConfig({
 
   webServer: [
     {
+      command: 'node e2e/sponsorblock-stub.mjs',
+      url: `${SPONSORBLOCK_STUB_ORIGIN}/health`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 30_000,
+      env: { SPONSORBLOCK_STUB_PORT: String(SPONSORBLOCK_STUB_PORT) },
+    },
+    {
       command: `${PYTHON_BIN} -m uvicorn main:app --host localhost --port ${BACKEND_PORT}`,
       cwd: '../backend',
       url: `${BACKEND_ORIGIN}/`,
@@ -47,6 +57,7 @@ export default defineConfig({
         DEVELOPMENT_MODE: 'true',
         ALLOWED_ORIGINS: '*',
         ADMIN_EMAILS: 'admin@example.com',
+        SPONSORBLOCK_API_URL: SPONSORBLOCK_STUB_ORIGIN,
       },
     },
     {

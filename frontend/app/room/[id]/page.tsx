@@ -6,7 +6,7 @@ import {
     Loader2, Users, Link as LinkIcon,
     Plus, SkipForward,
     Play, ListVideo, Settings, X, Palette, ShieldCheck, Home, Bug,
-    Crown, Shield, User as UserIcon, ChevronDown, Lock, Copy, Check, Infinity, Sun, ExternalLink
+    Crown, Shield, User as UserIcon, ChevronDown, Lock, Copy, Check, Infinity, Sun, ExternalLink, Scissors
 } from 'lucide-react';
 import { ResolveResponse, resolveUrl, getExtensionToken, regenerateExtensionToken, ExtensionToken } from '@/lib/api';
 import { CustomPlayer } from '@/components/custom-player';
@@ -14,6 +14,17 @@ import { ErrorBoundary } from '@/components/error-boundary';
 import { THEMES, DEFAULT_THEME, getThemeById, loadCustomTheme, saveCustomTheme, createCustomTheme } from '@/lib/themes';
 import { ColorModeToggle } from '@/components/color-mode-toggle';
 import { displayHost } from '@/lib/utils';
+import {
+    DEFAULT_SPONSORBLOCK_SETTINGS,
+    SPONSORBLOCK_CATEGORIES,
+    SPONSOR_CATEGORY_LABELS,
+    parseSponsorBlockSettings,
+    parseSponsorSegments,
+    skippedSegmentMessage,
+    type SkippedSegment,
+    type SponsorBlockSettings,
+    type SponsorSegment,
+} from '@/lib/sponsorblock';
 import {
     APP_NAME,
     BACKEND_ORIGIN,
@@ -109,6 +120,12 @@ export default function RoomPage() {
     const [actualPlayerTime, setActualPlayerTime] = useState(0); // Real player time for badge display
     const [isPermanent, setIsPermanent] = useState(false); // Room permanent status
     const [roomName, setRoomName] = useState(''); // Admin-set display name; the id stays the address
+    // SponsorBlock: the admin's setting, and the segments of the video the
+    // server has looked up. Segments are kept with the video they belong to,
+    // because they can arrive while this client is still resolving it.
+    const [sponsorBlock, setSponsorBlock] = useState<SponsorBlockSettings>(DEFAULT_SPONSORBLOCK_SETTINGS);
+    const [sponsorSegments, setSponsorSegments] = useState<{ videoUrl: string | null; segments: SponsorSegment[] }>(
+        { videoUrl: null, segments: [] });
 
     // A link is being resolved, either pasted directly or picked from the
     // queue. The empty state is hidden while this is true: both used to
@@ -434,6 +451,14 @@ export default function RoomPage() {
                 if (typeof payload.playing_index === 'number') setPlayingIndex(payload.playing_index);
                 if (typeof payload.permanent === 'boolean') setIsPermanent(payload.permanent);
                 if (typeof payload.name === 'string') setRoomName(payload.name);
+                {
+                    const settings = parseSponsorBlockSettings(payload.sponsorblock);
+                    if (settings) setSponsorBlock(settings);
+                    setSponsorSegments({
+                        videoUrl: payload.video_data?.original_url ?? null,
+                        segments: parseSponsorSegments(payload.sponsor_segments),
+                    });
+                }
 
                 if (playerRef.current && payload.video_data) {
                     const serverTimestamp = typeof payload.timestamp === 'number' ? payload.timestamp : 0;
@@ -459,6 +484,8 @@ export default function RoomPage() {
             case 'set_video':
                 // Reset sync state for new video
                 setSyncState(prev => ({ ...prev, timestamp: 0, isPlaying: true }));
+                // The server looks the new video's segments up and announces them.
+                setSponsorSegments({ videoUrl: payload.video_data?.original_url ?? null, segments: [] });
 
                 // ALWAYS re-resolve when playing a video to get fresh stream URLs
                 // YouTube URLs expire, so we can't cache them
@@ -524,6 +551,15 @@ export default function RoomPage() {
                 if (playerRef.current && typeof payload.timestamp === 'number' && !videoDataRef.current?.is_live) {
                     playerRef.current.currentTime(payload.timestamp);
                 }
+                // The server moved the room past a SponsorBlock segment: an
+                // unexplained jump looks like a glitch, so say what happened.
+                if (payload.skipped && typeof payload.skipped === 'object') {
+                    const skipped = payload.skipped as Partial<SkippedSegment>;
+                    if (typeof skipped.category === 'string' &&
+                        typeof skipped.start === 'number' && typeof skipped.end === 'number') {
+                        toast(skippedSegmentMessage(skipped as SkippedSegment), { icon: '⏭️' });
+                    }
+                }
                 // Reset playback rate after seek
                 const seekVideo = playerRef.current?.getVideoElement?.();
                 if (seekVideo) seekVideo.playbackRate = 1.0;
@@ -535,8 +571,17 @@ export default function RoomPage() {
             case 'roles_update':
                 if (payload.roles) setRoles(payload.roles);
                 break;
+            case 'sponsorblock_segments':
+                if (typeof payload.video_url === 'string') {
+                    setSponsorSegments({ videoUrl: payload.video_url, segments: parseSponsorSegments(payload.segments) });
+                }
+                break;
             case 'room_settings_update':
                 if (typeof payload.permanent === 'boolean') setIsPermanent(payload.permanent);
+                {
+                    const settings = parseSponsorBlockSettings(payload.sponsorblock);
+                    if (settings) setSponsorBlock(settings);
+                }
                 if (typeof payload.name === 'string') {
                     setRoomName(payload.name);
                     if (pendingRenameRef.current !== null &&
@@ -927,6 +972,7 @@ export default function RoomPage() {
                                     playerRef={playerRef}
                                     syncThreshold={syncThreshold}
                                     onSyncThresholdChange={setSyncThreshold}
+                                    sponsorSegments={sponsorSegments.videoUrl === videoData.original_url ? sponsorSegments.segments : []}
                                 />
                             </ErrorBoundary>
                         ) : isResolving ? null : (
@@ -1350,6 +1396,57 @@ export default function RoomPage() {
                                             <div className={`w-4 h-4 knob-on-accent rounded-full transition-all shadow-sm ${isPermanent ? 'translate-x-5' : 'translate-x-0'}`} />
                                         </div>
                                     </button>
+                                )}
+
+                                {/* SponsorBlock - Admin Only. The server does the skipping for
+                                    the whole room, so this is a room setting, not a viewer one. */}
+                                {roles[currentUser] === 'admin' && (
+                                    <div className="space-y-3" data-testid="sponsorblock-settings">
+                                        <button
+                                            type="button"
+                                            role="switch"
+                                            aria-checked={sponsorBlock.enabled}
+                                            aria-label="Skip SponsorBlock segments"
+                                            onClick={() => sendMsg('sponsorblock_settings', { ...sponsorBlock, enabled: !sponsorBlock.enabled })}
+                                            className={`w-full p-4 rounded-xl border flex items-center justify-between transition-all ${sponsorBlock.enabled ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-zinc-800/30 border-zinc-800'}`}
+                                        >
+                                            <div className="text-left flex items-center gap-3">
+                                                <Scissors aria-hidden="true" className={`w-5 h-5 ${sponsorBlock.enabled ? 'text-emerald-400' : 'text-zinc-400'}`} />
+                                                <div>
+                                                    <span className="font-medium text-white text-sm">Skip SponsorBlock segments</span>
+                                                    <p className="text-xs text-zinc-500 mt-0.5">Community-marked segments in YouTube videos are skipped for everyone in the room</p>
+                                                </div>
+                                            </div>
+                                            <div className={`w-10 h-5 rounded-full transition-all flex items-center px-0.5 ${sponsorBlock.enabled ? 'bg-emerald-500' : 'bg-zinc-700'}`}>
+                                                <div className={`w-4 h-4 knob-on-accent rounded-full transition-all shadow-sm ${sponsorBlock.enabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                                            </div>
+                                        </button>
+                                        <fieldset className="grid grid-cols-1 sm:grid-cols-2 gap-1.5" disabled={!sponsorBlock.enabled}>
+                                            <legend className="ui-label mb-1.5">Segments to skip</legend>
+                                            {SPONSORBLOCK_CATEGORIES.map((category) => {
+                                                const checked = sponsorBlock.categories.includes(category);
+                                                return (
+                                                    <label
+                                                        key={category}
+                                                        className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-xs cursor-pointer transition-colors ${checked ? 'bg-white/10 border-white/15 text-white' : 'bg-white/5 border-white/5 text-zinc-400 hover:text-zinc-200'} ${sponsorBlock.enabled ? '' : 'opacity-50 cursor-not-allowed'}`}
+                                                    >
+                                                        <input
+                                                            type="checkbox"
+                                                            className="accent-emerald-500"
+                                                            checked={checked}
+                                                            onChange={() => {
+                                                                const categories = checked
+                                                                    ? sponsorBlock.categories.filter((c) => c !== category)
+                                                                    : [...sponsorBlock.categories, category];
+                                                                sendMsg('sponsorblock_settings', { ...sponsorBlock, categories });
+                                                            }}
+                                                        />
+                                                        {SPONSOR_CATEGORY_LABELS[category]}
+                                                    </label>
+                                                );
+                                            })}
+                                        </fieldset>
+                                    </div>
                                 )}
 
                                 {/* Light / dark appearance */}

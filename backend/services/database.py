@@ -121,6 +121,10 @@ def init_database():
         """
         ALTER TABLE rooms ADD COLUMN name TEXT DEFAULT ''
         """,
+        # Version 7: Admin-set room settings as one JSON object (SponsorBlock)
+        """
+        ALTER TABLE rooms ADD COLUMN settings TEXT DEFAULT '{}'
+        """,
     ]
     
     import time
@@ -264,6 +268,25 @@ def _migrate_legacy_cookies():
 # Room Operations
 # ============================================================================
 
+def _room_settings(row) -> Dict[str, Any]:
+    """The per-room settings object, tolerant of rows written before it existed."""
+    try:
+        raw = row["settings"]
+    except (IndexError, KeyError):
+        return {}
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _settings_column(state: Dict[str, Any]) -> str:
+    return json.dumps({"sponsorblock": state.get("sponsorblock")})
+
+
 async def get_room(room_id: str) -> Optional[Dict[str, Any]]:
     """Get room state from database."""
     async with get_async_db() as db:
@@ -284,6 +307,8 @@ async def get_room(room_id: str) -> Optional[Dict[str, Any]]:
             "playing_index": row["playing_index"],
             "roles": json.loads(row["roles"]) if row["roles"] else {},
             "permanent": bool(row["permanent"]),
+            "name": row["name"] or "",
+            "sponsorblock": _room_settings(row).get("sponsorblock"),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
@@ -297,8 +322,8 @@ async def save_room(room_id: str, state: Dict[str, Any]) -> None:
     async with get_async_db() as db:
         await db.execute("""
             INSERT INTO rooms (id, video_data, is_playing, timestamp, queue, 
-                               playing_index, roles, permanent, name, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               playing_index, roles, permanent, name, settings, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 video_data = excluded.video_data,
                 is_playing = excluded.is_playing,
@@ -308,6 +333,7 @@ async def save_room(room_id: str, state: Dict[str, Any]) -> None:
                 roles = excluded.roles,
                 permanent = excluded.permanent,
                 name = excluded.name,
+                settings = excluded.settings,
                 updated_at = excluded.updated_at
         """, (
             room_id,
@@ -319,6 +345,7 @@ async def save_room(room_id: str, state: Dict[str, Any]) -> None:
             json.dumps(state.get("roles", {})),
             1 if state.get("permanent") else 0,
             state.get("name", ""),
+            _settings_column(state),
             now,
             now
         ))
@@ -349,6 +376,7 @@ async def get_all_rooms() -> Dict[str, Dict[str, Any]]:
                 "roles": json.loads(row["roles"]) if row["roles"] else {},
                 "permanent": bool(row["permanent"]),
                 "name": row["name"] or "",
+                "sponsorblock": _room_settings(row).get("sponsorblock"),
             }
         return rooms
 

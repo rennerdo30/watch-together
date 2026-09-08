@@ -16,6 +16,7 @@ A real-time video synchronization platform for watching YouTube, Twitch, and 180
 - **DASH/HLS Streaming**: Separate video/audio streams with quality selection up to 4K
 - **Segment Caching & Prefetch**: Position-aware bucket cache on disk plus an in-memory LRU for hot segments, with look-ahead prefetching of upcoming video/audio segments
 - **Room System**: Create custom rooms with persistent queue and playback state
+- **SponsorBlock**: Community-marked sponsor, self-promotion and reminder segments in YouTube videos are skipped for the whole room at once (the server seeks everyone), shown on the seek bar, and chosen per room by its admin
 - **Cookie Authentication**: Bypass age-restrictions and regional blocks with your own cookies
 - **Browser Extension**: Automatic cookie sync from your browser (Chrome/Firefox)
 - **Audio Normalization**: "Night mode" audio with configurable gain boost
