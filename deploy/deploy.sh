@@ -68,7 +68,27 @@ if [ -z "$SSH_HOST" ]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SSH="ssh -o BatchMode=yes -o ConnectTimeout=15 ${SSH_USER}@${SSH_HOST}"
+# ── Connection handling ──────────────────────────────────────────────
+# Every step below used to open its own SSH connection — reachability
+# check, .env check, compose up, nginx restart, one per health poll — and
+# a burst like that trips the host's per-IP connection throttling. It
+# shows up as "Operation timed out" partway through a deploy, then keeps
+# the host unreachable for minutes. One multiplexed master carries every
+# step (and sync.sh, which uses the same control path) over a single TCP
+# connection.
+CM_PATH="${TMPDIR:-/tmp}/wt-cm-%r@%h-%p"
+SSH_OPTS=(
+	-o BatchMode=yes
+	-o ConnectTimeout=20
+	-o ControlMaster=auto
+	-o "ControlPath=${CM_PATH}"
+	-o ControlPersist=300
+	-o ServerAliveInterval=15
+	-o ServerAliveCountMax=8
+)
+SSH="ssh $(printf '%s ' "${SSH_OPTS[@]}")${SSH_USER}@${SSH_HOST}"
+close_master() { ssh -o "ControlPath=${CM_PATH}" -O exit "${SSH_USER}@${SSH_HOST}" 2>/dev/null || true; }
+trap close_master EXIT
 
 # Compose reads `.env` from the project directory, which defaults to the
 # directory holding the compose file — /opt/watch-together/deploy — so an
