@@ -10,13 +10,40 @@ from urllib.parse import urlparse, parse_qs
 import yt_dlp
 
 from core.config import (
-    COOKIES_DIR, COOKIE_FILE_MODE, POT_PROVIDER_EXTRACTOR_ARGS,
-    QUALITY_LADDER_SIZE,
+    COOKIES_DIR, COOKIE_FILE_MODE, DEFAULT_USER_AGENT, POT_PROVIDER_EXTRACTOR_ARGS,
+    QUALITY_LADDER_SIZE, YTDLP_CACHE_DIR,
 )
 from core.security import get_user_cookie_path
 from services.database import cache_format, get_cached_format, get_user_cookies
 
 logger = logging.getLogger(__name__)
+
+
+def build_ydl_opts(cookie_path: Optional[str], user_agent: Optional[str] = None,
+                   cache_dir: str = YTDLP_CACHE_DIR) -> dict:
+    """yt-dlp options for a metadata-only extraction.
+
+    Shared by the resolver and the watch-history capture, so both present
+    the same browser identity and both reach the PO token provider: without
+    it the extractor gets storyboards only.
+    """
+    opts = {
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'quiet': True,
+        'no_warnings': True,
+        'nocheckcertificate': True,
+        'logger': logger,
+        'skip_download': True,
+        'cache_dir': cache_dir,
+        'http_headers': {
+            'User-Agent': user_agent or DEFAULT_USER_AGENT,
+            'Accept-Language': 'en-US,en;q=0.9',
+        },
+        'extractor_args': dict(POT_PROVIDER_EXTRACTOR_ARGS),
+    }
+    if cookie_path:
+        opts['cookiefile'] = cookie_path
+    return opts
 
 
 async def _ensure_cookie_file(user_email: str) -> Optional[str]:
@@ -321,26 +348,7 @@ async def refresh_video_url(video_data: dict, user_agent: str = None, user_email
     for strat in strategies:
         logger.info(f"Attempting resolution strategy: {strat['name']}")
         
-        ydl_opts = {
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-            'quiet': True,
-            'no_warnings': True,
-            'nocheckcertificate': True,
-            'logger': logger,
-            'skip_download': True,
-            'cache_dir': cache_dir,
-            'http_headers': {
-                'User-Agent': user_agent or 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept-Language': 'en-US,en;q=0.9',
-            },
-        }
-
-        # The PO token provider is required for YouTube to serve media
-        # formats at all; without it the extractor gets storyboards only.
-        ydl_opts['extractor_args'] = dict(POT_PROVIDER_EXTRACTOR_ARGS)
-
-        if strat.get("cookiefile"):
-            ydl_opts['cookiefile'] = strat["cookiefile"]
+        ydl_opts = build_ydl_opts(strat.get("cookiefile"), user_agent, cache_dir=cache_dir)
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:

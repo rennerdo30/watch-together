@@ -75,7 +75,9 @@ backend/
 │   ├── mp4_index.py          # Fragmented-MP4 box scanning (init/index ranges)
 │   ├── metrics.py            # Per-transfer proxy metrics
 │   ├── prefetcher.py         # Segment prefetching
-│   └── sponsorblock.py       # SponsorBlock lookup + server-side room-wide skipping
+│   ├── sponsorblock.py       # SponsorBlock lookup + server-side room-wide skipping
+│   ├── user_settings.py      # Per-user preferences (JSON per identity, cached)
+│   └── watch_history.py      # Opt-in YouTube history: tracking URLs captured from yt-dlp, pinged per member
 ├── api/routes/               # REST endpoints
 ├── core/                     # Config, security, Access JWT, rate limiting
 └── tests/                    # pytest suite (200+ tests)

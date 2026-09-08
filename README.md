@@ -18,6 +18,7 @@ A real-time video synchronization platform for watching YouTube, Twitch, and 180
 - **Room System**: Create custom rooms with persistent queue and playback state
 - **SponsorBlock**: Community-marked sponsor, self-promotion and reminder segments in YouTube videos are skipped for the whole room at once (the server seeks everyone), shown on the seek bar, and chosen per room by its admin
 - **Cookie Authentication**: Bypass age-restrictions and regional blocks with your own cookies
+- **YouTube Watch History (opt-in)**: With your cookies on file, videos the room watches can be recorded in your own YouTube history with the position you stopped at, the way YouTube's player reports it. Off until you switch it on in the settings dialog
 - **Browser Extension**: Automatic cookie sync from your browser (Chrome/Firefox)
 - **Audio Normalization**: "Night mode" audio with configurable gain boost
 - **Client-side Video Enhancement (Beta)**: Opt-in local upscaling with automatic animation/live-action selection, WebGPU neural processing and a lightweight WebGL fallback. Open player settings → Video enhancement. [Compatibility and implementation details](frontend/lib/upscaling/README.md).

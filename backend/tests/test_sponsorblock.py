@@ -282,6 +282,20 @@ async def test_skipper_moves_the_room_past_each_segment_in_turn():
     assert manager.room_states["room"]["timestamp"] == 70.0
 
 
+async def test_a_skip_is_announced_to_whoever_tracks_position():
+    clock = FakeClock()
+    manager = FakeManager(_playing_state(clock), clock)
+    skipper = _skipper(manager, clock, _segments_handler((10, 20, "sponsor", "skip")))
+    heard = []
+    skipper.on_skip = heard.append
+    skipper.video_changed("room")
+    await skipper.wait_idle()
+    assert heard == ["room"]
+
+    import main
+    assert main.sponsor_skipper.on_skip == main.history_reporter.rearm
+
+
 async def test_skipper_skips_immediately_when_the_room_is_inside_a_segment():
     clock = FakeClock()
     manager = FakeManager(_playing_state(clock, timestamp=15.0), clock)

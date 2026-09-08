@@ -8,7 +8,7 @@ import {
     Play, ListVideo, Settings, X, Palette, ShieldCheck, Home, Bug,
     Crown, Shield, User as UserIcon, ChevronDown, Lock, Copy, Check, Infinity, Sun, ExternalLink, Scissors
 } from 'lucide-react';
-import { ResolveResponse, resolveUrl, getExtensionToken, regenerateExtensionToken, ExtensionToken } from '@/lib/api';
+import { ResolveResponse, resolveUrl, getExtensionToken, regenerateExtensionToken, ExtensionToken, getUserSettings, updateUserSettings, getCookies, saveCookies, type UserSettings } from '@/lib/api';
 import { CustomPlayer } from '@/components/custom-player';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { THEMES, DEFAULT_THEME, getThemeById, loadCustomTheme, saveCustomTheme, createCustomTheme } from '@/lib/themes';
@@ -147,6 +147,10 @@ export default function RoomPage() {
     const [cookieContent, setCookieContent] = useState('');
     const [isSavingCookies, setIsSavingCookies] = useState(false);
     const [isLoadingCookies, setIsLoadingCookies] = useState(true);
+    // Whether the server holds cookies for this user: gates features that
+    // act on their account, independent of what the textarea shows.
+    const [hasSavedCookies, setHasSavedCookies] = useState(false);
+    const [userSettings, setUserSettings] = useState<UserSettings | null>(null);
     const [isCopyingDebug, setIsCopyingDebug] = useState(false);
 
     // Extension token state
@@ -368,16 +372,10 @@ export default function RoomPage() {
                 return;
             }
             try {
-                const searchParams = new URLSearchParams(window.location.search);
-                const mockUser = searchParams.get('user');
-                const userParam = mockUser ? `?user=${encodeURIComponent(mockUser)}` : '';
-
-                const res = await fetch(`/api/cookies${userParam}`);
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data.has_cookies && data.content) {
-                        setCookieContent(data.content);
-                    }
+                const data = await getCookies();
+                setHasSavedCookies(data.has_cookies);
+                if (data.has_cookies && data.content) {
+                    setCookieContent(data.content);
                 }
             } catch (err) {
                 console.error('Failed to load cookies:', err);
@@ -386,12 +384,20 @@ export default function RoomPage() {
             }
         };
         loadCookies();
+        getUserSettings()
+            .then(setUserSettings)
+            .catch((err) => console.warn('[Room] Could not load user settings:', err));
     }, [currentUser]);
 
     // Load extension token when settings are opened
     useEffect(() => {
         const loadToken = async () => {
             if (!showSettings || !currentUser || currentUser === 'Guest') return;
+            // Cookies may have arrived from the extension since the page
+            // loaded; what the dialog offers depends on whether they exist.
+            getCookies()
+                .then((data) => setHasSavedCookies(data.has_cookies))
+                .catch(() => { /* the initial load already reported this */ });
             setIsLoadingToken(true);
             try {
                 const response = await getExtensionToken();
@@ -1627,21 +1633,10 @@ export default function RoomPage() {
                                                     }
                                                     setIsSavingCookies(true);
                                                     try {
-                                                        const searchParams = new URLSearchParams(window.location.search);
-                                                        const mockUser = searchParams.get('user');
-                                                        const userParam = mockUser ? `?user=${encodeURIComponent(mockUser)}` : '';
-
-                                                        const res = await fetch(`/api/cookies${userParam}`, {
-                                                            method: 'POST',
-                                                            headers: { 'Content-Type': 'application/json' },
-                                                            body: JSON.stringify({ content: cookieContent })
-                                                        });
-                                                        if (!res.ok) {
-                                                            const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
-                                                            throw new Error(err.detail || 'Failed to save');
-                                                        }
+                                                        await saveCookies(cookieContent);
                                                         toast.success("Cookies saved!");
                                                         setCookieContent('');
+                                                        setHasSavedCookies(true);
                                                     } catch (err: unknown) {
                                                         toast.error(getErrorMessage(err, "Failed to save cookies"));
                                                     } finally {
@@ -1655,6 +1650,42 @@ export default function RoomPage() {
                                             </button>
                                         </div>
                                     </div>
+
+                                    {/* YouTube watch history. Acts on the viewer's own
+                                        account, so it is their setting, off until they
+                                        ask, and only offered once cookies are on file. */}
+                                    {currentUser && currentUser !== 'Guest' && (
+                                        <div className="mt-3" data-testid="youtube-history-setting">
+                                            <button
+                                                type="button"
+                                                role="switch"
+                                                aria-checked={Boolean(userSettings?.youtube_history)}
+                                                aria-label="Update my YouTube watch history"
+                                                disabled={!hasSavedCookies || userSettings === null}
+                                                onClick={async () => {
+                                                    if (!userSettings) return;
+                                                    try {
+                                                        setUserSettings(await updateUserSettings({ youtube_history: !userSettings.youtube_history }));
+                                                    } catch (err: unknown) {
+                                                        toast.error(getErrorMessage(err, 'Could not save the setting'));
+                                                    }
+                                                }}
+                                                className={`w-full p-4 rounded-xl border flex items-center justify-between transition-all disabled:opacity-50 disabled:cursor-not-allowed ${userSettings?.youtube_history ? 'bg-red-500/10 border-red-500/20' : 'bg-zinc-800/30 border-zinc-800'}`}
+                                            >
+                                                <div className="text-left">
+                                                    <span className="font-medium text-white text-sm">Update my YouTube watch history</span>
+                                                    <p className="text-xs text-zinc-500 mt-0.5">
+                                                        {hasSavedCookies
+                                                            ? 'YouTube videos the room watches appear in your history and remember where you stopped, as if you watched them yourself. Uses your cookies.'
+                                                            : 'Save your cookies above (or connect the browser extension) to enable this.'}
+                                                    </p>
+                                                </div>
+                                                <div className={`w-10 h-5 shrink-0 rounded-full transition-all flex items-center px-0.5 ${userSettings?.youtube_history ? 'bg-red-500' : 'bg-zinc-700'}`}>
+                                                    <div className={`w-4 h-4 knob-on-accent rounded-full transition-all shadow-sm ${userSettings?.youtube_history ? 'translate-x-5' : 'translate-x-0'}`} />
+                                                </div>
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
 
                                 {/* Browser Extension */}

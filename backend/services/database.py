@@ -125,6 +125,14 @@ def init_database():
         """
         ALTER TABLE rooms ADD COLUMN settings TEXT DEFAULT '{}'
         """,
+        # Version 8: Per-user preferences as one JSON object (YouTube history)
+        """
+        CREATE TABLE IF NOT EXISTS user_settings (
+            user_email TEXT PRIMARY KEY,
+            settings TEXT NOT NULL DEFAULT '{}',
+            updated_at REAL
+        )
+        """,
     ]
     
     import time
@@ -425,6 +433,41 @@ async def user_has_cookies(user_email: str) -> bool:
             "SELECT 1 FROM user_cookies WHERE user_email = ?", (user_email,)
         )
         return await cursor.fetchone() is not None
+
+
+# ============================================================================
+# User Settings Operations
+# ============================================================================
+
+async def get_user_settings(user_email: str) -> Dict[str, Any]:
+    """The stored preferences of a user; empty when none were saved."""
+    async with get_async_db() as db:
+        cursor = await db.execute(
+            "SELECT settings FROM user_settings WHERE user_email = ?", (user_email,)
+        )
+        row = await cursor.fetchone()
+    if not row or not row["settings"]:
+        return {}
+    try:
+        parsed = json.loads(row["settings"])
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+async def save_user_settings(user_email: str, settings: Dict[str, Any]) -> None:
+    """Store a user's preferences, replacing what was there."""
+    import time
+    now = time.time()
+    async with get_async_db() as db:
+        await db.execute("""
+            INSERT INTO user_settings (user_email, settings, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_email) DO UPDATE SET
+                settings = excluded.settings,
+                updated_at = excluded.updated_at
+        """, (user_email, json.dumps(settings), now))
+        await db.commit()
 
 
 # ============================================================================

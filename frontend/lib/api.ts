@@ -71,6 +71,51 @@ export async function resolveUrl(url: string): Promise<ResolveResponse> {
 
     return res.json();
 }
+/** The user's stored cookies, masked or not as the server decides. */
+export async function getCookies(): Promise<{ has_cookies: boolean; content: string }> {
+    const res = await fetch(`${API_BASE_URL}/api/cookies${getUserParam()}`, { cache: 'no-store' });
+    if (!res.ok) throw new Error('Failed to load cookies');
+    const data = await res.json();
+    return { has_cookies: Boolean(data.has_cookies), content: typeof data.content === 'string' ? data.content : '' };
+}
+
+export async function saveCookies(content: string): Promise<void> {
+    const res = await fetch(`${API_BASE_URL}/api/cookies${getUserParam()}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+    });
+    if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ detail: 'Unknown error' }));
+        throw new Error(errorData.detail || 'Failed to save cookies');
+    }
+}
+
+/** Per-user preferences, stored on the server. */
+export interface UserSettings {
+    /** Report the room's position to the user's own YouTube watch history. */
+    youtube_history: boolean;
+}
+
+export async function getUserSettings(): Promise<UserSettings> {
+    const res = await fetch(`${API_BASE_URL}/api/user/settings${getUserParam()}`, { cache: 'no-store' });
+    if (!res.ok) throw new Error('Failed to load settings');
+    return (await res.json()).settings;
+}
+
+export async function updateUserSettings(changes: Partial<UserSettings>): Promise<UserSettings> {
+    const res = await fetch(`${API_BASE_URL}/api/user/settings${getUserParam()}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(changes),
+    });
+    if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ detail: 'Unknown error' }));
+        throw new Error(errorData.detail || 'Failed to save settings');
+    }
+    return (await res.json()).settings;
+}
+
 export async function fetchRooms(): Promise<RoomSummary[]> {
     const res = await fetch(`${API_BASE_URL}/api/rooms`, { cache: 'no-store' });
     if (!res.ok) {
