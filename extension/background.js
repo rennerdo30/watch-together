@@ -21,8 +21,16 @@ const DEFAULT_DOMAINS = [
 // Sync interval in minutes
 const SYNC_INTERVAL_MINUTES = 30;
 
-// Store detected video streams per tab
-const detectedStreams = new Map(); // tabId -> { url, type, timestamp, pageUrl }
+/**
+ * Detected video streams, keyed by tab id, in session storage.
+ *
+ * A Manifest V3 service worker is stopped after about thirty seconds without
+ * events, and Chrome's energy saver makes that eager. Anything held in a
+ * variable is gone when the worker restarts, so a stream noticed a minute ago
+ * had "never happened" by the time the popup asked about it. Session storage
+ * lasts for the browser session and survives the worker being stopped.
+ */
+const DETECTED_STREAMS_KEY = 'detectedStreams';
 
 // Sync mutex to prevent concurrent sync operations
 let syncInProgress = false;
@@ -419,7 +427,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         console.log('[WT Sync] Auto-sync triggered');
         await syncCookies();
     } else if (alarm.name === 'streamCleanup') {
-        cleanupOldStreams();
+        await cleanupOldStreams();
     }
 });
 
@@ -428,21 +436,60 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
  */
 chrome.alarms.create('streamCleanup', { periodInMinutes: 15 });
 
+/** Read every remembered stream: `{ [tabId]: { url, type, timestamp, pageUrl } }`. */
+async function readDetectedStreams() {
+    const stored = await chrome.storage.session.get([DETECTED_STREAMS_KEY]);
+    const streams = stored[DETECTED_STREAMS_KEY];
+    return streams && typeof streams === 'object' ? streams : {};
+}
+
 /**
- * Clean up old stream entries from the Map
+ * Every change to the streams object is a read-modify-write of one key.
+ * Two events landing together (a manifest completing in one tab while
+ * another navigates) would each read the same snapshot and the later write
+ * would drop the earlier change, so changes run one after another.
+ */
+let streamWrites = Promise.resolve();
+
+function updateDetectedStreams(change) {
+    const run = streamWrites.then(async () => {
+        const streams = await readDetectedStreams();
+        if (change(streams) === false) return;
+        await chrome.storage.session.set({ [DETECTED_STREAMS_KEY]: streams });
+    });
+    streamWrites = run.catch(() => undefined);
+    return run;
+}
+
+function rememberDetectedStream(tabId, stream) {
+    return updateDetectedStreams((streams) => {
+        streams[tabId] = stream;
+    });
+}
+
+function forgetDetectedStream(tabId) {
+    return updateDetectedStreams((streams) => {
+        if (!(tabId in streams)) return false;
+        delete streams[tabId];
+    });
+}
+
+/**
+ * Drop stream entries older than STREAM_MAX_AGE_MS
  */
 function cleanupOldStreams() {
     const now = Date.now();
-    let cleaned = 0;
-    for (const [tabId, stream] of detectedStreams.entries()) {
-        if (now - stream.timestamp > STREAM_MAX_AGE_MS) {
-            detectedStreams.delete(tabId);
-            cleaned++;
+    return updateDetectedStreams((streams) => {
+        let cleaned = 0;
+        for (const [tabId, stream] of Object.entries(streams)) {
+            if (now - stream.timestamp > STREAM_MAX_AGE_MS) {
+                delete streams[tabId];
+                cleaned++;
+            }
         }
-    }
-    if (cleaned > 0) {
-        console.log(`[WT Sync] Cleaned up ${cleaned} old stream entries`);
-    }
+        if (cleaned > 0) console.log(`[WT Sync] Cleaned up ${cleaned} old stream entries`);
+        return cleaned > 0;
+    });
 }
 
 /**
@@ -740,24 +787,25 @@ chrome.webRequest.onCompleted.addListener(
     (details) => {
         const type = isVideoManifest(details.url);
         if (type && details.tabId >= 0) {
-            // Store the detected stream for this tab
-            detectedStreams.set(details.tabId, {
+            const stream = {
                 url: details.url,
                 type: type,
                 timestamp: Date.now(),
                 pageUrl: details.initiator || details.url
-            });
+            };
             console.log(`[WT Sync] Detected ${type.toUpperCase()} stream in tab ${details.tabId}:`, details.url.slice(0, 80));
 
-            // Notify the popup if it's open (ignore errors if popup not open)
-            chrome.runtime.sendMessage({
-                type: 'STREAM_DETECTED',
-                tabId: details.tabId,
-                stream: detectedStreams.get(details.tabId)
-            }).catch((err) => {
+            rememberDetectedStream(details.tabId, stream).then(() =>
+                // Notify the popup if it's open (ignore errors if popup not open)
+                chrome.runtime.sendMessage({
+                    type: 'STREAM_DETECTED',
+                    tabId: details.tabId,
+                    stream,
+                })
+            ).catch((err) => {
                 const errorMsg = err?.message || String(err);
                 if (!errorMsg.includes('Receiving end does not exist')) {
-                    console.warn('[WT Sync] Failed to notify popup:', errorMsg);
+                    console.warn('[WT Sync] Failed to record detected stream:', errorMsg);
                 }
             });
         }
@@ -770,7 +818,8 @@ chrome.webRequest.onCompleted.addListener(
  * Clean up detected streams when tab is closed
  */
 chrome.tabs.onRemoved.addListener((tabId) => {
-    detectedStreams.delete(tabId);
+    forgetDetectedStream(tabId).catch((err) =>
+        console.warn('[WT Sync] Could not forget stream of closed tab:', err));
 });
 
 /**
@@ -779,7 +828,8 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     // Clear stream when navigation starts (catches SPA and all navigation types)
     if (changeInfo.status === 'loading') {
-        detectedStreams.delete(tabId);
+        forgetDetectedStream(tabId).catch((err) =>
+            console.warn('[WT Sync] Could not forget stream of navigating tab:', err));
     }
 });
 
@@ -788,13 +838,14 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
  */
 async function getDetectedStream(tabId) {
     // Check for explicit tabId (0 is a valid tab ID, must be a non-negative number)
+    const streams = await readDetectedStreams();
     if (typeof tabId === 'number' && tabId >= 0) {
-        return detectedStreams.get(tabId) || null;
+        return streams[tabId] || null;
     }
     // If no tabId provided, get current active tab
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tabs.length > 0) {
-        return detectedStreams.get(tabs[0].id) || null;
+        return streams[tabs[0].id] || null;
     }
     return null;
 }
