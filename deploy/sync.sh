@@ -61,7 +61,12 @@ SSH_OPTS=(
 )
 SSH_CMD="ssh $(printf '%s ' "${SSH_OPTS[@]}")"
 
-cleanup() { ssh -o "ControlPath=${CM_PATH}" -O exit "${SSH_USER}@${SSH_HOST}" 2>/dev/null || true; }
+# Under deploy.sh the master belongs to the orchestrator, which keeps using
+# it for the remote steps and closes it when it is done.
+cleanup() {
+	[ -n "${WT_DEPLOY_ORCHESTRATED:-}" ] && return 0
+	ssh -o "ControlPath=${CM_PATH}" -O exit "${SSH_USER}@${SSH_HOST}" 2>/dev/null || true
+}
 trap cleanup EXIT
 
 # rsync wrapper with bounded retries. `--partial` keeps a half-sent file so
