@@ -4,6 +4,7 @@ import { useId } from 'react';
 import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, Settings, Activity, PictureInPicture, Ear } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { parseUpscaleMode, type UpscaleMode } from '@/lib/upscaling/policy';
+import { sponsorCategoryColor, sponsorCategoryLabel, type SponsorSegment } from '@/lib/sponsorblock';
 
 
 interface PlayerControlsProps {
@@ -40,6 +41,8 @@ interface PlayerControlsProps {
     enhancementMode?: UpscaleMode;
     onEnhancementModeChange?: (mode: UpscaleMode) => void;
     enhancementStatus?: string;
+    /** Segments the room skips (or could skip), drawn on the seek bar. */
+    sponsorSegments?: SponsorSegment[];
 }
 
 export function PlayerControls({
@@ -76,6 +79,7 @@ export function PlayerControls({
     enhancementMode = 'off',
     onEnhancementModeChange,
     enhancementStatus,
+    sponsorSegments = [],
 }: PlayerControlsProps) {
     const enhancementSelectId = useId();
 
@@ -117,6 +121,25 @@ export function PlayerControls({
                                 className="h-full bg-[color:var(--accent-primary)] rounded-full transition-all duration-100"
                                 style={{ width: `${progress}%` }}
                             />
+                            {/* SponsorBlock segments, in the category colours viewers know from the extension */}
+                            {displayDuration > 0 && sponsorSegments.map((segment) => {
+                                const start = Math.max(0, Math.min(segment.start, displayDuration));
+                                const end = Math.max(start, Math.min(segment.end, displayDuration));
+                                if (end <= start) return null;
+                                return (
+                                    <div
+                                        key={segment.uuid ?? `${segment.category}-${segment.start}`}
+                                        data-sponsor-segment={segment.category}
+                                        title={sponsorCategoryLabel(segment.category)}
+                                        className="absolute top-0 h-full opacity-80 pointer-events-none"
+                                        style={{
+                                            left: `${(start / displayDuration) * 100}%`,
+                                            width: `${((end - start) / displayDuration) * 100}%`,
+                                            backgroundColor: sponsorCategoryColor(segment.category),
+                                        }}
+                                    />
+                                );
+                            })}
                         </div>
                         {/* Scrubber Handle */}
                         <div

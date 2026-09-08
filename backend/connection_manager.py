@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 logger = logging.getLogger(__name__)
 from fastapi import WebSocket
 from services.database import save_room, get_all_rooms, delete_room
+from services.sponsorblock import SETTINGS_KEY as SPONSORBLOCK_KEY, normalize_settings
 
 class ConnectionManager:
     def __init__(self):
@@ -33,6 +34,8 @@ class ConnectionManager:
         for rid in self.room_states:
             self.room_states[rid]["last_sync_time"] = time.time()
             self.room_states[rid]["members"] = []  # Explicitly reset members on restart
+            self.room_states[rid][SPONSORBLOCK_KEY] = normalize_settings(
+                self.room_states[rid].get(SPONSORBLOCK_KEY))
             self._room_locks[rid] = asyncio.Lock()
 
     async def promote_user(self, room_id: str, requester_email: str, target_email: str, new_role: str) -> bool:
@@ -97,6 +100,23 @@ class ConnectionManager:
         logger.info(f"Room {room_id} renamed to {state['name']!r}")
         return True
 
+    async def set_sponsorblock(self, room_id: str, requester_email: str, settings) -> Optional[dict]:
+        """Set which SponsorBlock segments the room skips. Admins only.
+
+        Returns the normalised settings that were applied, or None when the
+        request was refused.
+        """
+        if room_id not in self.room_states:
+            return None
+        state = self.room_states[room_id]
+        if state.get("roles", {}).get(requester_email) != "admin":
+            return None
+        applied = normalize_settings(settings)
+        state[SPONSORBLOCK_KEY] = applied
+        await self._save_room_state(room_id)
+        logger.info(f"Room {room_id} SponsorBlock settings: {applied}")
+        return applied
+
     def get_active_rooms(self) -> List[dict]:
         rooms = []
         for rid, state in self.room_states.items():
@@ -158,6 +178,7 @@ class ConnectionManager:
 
         # Don't send internal tracking info to clients
         state.pop("last_sync_time", None)
+        state.pop("sponsor_video", None)
         return state
 
     async def connect(self, websocket: WebSocket, room_id: str, user_email: str,
@@ -195,7 +216,8 @@ class ConnectionManager:
                     "roles": {},
                     "playing_index": -1,
                     "permanent": False,
-                    "name": ""
+                    "name": "",
+                    SPONSORBLOCK_KEY: normalize_settings(None),
                 }
 
             # Ensure per-room lock exists
@@ -207,6 +229,8 @@ class ConnectionManager:
                 self.room_states[room_id]["members"] = []
             if "last_sync_time" not in self.room_states[room_id]:
                 self.room_states[room_id]["last_sync_time"] = time.time()
+            if SPONSORBLOCK_KEY not in self.room_states[room_id]:
+                self.room_states[room_id][SPONSORBLOCK_KEY] = normalize_settings(None)
             # Clear empty_since flag since someone has rejoined
             if "empty_since" in self.room_states[room_id]:
                 del self.room_states[room_id]["empty_since"]

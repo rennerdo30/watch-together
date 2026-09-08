@@ -65,6 +65,10 @@ from api.routes.tokens import router as tokens_router
 from api.routes.extension import router as extension_router
 from api.routes.admin import router as admin_router
 from connection_manager import manager
+from services.sponsorblock import SponsorSkipper
+
+# Room-wide SponsorBlock skipping; armed from the WebSocket handler below.
+sponsor_skipper = SponsorSkipper(manager)
 
 # Configure logging. LOG_LEVEL=DEBUG turns on the per-transfer proxy traces,
 # which record the byte range the origin actually received — the only way to
@@ -218,6 +222,7 @@ async def lifespan(app: FastAPI):
 
         if tasks:
             logger.info("All background tasks shut down cleanly")
+        await sponsor_skipper.client.aclose()
 
         # Clean up HTTP client. Closing can fail if the client was created
         # on a different event loop than the one shutting down, which must
@@ -1106,6 +1111,9 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
     )
     if not connected:
         return
+    # A room restored from the database, or one whose last member left
+    # mid-video, has no segments loaded yet.
+    sponsor_skipper.ensure_loaded(room_id)
     MAX_WS_MESSAGE_SIZE = 100 * 1024  # 100KB
     try:
         while True:
@@ -1128,14 +1136,17 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             if msg_type == "play":
                 await manager.update_state(room_id, {"is_playing": True, "timestamp": payload.get("timestamp", 0)})
                 await manager.broadcast({"type": "play", "payload": payload}, room_id, exclude=websocket)
-                
+                sponsor_skipper.rearm(room_id)
+
             elif msg_type == "pause":
                 await manager.update_state(room_id, {"is_playing": False, "timestamp": payload.get("timestamp", 0)})
                 await manager.broadcast({"type": "pause", "payload": payload}, room_id, exclude=websocket)
-                
+                sponsor_skipper.rearm(room_id)
+
             elif msg_type == "seek":
                 await manager.update_state(room_id, {"timestamp": payload.get("timestamp", 0)})
                 await manager.broadcast({"type": "seek", "payload": payload}, room_id, exclude=websocket)
+                sponsor_skipper.rearm(room_id)
                 
             elif msg_type == "set_video":
                 video_data = payload.get("video_data")
@@ -1158,6 +1169,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 if next_v:
                     await manager.broadcast({"type": "set_video", "payload": {"video_data": next_v}}, room_id)
                     await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": playing_index}}, room_id)
+                    sponsor_skipper.video_changed(room_id)
 
             elif msg_type == "queue_add":
                 video_data = payload.get("video_data")
@@ -1190,6 +1202,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     next_v = await refresh_video_url(next_v, user_email=user_email)
                     await manager.broadcast({"type": "set_video", "payload": {"video_data": next_v}}, room_id)
                 await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": playing_index}}, room_id)
+                sponsor_skipper.video_changed(room_id)
 
             elif msg_type == "video_ended":
                 next_v, queue, playing_index = await manager.next_video(room_id)
@@ -1197,6 +1210,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     next_v = await refresh_video_url(next_v, user_email=user_email)
                     await manager.broadcast({"type": "set_video", "payload": {"video_data": next_v}}, room_id)
                 await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": playing_index}}, room_id)
+                sponsor_skipper.video_changed(room_id)
                 
             elif msg_type == "promote":
                 target = payload.get("target_email")
@@ -1233,6 +1247,21 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         "payload": {"message": "Only the room admin can rename this room"},
                     })
             
+            elif msg_type == "sponsorblock_settings":
+                applied = await manager.set_sponsorblock(room_id, user_email, payload)
+                if applied is not None:
+                    await manager.broadcast({
+                        "type": "room_settings_update",
+                        "payload": {"sponsorblock": applied},
+                    }, room_id)
+                    sponsor_skipper.rearm(room_id)
+                else:
+                    logger.info(f"Refused SponsorBlock settings change in {room_id} by {user_email}")
+                    await websocket.send_json({
+                        "type": "error",
+                        "payload": {"message": "Only the room admin can change SponsorBlock settings"},
+                    })
+
             elif msg_type == "quality_change":
                 # User switched video quality - prefetch segments for new quality
                 new_video_url = payload.get("new_video_url")

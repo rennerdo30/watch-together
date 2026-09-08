@@ -74,7 +74,8 @@ backend/
 │   ├── manifest.py           # DASH manifest generation for adaptive streams
 │   ├── mp4_index.py          # Fragmented-MP4 box scanning (init/index ranges)
 │   ├── metrics.py            # Per-transfer proxy metrics
-│   └── prefetcher.py         # Segment prefetching
+│   ├── prefetcher.py         # Segment prefetching
+│   └── sponsorblock.py       # SponsorBlock lookup + server-side room-wide skipping
 ├── api/routes/               # REST endpoints
 ├── core/                     # Config, security, Access JWT, rate limiting
 └── tests/                    # pytest suite (200+ tests)

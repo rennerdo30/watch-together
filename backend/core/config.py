@@ -135,6 +135,41 @@ CF_ACCESS_JWKS_CACHE_SECONDS = 3600  # Refresh signing keys hourly
 CF_ACCESS_JWKS_TIMEOUT_SECONDS = 5  # Network timeout fetching signing keys
 CF_ACCESS_ALGORITHMS = ("RS256",)  # Algorithms Cloudflare Access signs with
 
+# SponsorBlock (https://sponsor.ajay.app): community-submitted segments to
+# skip in YouTube videos. Looked up per video with the privacy-preserving
+# hash-prefix endpoint, so the server never tells SponsorBlock which video a
+# room is watching. The URL is overridable so tests can point at a stub.
+SPONSORBLOCK_API_URL = os.environ.get("SPONSORBLOCK_API_URL", "https://sponsor.ajay.app")
+SPONSORBLOCK_HASH_PREFIX_LENGTH = 4  # Hex characters of the video id's SHA-256 sent upstream
+SPONSORBLOCK_TIMEOUT_SECONDS = 8.0
+SPONSORBLOCK_USER_AGENT = "watch-together (https://github.com/rennerdo30/watch-together)"
+# Segments change rarely once a video has been up for a while; an hour keeps
+# a room that replays or re-resolves a video from re-fetching each time.
+SPONSORBLOCK_CACHE_TTL_SECONDS = 3600
+SPONSORBLOCK_CACHE_MAX_ENTRIES = 500
+# Every category SponsorBlock defines for skippable segments, in the order
+# the settings UI lists them. Chapters and highlights are not segments to skip.
+SPONSORBLOCK_CATEGORIES = (
+    "sponsor",
+    "selfpromo",
+    "interaction",
+    "intro",
+    "outro",
+    "preview",
+    "filler",
+    "music_offtopic",
+    "exclusive_access",
+)
+# What a new room skips: paid promotion and the like/subscribe reminders.
+# Intros, outros and filler are a matter of taste and stay opt-in.
+SPONSORBLOCK_DEFAULT_CATEGORIES = ("sponsor", "selfpromo", "interaction")
+SPONSORBLOCK_DEFAULT_ENABLED = True
+# A jump shorter than this is not worth interrupting playback for.
+SPONSORBLOCK_MIN_SEGMENT_SECONDS = 1.0
+# Segments that overlap or nearly touch are skipped in one jump, and a skip
+# that lands within this distance of a segment's end is considered past it.
+SPONSORBLOCK_SKIP_TOLERANCE_SECONDS = 0.5
+
 # Proxy metrics configuration
 METRICS_SAMPLE_CAPACITY = 500  # Recent proxy transfers kept in the ring buffer
 METRICS_SLOW_UPSTREAM_MS = 5000  # Upstream fetches slower than this are counted

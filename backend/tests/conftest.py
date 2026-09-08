@@ -77,6 +77,27 @@ def reset_proxy_client():
 
 
 @pytest.fixture(autouse=True)
+def offline_sponsorblock():
+    """Never let a test reach the real SponsorBlock API.
+
+    Setting a YouTube video in a room triggers a segment lookup; the stub
+    answers 404 (no segments) unless a test installs its own transport.
+    """
+    import httpx
+    import main
+
+    main.sponsor_skipper.client.configure(
+        api_url="http://sponsorblock.test",
+        transport=httpx.MockTransport(lambda request: httpx.Response(404)),
+    )
+    yield
+    main.sponsor_skipper.client.configure(
+        api_url="http://sponsorblock.test",
+        transport=httpx.MockTransport(lambda request: httpx.Response(404)),
+    )
+
+
+@pytest.fixture(autouse=True)
 def reset_room_state():
     """Keep room state from leaking between tests."""
     from connection_manager import manager
