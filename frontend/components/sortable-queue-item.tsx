@@ -3,7 +3,7 @@ import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Trash2, ListVideo, Pin, Play, Loader2, ExternalLink } from 'lucide-react';
 
-import { displayHost } from '@/lib/utils';
+import { displayHost, displayName } from '@/lib/utils';
 
 interface ResolveResponse {
     original_url: string;
@@ -13,6 +13,7 @@ interface ResolveResponse {
     is_live?: boolean;
     extractor_key?: string;
     pinned?: boolean;
+    added_by?: string;
 }
 
 const LIVE_BADGE_CLASSES =
@@ -131,6 +132,9 @@ export function SortableQueueItem({
                 </div>
                 <p className="text-[9px] font-mono text-neutral-500 truncate mt-0.5">
                     {displayHost(item.original_url)}
+                    {item.added_by && (
+                        <span title={`Added by ${item.added_by}`}> · {displayName(item.added_by)}</span>
+                    )}
                 </p>
             </div>
 

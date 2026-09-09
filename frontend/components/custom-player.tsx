@@ -8,6 +8,7 @@ import { QualityOption } from '@/lib/api';
 import { useAudioNormalization, useHlsPlayer, useShakaPlayer, HlsQualityLevel, AUTO_QUALITY } from './player/hooks';
 import { startPlayback, type PlaybackStart } from '@/lib/playback';
 import type { SponsorSegment } from '@/lib/sponsorblock';
+import type { Storyboard } from '@/lib/storyboard';
 import { useLocalStorageState } from '@/lib/hooks/useLocalStorageState';
 import { useVideoEnhancement } from './player/hooks/useVideoEnhancement';
 
@@ -36,10 +37,10 @@ interface CustomPlayerProps {
     /** Manifest describing the adaptive streams, used by the MSE engine. */
     manifestUrl?: string;
     availableQualities?: QualityOption[];
-    // Callback for quality change notification (for prefetch optimization)
-    onQualityChangeNotify?: (oldVideoUrl: string, newVideoUrl: string, audioUrl: string | undefined) => void;
     /** SponsorBlock segments of this video, marked on the seek bar. */
     sponsorSegments?: SponsorSegment[];
+    /** Preview thumbnails for the seek bar, when the site provides them. */
+    storyboard?: Storyboard;
 }
 
 interface PlayerAPI {
@@ -94,8 +95,8 @@ export function CustomPlayer({
     audioUrl,
     manifestUrl,
     availableQualities,
-    onQualityChangeNotify,
     sponsorSegments,
+    storyboard,
 }: CustomPlayerProps) {
     // === REFS ===
     const videoRef = useRef<HTMLVideoElement>(null);
@@ -186,6 +187,7 @@ export function CustomPlayer({
         autoPlay,
         initialTime,
         onError: setError,
+        onSourceExpired,
         onPlaybackStart: setPlaybackGate,
     });
 
@@ -619,6 +621,7 @@ export function CustomPlayer({
                 onSeek={handleSeek}
                 isLive={isLive}
                 sponsorSegments={sponsorSegments}
+                storyboard={storyboard}
             />
         </div>
     );

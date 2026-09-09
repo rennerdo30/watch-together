@@ -74,6 +74,30 @@ export const SHAKA_REBUFFER_GOAL_SECONDS = 4;
 export const SHAKA_INITIAL_BANDWIDTH_ESTIMATE = 700_000;
 
 /**
+ * Remembering the connection between loads (see `lib/bandwidth-memory.ts`).
+ *
+ * A measurement older than this says nothing about today's connection. The
+ * discount turns a measurement into a guess a little below it, and the
+ * ceiling keeps one wild sample from opening on a rendition that stalls.
+ */
+export const BANDWIDTH_MEMORY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+export const BANDWIDTH_MEMORY_DISCOUNT = 0.8;
+export const SHAKA_MAX_REMEMBERED_BANDWIDTH = 40_000_000;
+/** How often the running estimate is written to storage while playing. */
+export const BANDWIDTH_MEMORY_SAVE_INTERVAL_MS = 10_000;
+/** Seconds of playback before the first write: enough for a real measurement. */
+export const BANDWIDTH_MEMORY_FIRST_SAVE_SECONDS = 2;
+
+/**
+ * How quickly the estimate follows measurements: half-lives, in seconds of
+ * downloaded media, of Shaka's fast and slow moving averages (defaults 2
+ * and 5). Shorter ones let the estimate reach a better rendition sooner
+ * after the cautious opening; the switch interval guards against flapping.
+ */
+export const SHAKA_ABR_FAST_HALF_LIFE = 1.5;
+export const SHAKA_ABR_SLOW_HALF_LIFE = 4;
+
+/**
  * Minimum seconds between automatic quality switches.
  *
  * Shaka's default of 8 keeps a viewer on the cautious opening rendition for

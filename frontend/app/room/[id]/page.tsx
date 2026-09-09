@@ -13,7 +13,7 @@ import { CustomPlayer } from '@/components/custom-player';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { THEMES, DEFAULT_THEME, getThemeById, loadCustomTheme, saveCustomTheme, createCustomTheme } from '@/lib/themes';
 import { ColorModeToggle } from '@/components/color-mode-toggle';
-import { displayHost } from '@/lib/utils';
+import { displayHost, displayName } from '@/lib/utils';
 import {
     DEFAULT_SPONSORBLOCK_SETTINGS,
     SPONSORBLOCK_CATEGORIES,
@@ -99,6 +99,9 @@ export default function RoomPage() {
     const [playingIndex, setPlayingIndex] = useState<number>(-1);
     const [inputUrl, setInputUrl] = useState('');
     const [loading, setLoading] = useState(false);
+    // Resolving for the queue is a sidebar affair: the video that is playing
+    // must stay visible while it happens.
+    const [queueing, setQueueing] = useState(false);
     const [members, setMembers] = useState<{ email: string }[]>([]);
     const [roles, setRoles] = useState<Record<string, string>>({});
     const [currentUser, setCurrentUser] = useState<string>("");
@@ -435,7 +438,8 @@ export default function RoomPage() {
                             resolveUrl(syncVideoData.original_url)
                                 .then((freshData) => {
                                     console.log('[Room] Sync: Got fresh stream:', freshData.stream_type, freshData.quality);
-                                    setVideoData(freshData);
+                                    // Who added it is room knowledge, not something a resolve returns.
+                                    setVideoData({ ...freshData, added_by: syncVideoData.added_by });
                                 })
                                 .catch((err) => {
                                     console.warn('[Room] Sync: Re-resolve failed, using cached data:', err.message);
@@ -510,7 +514,7 @@ export default function RoomPage() {
                     resolveUrl(queuedVideoData.original_url)
                         .then((freshData) => {
                             console.log('[Room] Got fresh stream:', freshData.stream_type, freshData.quality);
-                            setVideoData(freshData);
+                            setVideoData({ ...freshData, added_by: queuedVideoData.added_by });
                         })
                         .catch((err) => {
                             console.warn('[Room] Re-resolve failed:', err.message);
@@ -714,8 +718,8 @@ export default function RoomPage() {
     };
 
     const handleAddToQueue = async () => {
-        if (!inputUrl || loading) return;
-        setLoading(true);
+        if (!inputUrl || loading || queueing) return;
+        setQueueing(true);
         try {
             const data = await resolveUrl(inputUrl);
             sendMsg('queue_add', { video_data: data });
@@ -724,7 +728,7 @@ export default function RoomPage() {
         } catch (err: unknown) {
             console.error(err);
             toast.error(getErrorMessage(err, 'Failed to resolve video'));
-        } finally { setLoading(false); }
+        } finally { setQueueing(false); }
     };
 
     // A live stream outlives its signed playlist URL: the CDN starts
@@ -854,6 +858,11 @@ export default function RoomPage() {
                             </span>
                         </div>
                     )}
+                    {videoData?.added_by && (
+                        <span className="hidden md:inline text-[10px] text-neutral-500 truncate max-w-[14rem]" title={`Added by ${videoData.added_by}`}>
+                            added by <span className="text-neutral-300">{displayName(videoData.added_by)}</span>
+                        </span>
+                    )}
                     {videoData?.original_url && (
                         <a
                             href={videoData.original_url}
@@ -961,24 +970,20 @@ export default function RoomPage() {
                                         sendMsg('seek', { timestamp: time });
                                         setSyncState(prev => ({ ...prev, timestamp: time, lastSync: new Date().toLocaleTimeString() }));
                                     }}
-                                    onEnd={() => { if (internalUpdateCount.current === 0) sendMsg('video_ended'); }}
+                                    // Named, so the server can tell this member's
+                                    // report of the end from a stale one after
+                                    // the room has already moved on.
+                                    onEnd={() => { if (internalUpdateCount.current === 0) sendMsg('video_ended', { original_url: videoData.original_url }); }}
                                     onTimeUpdate={(time: number, isPlaying: boolean) => {
                                         // Update actual player time for accurate badge display
                                         setActualPlayerTime(time);
                                         setSyncState(prev => ({ ...prev, isPlaying }));
                                     }}
-                                    onQualityChangeNotify={(oldVideoUrl, newVideoUrl, audioUrl) => {
-                                        // Notify backend for prefetch optimization
-                                        sendMsg('quality_change', {
-                                            old_video_url: oldVideoUrl,
-                                            new_video_url: newVideoUrl,
-                                            audio_url: audioUrl,
-                                        });
-                                    }}
                                     playerRef={playerRef}
                                     syncThreshold={syncThreshold}
                                     onSyncThresholdChange={setSyncThreshold}
                                     sponsorSegments={sponsorSegments.videoUrl === videoData.original_url ? sponsorSegments.segments : []}
+                                    storyboard={videoData.storyboard}
                                 />
                             </ErrorBoundary>
                         ) : isResolving ? null : (
@@ -1114,7 +1119,7 @@ export default function RoomPage() {
                         </div>
                         <button
                             type="submit"
-                            disabled={loading || !inputUrl}
+                            disabled={loading || queueing || !inputUrl}
                             aria-busy={loading}
                             className={`px-4 h-9 ${activeTheme.text} font-medium rounded-lg text-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 ${activeTheme.accent} shadow-lg hover:brightness-110`}
                         >
@@ -1124,10 +1129,11 @@ export default function RoomPage() {
                         <button
                             type="button"
                             onClick={handleAddToQueue}
-                            disabled={loading || !inputUrl}
+                            disabled={loading || queueing || !inputUrl}
+                            aria-busy={queueing}
                             className={`px-4 h-9 bg-neutral-800/50 hover:bg-neutral-800 text-neutral-100 font-medium rounded-lg text-sm border ${activeTheme.border} disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors`}
                         >
-                            <Plus aria-hidden="true" className="w-3 h-3" />
+                            {queueing ? <Loader2 aria-hidden="true" className="animate-spin w-3 h-3" /> : <Plus aria-hidden="true" className="w-3 h-3" />}
                             Queue
                         </button>
                     </form>
