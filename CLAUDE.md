@@ -76,6 +76,7 @@ backend/
 │   ├── metrics.py            # Per-transfer proxy metrics
 │   ├── prefetcher.py         # Segment prefetching
 │   ├── sponsorblock.py       # SponsorBlock lookup + server-side room-wide skipping
+│   ├── stream_owner.py       # Stream URL -> member whose cookies fetch it (manifest probes, proxy)
 │   ├── user_settings.py      # Per-user preferences (JSON per identity, cached)
 │   └── watch_history.py      # Opt-in YouTube history: tracking URLs captured from yt-dlp, pinged per member
 ├── api/routes/               # REST endpoints
@@ -129,7 +130,9 @@ docker compose up -d --build
 ### Video Resolution Flow
 1. Client requests `/api/resolve?url=...`
 2. Backend tries cookie sources: user's cookies → shared user's cookies → no cookies
-3. Returns HLS/DASH manifest URL or direct stream
+3. Returns HLS/DASH manifest URL or direct stream, recording `resolved_by`: every
+   later fetch of those URLs (manifest probes, proxied segments) carries **that**
+   member's cookies whoever asks — the URLs are bound to the session that fetched them
 4. Manifests are rewritten to proxy all segments through `/api/proxy`
 
 ### Playback

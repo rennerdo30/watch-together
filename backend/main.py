@@ -58,7 +58,7 @@ from services.metrics import (
     OUTCOME_CLIENT_ABORTED, OUTCOME_TRUNCATED,
 )
 from services.database import init_database, cache_format, get_cached_format
-from services.resolver import refresh_video_url, _extract_stream_url
+from services.resolver import refresh_video_url, _extract_stream_url, extract_storyboard, ensure_cookie_file
 from api.routes.cookies import router as cookies_router
 from api.routes.rooms import router as rooms_router
 from api.routes.tokens import router as tokens_router
@@ -68,6 +68,7 @@ from api.routes.user_settings import router as user_settings_router
 from connection_manager import manager
 from services.sponsorblock import SponsorSkipper
 from services.watch_history import reporter as history_reporter
+from services import stream_owner
 
 # Room-wide SponsorBlock skipping; armed from the WebSocket handler below.
 sponsor_skipper = SponsorSkipper(manager)
@@ -330,6 +331,9 @@ def _build_resolve_response(url: str, info: dict, stream_info: dict) -> dict:
         "has_audio": stream_info.get("has_audio", True),
         "stream_type": stream_info.get("type", "unknown"),
     }
+    storyboard = extract_storyboard(info)
+    if storyboard:
+        response["storyboard"] = storyboard
 
     if stream_info.get("type") == "dash":
         response["video_url"] = stream_info.get("video_url")
@@ -385,8 +389,11 @@ async def resolve_video(request: Request, url: str, user_agent: str = None) -> d
 
     logger.info(f"Resolving URL: {url} (User: {user_email or 'anonymous'})")
 
-    cookie_path = get_user_cookie_path(user_email) if user_email else None
-    has_cookies = cookie_path and os.path.exists(cookie_path)
+    # The cookie file is restored from the database when missing: after a
+    # restart there is none on disk, and resolving without the member's
+    # cookies here is what made age-restricted videos fail until a refresh.
+    cookie_path = await ensure_cookie_file(user_email) if user_email else None
+    has_cookies = bool(cookie_path)
 
     os.makedirs(YTDLP_CACHE_DIR, exist_ok=True)
 
@@ -439,6 +446,11 @@ async def resolve_video(request: Request, url: str, user_agent: str = None) -> d
 
             if stream_info and stream_info.get('url'):
                 response = _build_resolve_response(url, info, stream_info)
+                # The stream URLs are bound to the session whose cookies
+                # fetched them; every later fetch of them must carry the
+                # same cookies, whoever asks. See services/stream_owner.
+                response[stream_owner.RESOLVED_BY_KEY] = user_email if has_cookies else None
+                stream_owner.remember(response)
                 # Cache it so /api/dash-manifest can build a manifest for
                 # this video without resolving it again. Without this the
                 # manifest endpoint 404s on a freshly pasted link.
@@ -596,7 +608,13 @@ async def dash_manifest(request: Request, url: str):
         "User-Agent": request.headers.get("user-agent", "Mozilla/5.0"),
         "Referer": "https://www.youtube.com/",
     }
-    cookie_header = get_cookie_header(user_email, video_formats[0]["url"]) if user_email else None
+    # Probes carry the cookies the URLs were signed for — the resolving
+    # member's, not the requester's. With anyone else's cookies the CDN
+    # refuses most renditions, each is silently dropped, and this member
+    # ends up with a manifest of one or two qualities to "choose" from.
+    stream_owner.remember(cached)
+    fetch_identity = cached.get(stream_owner.RESOLVED_BY_KEY, user_email)
+    cookie_header = get_cookie_header(fetch_identity, video_formats[0]["url"]) if fetch_identity else None
     if cookie_header:
         outgoing_headers["Cookie"] = cookie_header
 
@@ -685,13 +703,17 @@ async def proxy_stream(request: Request, url: str):
     if not outgoing_headers["Range"]:
         del outgoing_headers["Range"]
 
-    # Attach the caller's own cookies, never another user's. Fetches that
-    # carry cookies are cached separately so authenticated content is not
-    # served to a different user from a shared cache entry.
-    cookie_header = get_cookie_header(user_email, url) if user_email else None
+    # A stream URL a resolve produced is fetched with the cookies it was
+    # signed for — the resolving member's — so every member gets the same
+    # bytes and shares one cache entry. Anything else is fetched with the
+    # caller's own cookies, and never another user's: content fetched with
+    # cookies is cached under that identity so it cannot be served to
+    # someone else from a shared entry.
+    fetch_identity = stream_owner.owner_of(url) if stream_owner.is_known(url) else user_email
+    cookie_header = get_cookie_header(fetch_identity, url) if fetch_identity else None
     if cookie_header:
         outgoing_headers["Cookie"] = cookie_header
-    cache_identity = user_email if cookie_header else None
+    cache_identity = fetch_identity if cookie_header else None
 
     segment_client = await get_proxy_client()
 
@@ -1164,6 +1186,8 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 if video_data:
                     video_data["added_by"] = user_email
                     if video_data.get("original_url"):
+                        stream_owner.sanitize_client_video(
+                            video_data, await get_cached_format(video_data["original_url"]))
                         await cache_format(video_data["original_url"], video_data)
 
                     # Trigger initial prefetch for faster startup
@@ -1188,6 +1212,8 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 if video_data:
                     video_data["added_by"] = user_email
                     if video_data.get("original_url"):
+                        stream_owner.sanitize_client_video(
+                            video_data, await get_cached_format(video_data["original_url"]))
                         await cache_format(video_data["original_url"], video_data)
                 queue = await manager.add_to_queue(room_id, video_data)
                 state = manager.room_states.get(room_id, {})
@@ -1218,13 +1244,19 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 history_reporter.video_changed(room_id)
 
             elif msg_type == "video_ended":
-                next_v, queue, playing_index = await manager.next_video(room_id)
-                if next_v:
-                    next_v = await refresh_video_url(next_v, user_email=user_email)
-                    await manager.broadcast({"type": "set_video", "payload": {"video_data": next_v}}, room_id)
-                await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": playing_index}}, room_id)
-                sponsor_skipper.video_changed(room_id)
-                history_reporter.video_changed(room_id)
+                # `original_url` names the video the sender's player finished;
+                # once the room has moved on, later reports of the same end
+                # are dropped rather than advancing the queue again.
+                ended_url = payload.get("original_url") if isinstance(payload, dict) else None
+                next_v, queue, playing_index, advanced = await manager.next_video(
+                    room_id, ended_url if isinstance(ended_url, str) else None)
+                if advanced:
+                    if next_v:
+                        next_v = await refresh_video_url(next_v, user_email=user_email)
+                        await manager.broadcast({"type": "set_video", "payload": {"video_data": next_v}}, room_id)
+                    await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": playing_index}}, room_id)
+                    sponsor_skipper.video_changed(room_id)
+                    history_reporter.video_changed(room_id)
                 
             elif msg_type == "promote":
                 target = payload.get("target_email")
@@ -1275,18 +1307,6 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         "type": "error",
                         "payload": {"message": "Only the room admin can change SponsorBlock settings"},
                     })
-
-            elif msg_type == "quality_change":
-                # User switched video quality - prefetch segments for new quality
-                new_video_url = payload.get("new_video_url")
-                audio_url = payload.get("audio_url")
-                if new_video_url:
-                    asyncio.create_task(prefetch_initial_segments(
-                        new_video_url,
-                        audio_url,
-                        await get_proxy_client()
-                    ))
-                    logger.info(f"Quality change prefetch triggered for {user_email}")
 
             elif msg_type == "ping":
                 await websocket.send_json({

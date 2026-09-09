@@ -11,10 +11,11 @@ import yt_dlp
 
 from core.config import (
     COOKIES_DIR, COOKIE_FILE_MODE, DEFAULT_USER_AGENT, POT_PROVIDER_EXTRACTOR_ARGS,
-    QUALITY_LADDER_SIZE, YTDLP_CACHE_DIR,
+    QUALITY_LADDER_SIZE, STORYBOARD_PREFERRED_FRAME_WIDTH, YTDLP_CACHE_DIR,
 )
 from core.security import get_user_cookie_path
 from services.database import cache_format, get_cached_format, get_user_cookies
+from services.stream_owner import RESOLVED_BY_KEY, remember as remember_stream_owner
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ def build_ydl_opts(cookie_path: Optional[str], user_agent: Optional[str] = None,
     return opts
 
 
-async def _ensure_cookie_file(user_email: str) -> Optional[str]:
+async def ensure_cookie_file(user_email: str) -> Optional[str]:
     """
     Ensure cookie file exists for user, restoring from DB if needed.
     Returns path if available, else None.
@@ -127,6 +128,41 @@ def _select_quality_ladder(video_only_formats, per_codec_limit: int):
 # renditions from sources that simply do not label themselves.
 _UNINDEXABLE_EXTENSIONS = ("webm", "mkv")
 _UNINDEXABLE_MIME = ("video/webm", "audio/webm", "video/x-matroska")
+
+
+def extract_storyboard(info: dict) -> Optional[dict]:
+    """The preview-thumbnail storyboard nearest the preferred frame width.
+
+    yt-dlp describes each storyboard as a format with `rows`, `columns`, a
+    frame size, and one fragment per sheet (`url` + `duration`). All sheets
+    of one storyboard share the frame duration, so a single number is kept.
+    """
+    candidates = []
+    for fmt in info.get('formats') or []:
+        if fmt.get('format_note') != 'storyboard':
+            continue
+        fragments = fmt.get('fragments') or []
+        width, height = fmt.get('width'), fmt.get('height')
+        rows, columns = fmt.get('rows'), fmt.get('columns')
+        if not (fragments and width and height and rows and columns):
+            continue
+        frames = rows * columns
+        first = fragments[0]
+        frame_duration = (first.get('duration') or 0) / frames
+        if frame_duration <= 0:
+            continue
+        candidates.append((abs(width - STORYBOARD_PREFERRED_FRAME_WIDTH), {
+            'width': int(width),
+            'height': int(height),
+            'rows': int(rows),
+            'columns': int(columns),
+            'frame_duration': round(frame_duration, 4),
+            'sheets': [f['url'] for f in fragments if f.get('url')],
+        }))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda c: c[0])
+    return candidates[0][1]
 
 
 def _is_indexable(fmt: dict) -> bool:
@@ -308,11 +344,14 @@ async def refresh_video_url(video_data: dict, user_agent: str = None, user_email
 
     # 2. Resolve Cookies (Try requester -> Try owner -> Try anonymous)
     cookie_path = None
+    cookie_owner = None
     if user_email:
-        cookie_path = await _ensure_cookie_file(user_email)
-    
+        cookie_path = await ensure_cookie_file(user_email)
+        cookie_owner = user_email if cookie_path else None
+
     if not cookie_path and added_by and added_by != user_email:
-        cookie_path = await _ensure_cookie_file(added_by)
+        cookie_path = await ensure_cookie_file(added_by)
+        cookie_owner = added_by if cookie_path else None
 
     # 3. Define strategies.
     #
@@ -327,6 +366,7 @@ async def refresh_video_url(video_data: dict, user_agent: str = None, user_email
             "name": "requester_cookies" if cookie_path else "anonymous",
             "desc": "Default clients, with whatever cookies were found",
             "cookiefile": cookie_path,
+            "owner": cookie_owner,
         },
     ]
 
@@ -337,10 +377,12 @@ async def refresh_video_url(video_data: dict, user_agent: str = None, user_email
             "name": "anonymous",
             "desc": "Default clients, no cookies",
             "cookiefile": None,
+            "owner": None,
         })
 
     info = None
     last_error = None
+    resolved_by = None
 
     cache_dir = os.path.join("data", "yt_dlp_cache")
 
@@ -374,6 +416,7 @@ async def refresh_video_url(video_data: dict, user_agent: str = None, user_email
                          continue
                 else:
                     logger.info(f"Strategy {strat['name']} SUCCESS!")
+                    resolved_by = strat["owner"]
                     break  # We got good data, stop trying
 
         except Exception as e:
@@ -394,6 +437,10 @@ async def refresh_video_url(video_data: dict, user_agent: str = None, user_email
         # Map 'url' to 'stream_url' for frontend compatibility
         if 'url' in stream_data:
             video_data['stream_url'] = stream_data['url']
+        # The fresh URLs are bound to the session that fetched them.
+        video_data[RESOLVED_BY_KEY] = resolved_by
+        stream_data[RESOLVED_BY_KEY] = resolved_by
+        remember_stream_owner(video_data)
         # Cache the result
         await cache_format(original_url, stream_data)
 

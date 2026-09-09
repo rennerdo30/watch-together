@@ -434,3 +434,63 @@ class TestCodecGrouping:
                     if self.codecs_in(s)[0].startswith("avc1"))
         ids = [r.get("id") for r in h264.findall("mpd:Representation", MPD_NS)]
         assert ids == ["137", "136"]
+
+
+class TestProbeSingleFlight:
+    """A room asking for one manifest all at once probes each rendition once."""
+
+    async def test_concurrent_probes_of_one_url_share_one_fetch(self, monkeypatch):
+        import asyncio
+        import services.manifest as manifest
+        from services.mp4_index import Mp4Index
+
+        manifest.clear_index_cache()
+        calls = []
+        gate = asyncio.Event()
+
+        async def fake_open(client, url, headers):
+            calls.append(url)
+            await gate.wait()
+
+            class Resp:
+                status_code = 206
+
+                async def aread(self):
+                    return b""
+
+                async def aclose(self):
+                    pass
+
+            return Resp(), None
+
+        monkeypatch.setattr(manifest, "open_upstream_stream", fake_open)
+        monkeypatch.setattr(manifest, "parse_index", lambda data: Mp4Index(0, 9, 10, 19))
+        url = "https://cdn.test/videoplayback?itag=137&clen=1&lmt=1"
+        tasks = [asyncio.create_task(manifest.probe_index(None, url)) for _ in range(5)]
+        await asyncio.sleep(0.01)
+        gate.set()
+        results = await asyncio.gather(*tasks)
+        assert len(calls) == 1
+        assert all(r is not None for r in results)
+        assert manifest._probe_locks == {} and manifest._probe_users == {}
+
+    async def test_a_cancelled_waiter_leaves_no_lock_behind(self, monkeypatch):
+        import asyncio
+        import services.manifest as manifest
+
+        manifest.clear_index_cache()
+        gate = asyncio.Event()
+
+        async def fake_open(client, url, headers):
+            await gate.wait()
+            raise RuntimeError("no origin")
+
+        monkeypatch.setattr(manifest, "open_upstream_stream", fake_open)
+        url = "https://cdn.test/videoplayback?itag=137&clen=2&lmt=1"
+        first = asyncio.create_task(manifest.probe_index(None, url))
+        second = asyncio.create_task(manifest.probe_index(None, url))
+        await asyncio.sleep(0.01)
+        second.cancel()
+        gate.set()
+        await asyncio.gather(first, second, return_exceptions=True)
+        assert manifest._probe_locks == {} and manifest._probe_users == {}
