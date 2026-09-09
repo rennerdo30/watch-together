@@ -77,6 +77,8 @@ export async function stubAdaptiveStream(
   page: import('@playwright/test').Page,
   originalUrl: string,
   videoLadder: VideoRung[] = DEFAULT_VIDEO_LADDER,
+  /** Extra fields for the resolve body, e.g. a storyboard. */
+  resolveExtras: Record<string, unknown> = {},
 ): Promise<string[]> {
   const manifest = buildManifest(undefined, videoLadder);
   const video = readFileSync(path.join(FIXTURES, 'video.mp4'));
@@ -103,6 +105,7 @@ export async function stubAdaptiveStream(
         is_live: false,
         quality: '240p',
         available_qualities: [],
+        ...resolveExtras,
       }),
     });
   });

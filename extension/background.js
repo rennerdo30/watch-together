@@ -18,8 +18,10 @@ const DEFAULT_DOMAINS = [
     '.crunchyroll.com'
 ];
 
-// Sync interval in minutes
-const SYNC_INTERVAL_MINUTES = 30;
+// Sync interval in minutes. YouTube rotates session cookies often enough
+// that a copy half an hour old is regularly refused ("Sign in to confirm
+// you're not a bot"); ten minutes keeps the server's copy current.
+const SYNC_INTERVAL_MINUTES = 10;
 
 /**
  * Detected video streams, keyed by tab id, in session storage.

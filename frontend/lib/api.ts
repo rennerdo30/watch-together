@@ -23,14 +23,21 @@ export interface AudioOption {
     acodec: string;
 }
 
+import type { Storyboard } from './storyboard';
+
 export interface ResolveResponse {
     original_url: string;
     stream_url: string;
     title: string;
     is_live: boolean;
     thumbnail?: string;
+    duration?: number;
     backend_engine: string;
     pinned?: boolean;
+    /** Identity of the member who put it in the room; set by the server. */
+    added_by?: string;
+    /** Preview thumbnails for the seek bar, when the site provides them. */
+    storyboard?: Storyboard;
     quality?: string;
     has_audio?: boolean;
     stream_type?: 'hls' | 'dash' | 'combined' | 'video_only' | 'default' | 'unknown';

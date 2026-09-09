@@ -1,10 +1,11 @@
 'use client';
 
-import { useId } from 'react';
+import { useId, useRef, useState } from 'react';
 import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, Settings, Activity, PictureInPicture, Ear } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { parseUpscaleMode, type UpscaleMode } from '@/lib/upscaling/policy';
 import { sponsorCategoryColor, sponsorCategoryLabel, type SponsorSegment } from '@/lib/sponsorblock';
+import { storyboardFrame, type Storyboard } from '@/lib/storyboard';
 
 
 interface PlayerControlsProps {
@@ -43,6 +44,8 @@ interface PlayerControlsProps {
     enhancementStatus?: string;
     /** Segments the room skips (or could skip), drawn on the seek bar. */
     sponsorSegments?: SponsorSegment[];
+    /** Preview thumbnails shown while hovering the seek bar. */
+    storyboard?: Storyboard;
 }
 
 export function PlayerControls({
@@ -80,8 +83,18 @@ export function PlayerControls({
     onEnhancementModeChange,
     enhancementStatus,
     sponsorSegments = [],
+    storyboard,
 }: PlayerControlsProps) {
     const enhancementSelectId = useId();
+    // Where on the seek bar the pointer is, as a fraction, or null when away.
+    const [hoverFraction, setHoverFraction] = useState<number | null>(null);
+    const progressRef = useRef<HTMLDivElement>(null);
+
+    const updateHover = (clientX: number) => {
+        const rect = progressRef.current?.getBoundingClientRect();
+        if (!rect || rect.width === 0) return;
+        setHoverFraction(Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)));
+    };
 
     const formatTime = (seconds: number) => {
         if (!seconds || isNaN(seconds)) return '0:00';
@@ -113,7 +126,41 @@ export function PlayerControls({
             <div className="relative px-4 pb-4 pt-12">
                 {/* Progress Bar */}
                 {!isLive && (
-                    <div className="group/progress relative h-1 w-full mb-3 cursor-pointer">
+                    <div
+                        ref={progressRef}
+                        className="group/progress relative h-1 w-full mb-3 cursor-pointer"
+                        onPointerMove={(e) => updateHover(e.clientX)}
+                        onPointerLeave={() => setHoverFraction(null)}
+                    >
+                        {/* Hover preview: the storyboard frame and time at the pointer */}
+                        {hoverFraction !== null && displayDuration > 0 && (() => {
+                            const hoverTime = (seekableForDVR?.start ?? 0) + hoverFraction * displayDuration;
+                            const frame = storyboard ? storyboardFrame(storyboard, hoverTime) : null;
+                            return (
+                                <div
+                                    data-testid="seek-preview"
+                                    className="absolute bottom-4 -translate-x-1/2 flex flex-col items-center gap-1 pointer-events-none"
+                                    style={{ left: `${hoverFraction * 100}%` }}
+                                >
+                                    {frame && (
+                                        <div
+                                            data-testid="seek-preview-frame"
+                                            className="rounded-md border border-white/20 shadow-xl bg-black"
+                                            style={{
+                                                width: frame.width,
+                                                height: frame.height,
+                                                backgroundImage: `url("${frame.url}")`,
+                                                backgroundPosition: `-${frame.x}px -${frame.y}px`,
+                                                backgroundRepeat: 'no-repeat',
+                                            }}
+                                        />
+                                    )}
+                                    <span className="px-1.5 py-0.5 rounded bg-black/80 text-[11px] text-white tabular-nums">
+                                        {formatTime(hoverTime - (seekableForDVR?.start ?? 0))}
+                                    </span>
+                                </div>
+                            );
+                        })()}
                         {/* Track Background */}
                         <div className="absolute inset-0 bg-white/20 rounded-full overflow-hidden">
                             {/* Progress Fill */}

@@ -4,13 +4,17 @@ import { useRef, useEffect, useCallback, useState } from 'react';
 
 import { startPlayback, type PlaybackStart } from '@/lib/playback';
 import { latencyAwareAbrFactory } from '@/lib/abr';
+import { readOpeningEstimate, rememberBandwidth } from '@/lib/bandwidth-memory';
 import {
     ABR_CACHE_LOAD_THRESHOLD_MS,
     SHAKA_BUFFER_GOAL_SECONDS,
     SHAKA_BUFFER_BEHIND_SECONDS,
     SHAKA_REBUFFER_GOAL_SECONDS,
-    SHAKA_INITIAL_BANDWIDTH_ESTIMATE,
     SHAKA_SWITCH_INTERVAL_SECONDS,
+    SHAKA_ABR_FAST_HALF_LIFE,
+    SHAKA_ABR_SLOW_HALF_LIFE,
+    BANDWIDTH_MEMORY_SAVE_INTERVAL_MS,
+    BANDWIDTH_MEMORY_FIRST_SAVE_SECONDS,
     SHAKA_SEGMENT_RETRIES,
     SHAKA_RETRY_BASE_DELAY_MS,
     SHAKA_REQUEST_TIMEOUT_MS,
@@ -56,6 +60,8 @@ export interface UseShakaPlayerOptions {
     autoPlay?: boolean;
     initialTime?: number;
     onError?: (error: string) => void;
+    /** The CDN refused the stream URLs (403/410): they need re-resolving. */
+    onSourceExpired?: () => void;
     onLoadingChange?: (isLoading: boolean) => void;
     onBufferingChange?: (isBuffering: boolean) => void;
     /** How autoplay actually went; see `lib/playback`. */
@@ -137,12 +143,22 @@ function describeShakaError(error: unknown): string {
     return parts.join(' ');
 }
 
+/** Shaka's BAD_HTTP_STATUS error, with the status in `data[1]`. */
+const SHAKA_BAD_HTTP_STATUS = 1001;
+const EXPIRED_SOURCE_STATUSES = new Set([403, 410]);
+
+function isExpiredSourceError(detail: ShakaErrorDetail | undefined): boolean {
+    if (!detail || detail.code !== SHAKA_BAD_HTTP_STATUS || !Array.isArray(detail.data)) return false;
+    return EXPIRED_SOURCE_STATUSES.has(Number(detail.data[1]));
+}
+
 interface ShakaPlayerInstance {
     attach(video: HTMLMediaElement): Promise<void>;
     load(manifestUri: string, startTime?: number): Promise<void>;
     destroy(): Promise<void>;
     configure(config: Record<string, unknown>): void;
     getVariantTracks(): ShakaVariantTrack[];
+    getStats(): { estimatedBandwidth: number };
     selectVariantTrack(track: ShakaVariantTrack, clearBuffer?: boolean): void;
     addEventListener(type: string, listener: (event: Event) => void): void;
     removeEventListener(type: string, listener: (event: Event) => void): void;
@@ -172,6 +188,7 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
 
         let cancelled = false;
         let player: ShakaPlayerInstance | null = null;
+        let onProgress: (() => void) | undefined;
 
         const setLoading = (loading: boolean) => {
             if (cancelled) return;
@@ -186,11 +203,20 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
             callbackRefs.current.onBufferingChange?.(buffering);
         };
 
+        let expiryReported = false;
         const onErrorEvent = (event: Event) => {
             const shakaEvent = event as Event & ShakaErrorEvent;
             const detail = shakaEvent.detail ?? shakaEvent;
             console.error('[ShakaPlayer] Playback error:', describeShakaError(detail));
             if (cancelled) return;
+            // A signed stream URL the CDN now refuses is not a playback
+            // failure to show; it is a stale source to replace. One report
+            // per load: the re-resolve swaps the manifest and remounts.
+            if (isExpiredSourceError(detail) && callbackRefs.current.onSourceExpired && !expiryReported) {
+                expiryReported = true;
+                callbackRefs.current.onSourceExpired();
+                return;
+            }
             setLoading(false);
             callbackRefs.current.onError?.(
                 `Playback failed (${describeShakaError(detail)})`
@@ -266,10 +292,11 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
                 // wait for each response's headers; see lib/abr.ts.
                 abrFactory: latencyAwareAbrFactory(shaka),
                 abr: {
-                    // Start from a conservative guess and let measurements
-                    // raise it. Shaka's default opens on the highest rendition,
+                    // Open on what this connection managed last time, or a
+                    // conservative guess, and let measurements take over.
+                    // Shaka's own default opens on the highest rendition,
                     // which stalls immediately on a long-haul link.
-                    defaultBandwidthEstimate: SHAKA_INITIAL_BANDWIDTH_ESTIMATE,
+                    defaultBandwidthEstimate: readOpeningEstimate(),
                     // Chrome's navigator.connection.downlink is a coarse guess
                     // capped at 10 Mbps. With this on, Shaka takes it over the
                     // estimate above and throws away every measurement each
@@ -277,6 +304,10 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
                     useNetworkInformation: false,
                     switchInterval: SHAKA_SWITCH_INTERVAL_SECONDS,
                     cacheLoadThreshold: ABR_CACHE_LOAD_THRESHOLD_MS,
+                    advanced: {
+                        fastHalfLife: SHAKA_ABR_FAST_HALF_LIFE,
+                        slowHalfLife: SHAKA_ABR_SLOW_HALF_LIFE,
+                    },
                 },
                 // The player adapts within one codec family, so prefer the
                 // one that carries the same picture in the fewest bits.
@@ -287,6 +318,21 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
             instance.addEventListener('buffering', onBuffering);
             instance.addEventListener('trackschanged', onTracksChanged);
             instance.addEventListener('adaptation', onTracksChanged);
+            // Keep what the connection is managing, for the next load: once
+            // a little has played, then every so often while it does.
+            let lastSavedAt = 0;
+            onProgress = () => {
+                if (cancelled || video.paused) return;
+                const now = Date.now();
+                const first = lastSavedAt === 0 && video.currentTime >= BANDWIDTH_MEMORY_FIRST_SAVE_SECONDS;
+                if (!first && now - lastSavedAt < BANDWIDTH_MEMORY_SAVE_INTERVAL_MS) return;
+                const estimate = instance.getStats().estimatedBandwidth;
+                if (estimate > 0) {
+                    rememberBandwidth(estimate, now);
+                    lastSavedAt = now;
+                }
+            };
+            video.addEventListener('timeupdate', onProgress);
 
             setLoading(true);
             try {
@@ -322,6 +368,7 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
 
         return () => {
             cancelled = true;
+            if (onProgress) video.removeEventListener('timeupdate', onProgress);
             const active = playerRef.current;
             playerRef.current = null;
             if (active) {
