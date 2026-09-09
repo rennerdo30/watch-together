@@ -205,7 +205,7 @@ def opted_in(monkeypatch, tmp_path):
         return str(cookie_file) if email == MEMBER else None
 
     monkeypatch.setattr(watch_history, "load_user_settings", settings)
-    monkeypatch.setattr(watch_history, "_ensure_cookie_file", cookie_path)
+    monkeypatch.setattr(watch_history, "ensure_cookie_file", cookie_path)
     monkeypatch.setattr(watch_history, "get_cookie_header", lambda email, url: "SID=secret")
 
 

@@ -41,7 +41,7 @@ from core.config import (
     YOUTUBE_HISTORY_SEEK_THRESHOLD_SECONDS,
     YOUTUBE_HISTORY_TIMEOUT_SECONDS,
 )
-from services.resolver import _ensure_cookie_file, build_ydl_opts
+from services.resolver import ensure_cookie_file, build_ydl_opts
 from services.sponsorblock import youtube_video_id
 from services.user_cookies import get_cookie_header
 from services.user_settings import load_user_settings
@@ -334,7 +334,7 @@ class HistoryReporter:
             video_key = self._video_key(state)
             if not video_key or video.get("is_live") or not youtube_video_id(video_key):
                 return
-            cookie_path = await _ensure_cookie_file(user_email)
+            cookie_path = await ensure_cookie_file(user_email)
             if not cookie_path:
                 logger.info("History: %s opted in but has no cookies; nothing reported", user_email)
                 return

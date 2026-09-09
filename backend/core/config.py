@@ -89,6 +89,17 @@ RATE_LIMIT_STORE_MAX_KEYS = 1000  # Counters kept before stale ones are pruned
 # hours afterwards.
 QUALITY_LADDER_SIZE = 8
 
+# Stream URL -> resolving member, kept in memory so the proxy can attach the
+# right cookies without a database read per segment. Each video registers
+# its whole quality ladder, so this covers a few hundred videos.
+STREAM_OWNER_MAX_ENTRIES = 20_000
+
+# Seek-bar preview thumbnails. yt-dlp lists YouTube's storyboards as
+# `sb<n>` formats at a few sizes; the sheet closest to this frame width is
+# sent to the client (the smallest sheets are too blurry, the largest are
+# several megabytes each).
+STORYBOARD_PREFERRED_FRAME_WIDTH = 320
+
 # DASH manifest generation
 MANIFEST_PROBE_BYTES = 64 * 1024  # Prefix read to locate ftyp/moov/sidx
 # Ceiling for a re-probe once a `sidx` header states its real size. A segment

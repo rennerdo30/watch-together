@@ -458,3 +458,47 @@ class TestResolveServesFromCache:
         client.get("/api/resolve",
                    params={"url": "https://youtu.be/resolve-cache-b", "user": "a@example.com"})
         assert len(captured_options) > before
+
+
+class TestStoryboard:
+    """Seek-bar previews come from yt-dlp's storyboard formats."""
+
+    @staticmethod
+    def _sb(i, width, height, rows, cols, sheets, sheet_seconds):
+        return {
+            "format_id": f"sb{i}", "format_note": "storyboard", "ext": "mhtml",
+            "vcodec": "none", "acodec": "none", "width": width, "height": height,
+            "rows": rows, "columns": cols,
+            "fragments": [{"url": f"https://i.ytimg.com/sb/{i}/M{j}.jpg", "duration": sheet_seconds}
+                          for j in range(sheets)],
+        }
+
+    def test_the_sheet_nearest_the_preferred_width_is_chosen(self):
+        from services.resolver import extract_storyboard
+        info = {"formats": [
+            self._sb(0, 48, 27, 10, 10, 1, 600),
+            self._sb(1, 160, 90, 5, 5, 3, 250),
+            self._sb(2, 320, 180, 5, 5, 3, 250),
+            {"format_id": "137", "height": 1080, "vcodec": "avc1", "acodec": "none"},
+        ]}
+        board = extract_storyboard(info)
+        assert board == {
+            "width": 320, "height": 180, "rows": 5, "columns": 5,
+            "frame_duration": 10.0,
+            "sheets": [f"https://i.ytimg.com/sb/2/M{j}.jpg" for j in range(3)],
+        }
+
+    def test_no_storyboard_means_no_field(self):
+        from services.resolver import extract_storyboard
+        assert extract_storyboard({"formats": [{"format_id": "137"}]}) is None
+        assert extract_storyboard({}) is None
+        # Malformed entries are skipped, not fatal.
+        broken = self._sb(0, 160, 90, 5, 5, 2, 0)
+        assert extract_storyboard({"formats": [broken]}) is None
+
+    def test_resolve_response_carries_the_storyboard(self):
+        from main import _build_resolve_response
+        info = {"title": "T", "duration": 30, "formats": [self._sb(0, 320, 180, 2, 2, 1, 30)]}
+        response = _build_resolve_response("https://youtu.be/x", info, {"url": "https://cdn/v", "type": "dash"})
+        assert response["storyboard"]["frame_duration"] == 7.5
+        assert "storyboard" not in _build_resolve_response("https://youtu.be/x", {"formats": []}, {"url": "u"})

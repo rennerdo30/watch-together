@@ -38,6 +38,10 @@ logger = logging.getLogger(__name__)
 # so re-resolving the same video does not re-probe every representation.
 _index_cache: Dict[str, Tuple[Mp4Index, float]] = {}
 _index_lock = asyncio.Lock()
+# One probe in flight per representation: a room full of members asking for
+# the same manifest at once otherwise probes every rendition once each.
+_probe_locks: Dict[str, asyncio.Lock] = {}
+_probe_users: Dict[str, int] = {}
 
 
 class ManifestError(Exception):
@@ -65,6 +69,24 @@ async def probe_index(
 ) -> Optional[Mp4Index]:
     """Find the init and index byte ranges for one representation."""
     key = stream_identity(url)
+    probe_lock = _probe_locks.setdefault(key, asyncio.Lock())
+    _probe_users[key] = _probe_users.get(key, 0) + 1
+    try:
+        async with probe_lock:
+            return await _probe_index_locked(client, url, headers, key)
+    finally:
+        _probe_users[key] -= 1
+        if _probe_users[key] == 0:
+            del _probe_users[key]
+            _probe_locks.pop(key, None)
+
+
+async def _probe_index_locked(
+    client: httpx.AsyncClient,
+    url: str,
+    headers: Optional[dict],
+    key: str,
+) -> Optional[Mp4Index]:
     now = time.time()
 
     async with _index_lock:
@@ -286,6 +308,13 @@ async def build_manifest_for_formats(
 
     video_reps = [r for r in video_results if r]
     audio_reps = [r for r in audio_results if r]
+    lost = (len(video_formats) - len(video_reps)) + (len(audio_formats) - len(audio_reps))
+    if lost:
+        # Visible as "quality selection does nothing": the ladder shrank.
+        logger.warning(
+            f"Manifest built with {len(video_reps)}/{len(video_formats)} video and "
+            f"{len(audio_reps)}/{len(audio_formats)} audio representations; "
+            f"{lost} could not be probed")
 
     # Losing every representation of one kind is a failure, not a manifest.
     # Audio segments are longer than video ones, so a long VOD's audio index

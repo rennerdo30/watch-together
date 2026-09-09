@@ -412,17 +412,56 @@ class ConnectionManager:
 
             await self._save_room_state(room_id)
 
+    @staticmethod
+    def _take_existing(queue: list, video_data: dict) -> Optional[dict]:
+        """Remove and return the queue's entry for this video, if it has one.
+
+        A video is identified by its original URL. Keeping one entry per
+        video is what lets "play now" and "queue" be repeated without the
+        queue filling up with copies that outlive the one that was watched.
+        """
+        url = video_data.get("original_url")
+        if not url:
+            return None
+        for i, item in enumerate(queue):
+            if item.get("original_url") == url:
+                return queue.pop(i)
+        return None
+
     async def add_to_queue(self, room_id: str, video_data: dict):
         if room_id in self.room_states:
-            self.room_states[room_id]["queue"].append(video_data)
+            state = self.room_states[room_id]
+            queue = state["queue"]
+            existing = self._take_existing(queue, video_data)
+            if existing is not None:
+                # Re-queued: the one entry moves to the back and keeps its pin.
+                video_data = {**existing, **video_data, "pinned": existing.get("pinned", False)}
+            queue.append(video_data)
+            self._resync_playing_index(state)
             await self._save_room_state(room_id)
-            return self.room_states[room_id]["queue"]
+            return queue
         return []
 
+    @staticmethod
+    def _resync_playing_index(state: dict) -> None:
+        """Point `playing_index` at the entry of the video that is playing."""
+        current = (state.get("video_data") or {}).get("original_url")
+        if not current:
+            state["playing_index"] = -1
+            return
+        for i, item in enumerate(state["queue"]):
+            if item.get("original_url") == current:
+                state["playing_index"] = i
+                return
+        state["playing_index"] = -1
+
     async def prepend_to_queue(self, room_id: str, video_data: dict):
-        """Adds a video to the front of the queue."""
+        """Play a video now: it moves to the front of the queue and starts."""
         if room_id in self.room_states:
             state = self.room_states[room_id]
+            existing = self._take_existing(state["queue"], video_data)
+            if existing is not None:
+                video_data = {**existing, **video_data, "pinned": existing.get("pinned", False)}
             state["queue"].insert(0, video_data)
             state["playing_index"] = 0
             state["video_data"] = video_data
@@ -476,12 +515,30 @@ class ConnectionManager:
             return queue
         return []
 
-    async def next_video(self, room_id: str):
-        """Called when video ends - remove finished video (unless pinned), play next if available."""
-        if room_id in self.room_states:
+    async def next_video(self, room_id: str, ended_url: Optional[str] = None):
+        """A video finished: drop it from the queue (unless pinned) and play the next.
+
+        Every member's player fires `ended` on its own, so this is called
+        once per member for one finished video. Only the first call may act:
+        the caller says which video ended, and once the room has moved on
+        that URL no longer matches, so the stragglers are ignored instead of
+        each popping one more video off the queue. A call without a URL (the
+        "Play next" button) always advances.
+
+        Returns (next_video, queue, playing_index, advanced).
+        """
+        if room_id not in self.room_states:
+            return None, [], -1, False
+        async with self._get_room_lock(room_id):
             state = self.room_states[room_id]
             queue = state["queue"]
             playing_index = state.get("playing_index", -1)
+            current = state.get("video_data") or {}
+
+            if ended_url is not None and current.get("original_url") != ended_url:
+                logger.info(f"Room {room_id}: ignoring video_ended for {ended_url!r}, "
+                            f"playing {current.get('original_url')!r}")
+                return current or None, queue, playing_index, False
 
             # Check if the finished video is pinned
             was_pinned = False
@@ -491,13 +548,17 @@ class ConnectionManager:
                     # Remove the finished video from queue only if not pinned
                     queue.pop(playing_index)
 
-            # Calculate next index
+            # Calculate next index. A pinned video stays in the queue but is
+            # not replayed: reaching the end of the queue stops the room.
             if was_pinned:
-                # If pinned, move to next item
-                next_index = playing_index + 1 if playing_index + 1 < len(queue) else 0
+                next_index = playing_index + 1 if playing_index + 1 < len(queue) else -1
+            elif not queue:
+                next_index = -1
             else:
-                # If removed, next item is now at same index
-                next_index = min(playing_index, len(queue) - 1) if queue else -1
+                # Removed, so the next item now sits at the same index. When
+                # the finished video was last, everything left is unwatched
+                # and the queue starts over from the front.
+                next_index = playing_index if playing_index < len(queue) else 0
 
             if queue and next_index >= 0:
                 next_v = queue[next_index]
@@ -507,7 +568,7 @@ class ConnectionManager:
                 state["is_playing"] = True
                 state["playing_index"] = next_index
                 await self._save_room_state(room_id)
-                return next_v, queue, next_index
+                return next_v, queue, next_index, True
             else:
                 # No more videos in queue
                 state["video_data"] = None
@@ -515,8 +576,7 @@ class ConnectionManager:
                 state["playing_index"] = -1
                 state["last_sync_time"] = time.time()
                 await self._save_room_state(room_id)
-                return None, queue, -1
-        return None, [], -1
+                return None, queue, -1, True
 
     async def toggle_pin(self, room_id: str, index: int):
         """Toggle the pinned status of a queue item."""
