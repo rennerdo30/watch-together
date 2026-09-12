@@ -116,6 +116,7 @@ export function CustomPlayer({
     // completed after the window. Matching the landing position against the
     // commanded targets can.
     const pendingProgrammaticSeeksRef = useRef<{ time: number; at: number }[]>([]);
+    const pendingProgrammaticPauseRef = useRef(false);
 
     // Adaptive streams play through one media element, fed by the generated
     // manifest, so the browser muxes audio and video against a single clock.
@@ -231,6 +232,10 @@ export function CustomPlayer({
         };
         const handleVideoPause = () => {
             setIsPlaying(false);
+            if (pendingProgrammaticPauseRef.current) {
+                pendingProgrammaticPauseRef.current = false;
+                return;
+            }
             if (!video.ended && video.readyState >= 2) onPause?.();
         };
         const handleVideoSeeked = () => {
@@ -301,7 +306,12 @@ export function CustomPlayer({
                     const stillForcedMute = outcome === 'started' && video.muted && !isMuted;
                     setPlaybackGate(stillForcedMute ? 'muted-to-start' : outcome);
                 },
-                pause: () => isLive ? undefined : videoRef.current?.pause(),
+                pause: () => {
+                    const video = videoRef.current;
+                    if (isLive || !video || video.paused) return;
+                    pendingProgrammaticPauseRef.current = true;
+                    video.pause();
+                },
                 currentTime: (time?: number) => {
                     if (time !== undefined && videoRef.current) {
                         pendingProgrammaticSeeksRef.current.push(
