@@ -156,6 +156,7 @@ class TestProxyStillAnswersAWellFormed206:
 
     @pytest.fixture
     def client(self, origin, monkeypatch):
+        monkeypatch.setattr("main.prefetch_ahead", lambda *args, **kwargs: None)
         import services.upstream as upstream
         from main import app
 
@@ -174,6 +175,27 @@ class TestProxyStillAnswersAWellFormed206:
     def media_url(self, port):
         return (f"http://rr3---sn-test.googlevideo.com:{port}/videoplayback"
                 f"?itag=137&clen={len(self.PAYLOAD)}&lmt=555&mime=video%2Fmp4")
+
+    def test_prefetch_bytes_serve_multiple_player_ranges_without_refetching(self, client, origin):
+        import asyncio
+        import httpx
+        from services.prefetcher import prefetch_initial_segments
+        port, seen = origin
+        url = self.media_url(port)
+
+        async def warm():
+            async with httpx.AsyncClient() as upstream_client:
+                await prefetch_initial_segments(url, None, upstream_client)
+
+        asyncio.run(warm())
+        assert len(seen) == 1
+        for start, end in [(0, 99), (100, 999), (2048, 4095)]:
+            response = client.get('/api/proxy', params={'url': url},
+                                  headers={'Range': f'bytes={start}-{end}'})
+            assert response.status_code == 206
+            assert response.content == self.PAYLOAD[start:end + 1]
+            assert response.headers['content-range'] == f'bytes {start}-{end}/{len(self.PAYLOAD)}'
+        assert len(seen) == 1, 'cached subranges must not fetch the origin again'
 
     def test_the_range_travels_in_the_query_not_the_header(self, client, origin):
         port, seen = origin

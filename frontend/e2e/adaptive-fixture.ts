@@ -123,11 +123,15 @@ export async function stubAdaptiveStream(
   await page.route('**/api/proxy**', (route) => {
     const target = new URL(route.request().url()).searchParams.get('url') ?? '';
     const isAudio = target.includes('audio');
+    const bytes = isAudio ? audio : video;
+    const range = /^bytes=(\d+)-(\d*)$/.exec(route.request().headers().range ?? '');
+    const start = range ? Number(range[1]) : 0;
+    const end = range?.[2] ? Math.min(Number(range[2]), bytes.length - 1) : bytes.length - 1;
     route.fulfill({
-      status: 200,
+      status: range ? 206 : 200,
       contentType: isAudio ? 'audio/mp4' : 'video/mp4',
-      headers: { 'Accept-Ranges': 'bytes' },
-      body: isAudio ? audio : video,
+      headers: { 'Accept-Ranges': 'bytes', ...(range ? { 'Content-Range': `bytes ${start}-${end}/${bytes.length}` } : {}) },
+      body: bytes.subarray(start, end + 1),
     });
   });
 

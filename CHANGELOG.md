@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Performance and playback reliability
+
+- Reuse cached MP4 byte spans across different player range requests. Warm
+  queued videos and bounded blocks ahead of DASH playback, using the stream
+  owner's cookies and Googlevideo's fast range path. HLS prefetch runs in
+  parallel and refills evicted segments. DNS validation runs off the event loop.
+- Coalesce simultaneous resolves and extract only the selected video from
+  playlist links. Room members use the server's refreshed queue entry without
+  repeating resolution. Queue metadata updates preserve signed URL expiry.
+- Start the room clock when media actually plays, keeping initial loading out
+  of playback time. Process end events even beside heartbeats, publish removal
+  before resolving the next entry, and clear the player when the queue ends.
+- Restore missing Chrome cookie-sync alarms whenever the worker starts without
+  postponing existing deadlines. Refreshed live formats receive a new cache age.
+
 ### Added
 
 - **Admin Panel** at `/admin`: live rooms with connected members and a

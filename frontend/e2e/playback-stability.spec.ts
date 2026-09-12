@@ -58,7 +58,12 @@ test('pausing and resuming does not rebuild the player', async ({ page }) => {
   for (const action of ['pause', 'play', 'pause'] as const) {
     await media.evaluate((v: HTMLVideoElement, a) => {
       if (a === 'pause') v.pause();
-      else void v.play().catch(() => undefined);
+      else {
+        // This fixture lasts six seconds. Rewind before the resumed leg so
+        // the final assertion tests stability, not natural queue completion.
+        v.currentTime = 0;
+        void v.play().catch(() => undefined);
+      }
     }, action);
     await page.waitForTimeout(SETTLE_MS);
   }

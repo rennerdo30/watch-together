@@ -44,7 +44,7 @@ from services.cache import (
 )
 from services.prefetcher import (
     get_or_create_session, notify_segment_for_url,
-    prefetch_initial_segments, prefetch_cleanup_task,
+    start_initial_prefetch, prefetch_cleanup_task, prefetch_ahead, shutdown_prefetch,
 )
 from services.gvs_range import rewrite_range
 from services.upstream import (
@@ -58,7 +58,7 @@ from services.metrics import (
     OUTCOME_CLIENT_ABORTED, OUTCOME_TRUNCATED,
 )
 from services.database import init_database, cache_format, get_cached_format
-from services.resolver import refresh_video_url, _extract_stream_url, extract_storyboard, ensure_cookie_file
+from services.resolver import refresh_video_url, _extract_stream_url, _build_resolve_response, ensure_cookie_file
 from api.routes.cookies import router as cookies_router
 from api.routes.rooms import router as rooms_router
 from api.routes.tokens import router as tokens_router
@@ -165,7 +165,7 @@ async def sync_heartbeat_task():
         await asyncio.sleep(5)
         try:
             for room_id, state in list(manager.room_states.items()):
-                if state.get("is_playing") and manager.active_connections.get(room_id):
+                if state.get("is_playing") and not state.get("startup_pending") and manager.active_connections.get(room_id):
                     # H8: Acquire room lock to prevent reading state while it's being modified
                     async with manager._get_room_lock(room_id):
                         sync_payload = manager.get_sync_payload(room_id)
@@ -228,6 +228,7 @@ async def lifespan(app: FastAPI):
 
         if tasks:
             logger.info("All background tasks shut down cleanly")
+        await shutdown_prefetch()
         await sponsor_skipper.client.aclose()
         await history_reporter.aclose()
 
@@ -317,33 +318,6 @@ async def proxy_metrics_endpoint(
     return await proxy_metrics.snapshot(sample_limit=samples)
 
 
-def _build_resolve_response(url: str, info: dict, stream_info: dict) -> dict:
-    """Shape a resolved video for the client."""
-    response = {
-        "original_url": url,
-        "stream_url": stream_info["url"],
-        "title": info.get("title", "Unknown Title"),
-        "is_live": info.get("is_live", False),
-        "thumbnail": info.get("thumbnail"),
-        "backend_engine": "yt-dlp",
-        "duration": info.get("duration"),
-        "quality": f"{stream_info.get('height', '?')}p" if stream_info.get("height") else "auto",
-        "has_audio": stream_info.get("has_audio", True),
-        "stream_type": stream_info.get("type", "unknown"),
-    }
-    storyboard = extract_storyboard(info)
-    if storyboard:
-        response["storyboard"] = storyboard
-
-    if stream_info.get("type") == "dash":
-        response["video_url"] = stream_info.get("video_url")
-        response["audio_url"] = stream_info.get("audio_url")
-        response["available_qualities"] = stream_info.get("available_qualities", [])
-        response["audio_options"] = stream_info.get("audio_options", [])
-
-    return response
-
-
 def _extract_with_options(url: str, ydl_opts: dict) -> dict:
     """Run yt-dlp for one option set. Blocking; call in a worker thread."""
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -366,7 +340,25 @@ async def resolve_stream(
     return await resolve_video(request, url, user_agent)
 
 
+_resolve_tasks: dict[tuple, asyncio.Task] = {}
+
+
 async def resolve_video(request: Request, url: str, user_agent: str = None) -> dict:
+    """Share expensive extraction among concurrent requests by the same user."""
+    key = (url, get_user_from_request(request), user_agent)
+    task = _resolve_tasks.get(key)
+    if task is None:
+        task = asyncio.create_task(_resolve_video(request, url, user_agent))
+        _resolve_tasks[key] = task
+        def finished(done: asyncio.Task) -> None:
+            _resolve_tasks.pop(key, None)
+            if not done.cancelled():
+                done.exception()  # Retrieve failures even if every caller disconnected.
+        task.add_done_callback(finished)
+    return await asyncio.shield(task)
+
+
+async def _resolve_video(request: Request, url: str, user_agent: str = None) -> dict:
     """Resolve a URL to playable streams and cache the result.
 
     Shared by `/api/resolve` and `/api/dash-manifest`: the manifest cannot
@@ -407,6 +399,7 @@ async def resolve_video(request: Request, url: str, user_agent: str = None) -> d
             'Accept-Language': 'en-US,en;q=0.9',
         },
         'skip_download': True,
+        'noplaylist': True,
         'ignore_no_formats_error': True,
         'cache_dir': YTDLP_CACHE_DIR,
         # The PO token provider address must be passed explicitly: the bgutil
@@ -669,7 +662,7 @@ async def proxy_stream(request: Request, url: str):
         raise HTTPException(status_code=401, detail="User identity required")
 
     # SSRF protection: validate URL before proxying
-    validate_proxy_url(url)
+    await asyncio.to_thread(validate_proxy_url, url)
 
     # Dynamic referer based on URL domain
     from urllib.parse import urlparse
@@ -728,7 +721,7 @@ async def proxy_stream(request: Request, url: str):
 
             # Initialize prefetch session and parse manifest for segment URLs
             is_audio = is_audio_url(url)
-            session = await get_or_create_session(url, is_audio=is_audio)
+            session = await get_or_create_session(url, is_audio=is_audio, identity=fetch_identity)
             await session.parse_hls_manifest(response.text, url)
 
             return Response(
@@ -776,7 +769,7 @@ async def proxy_stream(request: Request, url: str):
                 outgoing_headers.pop("Range", None)
 
             # Notify prefetcher about this segment request (triggers prefetch of next segments)
-            await notify_segment_for_url(url)
+            await notify_segment_for_url(url, identity=fetch_identity)
 
             # Check memory cache first (fastest). The key spans the whole
             # requested range: a 206 has to answer exactly what was asked
@@ -784,7 +777,11 @@ async def proxy_stream(request: Request, url: str):
             segment_cache_key = get_segment_cache_key(
                 url, range_start, range_end, identity=cache_identity)
             is_audio = is_audio_url(url)
+            if range_header:
+                prefetch_ahead(segment_client, url, range_end, fetch_identity)
             mem_result = await memory_cache.get(segment_cache_key)
+            if mem_result is None and range_header and re.fullmatch(r'bytes=\d+-\d*', range_header):
+                mem_result = await memory_cache.get_range(url, range_start, range_end, cache_identity)
             if mem_result:
                 data, content_type, cached_content_range = mem_result
                 logger.info(f"MEMORY HIT: {url[:60]}... ({len(data)} bytes)")
@@ -1163,7 +1160,12 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 continue
             payload = message.get("payload", {})
             
-            if msg_type == "play":
+            if msg_type == "playback_ready":
+                if await manager.playback_ready(room_id, payload.get("original_url")):
+                    sponsor_skipper.rearm(room_id)
+                    history_reporter.rearm(room_id)
+
+            elif msg_type == "play":
                 await manager.update_state(room_id, {"is_playing": True, "timestamp": payload.get("timestamp", 0)})
                 await manager.broadcast({"type": "play", "payload": payload}, room_id, exclude=websocket)
                 sponsor_skipper.rearm(room_id)
@@ -1188,17 +1190,17 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     if video_data.get("original_url"):
                         stream_owner.sanitize_client_video(
                             video_data, await get_cached_format(video_data["original_url"]))
-                        await cache_format(video_data["original_url"], video_data)
+                        await cache_format(video_data["original_url"], video_data, preserve_expiry=True)
 
                     # Trigger initial prefetch for faster startup
                     video_url = video_data.get("video_url") or video_data.get("stream_url")
                     audio_url = video_data.get("audio_url")
                     if video_url:
-                        asyncio.create_task(prefetch_initial_segments(
+                        start_initial_prefetch(
                             video_url,
                             audio_url,
                             await get_proxy_client()
-                        ))
+                        )
 
                 next_v, queue, playing_index = await manager.prepend_to_queue(room_id, video_data)
                 if next_v:
@@ -1214,7 +1216,10 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     if video_data.get("original_url"):
                         stream_owner.sanitize_client_video(
                             video_data, await get_cached_format(video_data["original_url"]))
-                        await cache_format(video_data["original_url"], video_data)
+                        await cache_format(video_data["original_url"], video_data, preserve_expiry=True)
+                if video_data:
+                    start_initial_prefetch(video_data.get("video_url") or video_data.get("stream_url"),
+                                           video_data.get("audio_url"), await get_proxy_client())
                 queue = await manager.add_to_queue(room_id, video_data)
                 state = manager.room_states.get(room_id, {})
                 await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": state.get("playing_index", -1)}}, room_id)
@@ -1251,13 +1256,14 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 next_v, queue, playing_index, advanced = await manager.next_video(
                     room_id, ended_url if isinstance(ended_url, str) else None)
                 if advanced:
+                    await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": playing_index}}, room_id)
                     if next_v:
                         next_v = await refresh_video_url(next_v, user_email=user_email)
+                    if manager.room_states.get(room_id, {}).get("video_data") is next_v:
                         await manager.broadcast({"type": "set_video", "payload": {"video_data": next_v}}, room_id)
-                    await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": playing_index}}, room_id)
-                    sponsor_skipper.video_changed(room_id)
-                    history_reporter.video_changed(room_id)
-                
+                        sponsor_skipper.video_changed(room_id)
+                        history_reporter.video_changed(room_id)
+
             elif msg_type == "promote":
                 target = payload.get("target_email")
                 role = payload.get("role")

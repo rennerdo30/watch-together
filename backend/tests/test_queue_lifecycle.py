@@ -137,6 +137,8 @@ def test_every_member_reporting_the_end_advances_the_room_once(client):
         update = _drain_until(ws_b, "queue_update")
         assert [v["title"] for v in update["queue"]] == ["Video 2", "Video 3"]
 
+        _drain_until(ws_b, "set_video")
+
         # Nothing else advanced: a ping answers before any further queue update.
         ws_b.send_json({"type": "ping", "payload": {"client_time": 1}})
         message = ws_b.receive_json()

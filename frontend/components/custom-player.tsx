@@ -21,6 +21,7 @@ interface CustomPlayerProps {
     isLive?: boolean;
     initialTime?: number;
     onPlay?: () => void;
+    onPlaying?: () => void;
     onPause?: () => void;
     onSeeked?: (time: number) => void;
     onEnd?: () => void;
@@ -82,6 +83,7 @@ export function CustomPlayer({
     isLive,
     initialTime = 0,
     onPlay,
+    onPlaying,
     onPause,
     onSeeked,
     onEnd,
@@ -106,7 +108,6 @@ export function CustomPlayer({
         setMediaElement(element);
     }, []);
     const containerRef = useRef<HTMLDivElement>(null);
-    const isAutoPlayingRef = useRef(false);
     // Seeks commanded through the player API (sync corrections, server
     // broadcasts) rather than by this viewer. `seeked` fires only when the
     // seek completes — after buffering, which can be seconds — so a fixed
@@ -228,11 +229,11 @@ export function CustomPlayer({
 
         const handleVideoPlay = () => {
             setIsPlaying(true);
-            if (!isAutoPlayingRef.current) onPlay?.();
+            onPlay?.();
         };
         const handleVideoPause = () => {
             setIsPlaying(false);
-            onPause?.();
+            if (!video.ended && video.readyState >= 2) onPause?.();
         };
         const handleVideoSeeked = () => {
             const landed = video.currentTime;
@@ -248,7 +249,7 @@ export function CustomPlayer({
                 pendingProgrammaticSeeksRef.current.splice(index, 1);
                 return;
             }
-            if (!isAutoPlayingRef.current) onSeeked?.(landed);
+            onSeeked?.(landed);
         };
         const handleVideoEnded = () => {
             setIsPlaying(false);
@@ -267,6 +268,8 @@ export function CustomPlayer({
             }
         };
 
+        const handlePlaying = () => onPlaying?.();
+        video.addEventListener('playing', handlePlaying);
         video.addEventListener('play', handleVideoPlay);
         video.addEventListener('pause', handleVideoPause);
         video.addEventListener('seeked', handleVideoSeeked);
@@ -274,13 +277,14 @@ export function CustomPlayer({
         video.addEventListener('timeupdate', handleVideoTimeUpdate);
 
         return () => {
+            video.removeEventListener('playing', handlePlaying);
             video.removeEventListener('play', handleVideoPlay);
             video.removeEventListener('pause', handleVideoPause);
             video.removeEventListener('seeked', handleVideoSeeked);
             video.removeEventListener('ended', handleVideoEnded);
             video.removeEventListener('timeupdate', handleVideoTimeUpdate);
         };
-    }, [isLive, onPlay, onPause, onSeeked, onEnd, onTimeUpdate]);
+    }, [isLive, onPlay, onPlaying, onPause, onSeeked, onEnd, onTimeUpdate]);
 
     // === EXPOSE PLAYER API ===
     useEffect(() => {

@@ -561,9 +561,11 @@ async def clear_format_cache() -> int:
         return cursor.rowcount
 
 
-async def cache_format(original_url: str, video_data: Dict[str, Any], ttl_seconds: int = None) -> None:
+async def cache_format(original_url: str, video_data: Dict[str, Any], ttl_seconds: int = None,
+                       *, preserve_expiry: bool = False) -> None:
     """Cache video format with TTL. Default uses FORMAT_CACHE_TTL_SECONDS from config (2 hours).
 
+    Queue metadata writes preserve_expiry so replaying a signed URL does not renew it.
     Live formats default to the much shorter FORMAT_CACHE_LIVE_TTL_SECONDS:
     their playlist URLs carry signed tokens that expire on the CDN's clock,
     and a long-lived cache entry keeps serving the dead URL to every viewer.
@@ -585,8 +587,9 @@ async def cache_format(original_url: str, video_data: Dict[str, Any], ttl_second
             VALUES (?, ?, ?, ?)
             ON CONFLICT(original_url) DO UPDATE SET
                 video_data = excluded.video_data,
-                expires_at = excluded.expires_at
-        """, (original_url, json.dumps(video_data), expires_at, now))
+                expires_at = CASE WHEN ? THEN format_cache.expires_at ELSE excluded.expires_at END,
+                created_at = CASE WHEN ? THEN format_cache.created_at ELSE excluded.created_at END
+        """, (original_url, json.dumps(video_data), expires_at, now, preserve_expiry, preserve_expiry))
         await db.commit()
     
     logger.info(f"Cached format for: {original_url[:60]}... (expires in {ttl_seconds}s)")

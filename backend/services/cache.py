@@ -8,6 +8,7 @@ import shutil
 import asyncio
 import logging
 import json
+import re
 from typing import Dict, Tuple, Optional
 from urllib.parse import urlparse, parse_qs
 import aiofiles
@@ -73,6 +74,34 @@ class MemoryCache:
                 self._hits += 1
                 return (data, ctype, crange)
             self._misses += 1
+        return None
+
+    async def get_range(self, url: str, start: int, end: Optional[int],
+                        identity: Optional[str] = None) -> tuple[bytes, str, str] | None:
+        """Slice an already cached span, preserving resource and cookie identity.
+
+        Prefetch and players request different spans of the same MP4. Reuse
+        the bytes only when the stored Content-Range proves full coverage.
+        Never interpret an open-ended or suffix request as a finite range.
+        """
+        if end is None or start < 0 or end < start:
+            return None
+        async with self._lock:
+            for key, (data, ctype, crange, _) in self._cache.items():
+                match = re.fullmatch(r'bytes (\d+)-(\d+)/(\d+|\*)', crange or '')
+                if not match:
+                    continue
+                first, last = int(match[1]), int(match[2])
+                if len(data) != last - first + 1 or not first <= start <= end <= last:
+                    continue
+                # Compare the URL hash AND the user suffix independently of
+                # the request span (the origin may shorten a range at EOF).
+                expected = get_segment_cache_key(url, 0, None, identity)
+                if key.split('_')[1] != expected.split('_')[1] or key.split('_')[3:] != expected.split('_')[3:]:
+                    continue
+                self._cache.move_to_end(key)
+                self._hits += 1
+                return data[start - first:end - first + 1], ctype, f'bytes {start}-{end}/{match[3]}'
         return None
 
     async def put(self, key: str, data: bytes, content_type: str, is_audio: bool = False,

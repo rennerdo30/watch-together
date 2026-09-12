@@ -323,7 +323,7 @@ class SponsorSkipper:
 
     def _position(self, state: dict) -> float:
         position = float(state.get("timestamp", 0) or 0)
-        if state.get("is_playing"):
+        if state.get("is_playing") and not state.get("startup_pending"):
             position += self._now() - state.get("last_sync_time", self._now())
         return position
 
@@ -437,7 +437,7 @@ class SponsorSkipper:
         try:
             while True:
                 state = self._manager.room_states.get(room_id)
-                if not state or not state.get("is_playing"):
+                if not state or not state.get("is_playing") or state.get("startup_pending"):
                     return
                 video = state.get("video_data") or {}
                 if not video or video.get("is_live"):
@@ -451,7 +451,7 @@ class SponsorSkipper:
                 if wait > 0:
                     await self._sleep(wait)
                     state = self._manager.room_states.get(room_id)
-                    if not state or not state.get("is_playing"):
+                    if not state or not state.get("is_playing") or state.get("startup_pending"):
                         return
                     # A member's seek can reach the state a moment before its
                     # re-arm cancels this task. Skipping then would overwrite
