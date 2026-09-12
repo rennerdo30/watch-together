@@ -57,7 +57,7 @@ export interface RoomSummary {
     queue_size: number;
 }
 
-export async function resolveUrl(url: string): Promise<ResolveResponse> {
+export async function resolveUrl(url: string, options: { refresh?: boolean } = {}): Promise<ResolveResponse> {
     const encodedUrl = encodeURIComponent(url);
     const ua = typeof window !== 'undefined' ? encodeURIComponent(navigator.userAgent) : '';
 
@@ -69,7 +69,8 @@ export async function resolveUrl(url: string): Promise<ResolveResponse> {
         if (mockUser) userParam = `&user=${encodeURIComponent(mockUser)}`;
     }
 
-    const res = await fetch(`${API_BASE_URL}/api/resolve?url=${encodedUrl}&user_agent=${ua}${userParam}`);
+    const refreshParam = options.refresh ? '&refresh=true' : '';
+    const res = await fetch(`${API_BASE_URL}/api/resolve?url=${encodedUrl}&user_agent=${ua}${userParam}${refreshParam}`);
 
     if (!res.ok) {
         const errorData = await res.json().catch(() => ({ detail: 'Unknown error' }));

@@ -438,6 +438,27 @@ class TestResolveServesFromCache:
     "Resolving..." for each of them.
     """
 
+    def test_expired_source_refresh_bypasses_a_fresh_cached_token(self, client, monkeypatch):
+        import main
+        calls = []
+
+        def extract(url, opts):
+            calls.append(url)
+            return {"title": "Live", "is_live": True, "formats": [{
+                "format_id": "live", "vcodec": "avc1", "acodec": "mp4a",
+                "url": f"https://cdn.example.com/live.m3u8?token={len(calls)}",
+                "height": 720,
+            }]}
+
+        monkeypatch.setattr(main, "_extract_with_options", extract)
+        url = "https://www.twitch.tv/refresh-expired-token"
+        first = client.get("/api/resolve", params={"url": url}).json()
+        fresh = client.get("/api/resolve", params={"url": url, "refresh": "true"}).json()
+        assert len(calls) == 2
+        assert first["stream_url"] != fresh["stream_url"]
+        assert client.get("/api/resolve", params={"url": url}).json()["stream_url"] == fresh["stream_url"]
+        assert len(calls) == 2
+
     def test_second_resolve_does_not_extract_again(self, client, captured_options):
         url = "https://youtu.be/resolve-cache-hit"
 

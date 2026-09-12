@@ -332,23 +332,24 @@ def _extract_with_options(url: str, ydl_opts: dict) -> dict:
 async def resolve_stream(
     request: Request,
     url: str = Query(..., description="The URL of the video/stream to resolve"),
-    user_agent: str = Query(None, description="User agent from the client browser")
+    user_agent: str = Query(None, description="User agent from the client browser"),
+    refresh: bool = Query(False, description="Replace a rejected cached stream URL"),
 ):
     """
     Uses yt-dlp to resolve the input URL to a playable stream URL.
     """
-    return await resolve_video(request, url, user_agent)
+    return await resolve_video(request, url, user_agent, refresh=refresh)
 
 
 _resolve_tasks: dict[tuple, asyncio.Task] = {}
 
 
-async def resolve_video(request: Request, url: str, user_agent: str = None) -> dict:
+async def resolve_video(request: Request, url: str, user_agent: str = None, *, refresh: bool = False) -> dict:
     """Share expensive extraction among concurrent requests by the same user."""
-    key = (url, get_user_from_request(request), user_agent)
+    key = (url, get_user_from_request(request), user_agent, refresh)
     task = _resolve_tasks.get(key)
     if task is None:
-        task = asyncio.create_task(_resolve_video(request, url, user_agent))
+        task = asyncio.create_task(_resolve_video(request, url, user_agent, refresh=refresh))
         _resolve_tasks[key] = task
         def finished(done: asyncio.Task) -> None:
             _resolve_tasks.pop(key, None)
@@ -358,7 +359,7 @@ async def resolve_video(request: Request, url: str, user_agent: str = None) -> d
     return await asyncio.shield(task)
 
 
-async def _resolve_video(request: Request, url: str, user_agent: str = None) -> dict:
+async def _resolve_video(request: Request, url: str, user_agent: str = None, *, refresh: bool = False) -> dict:
     """Resolve a URL to playable streams and cache the result.
 
     Shared by `/api/resolve` and `/api/dash-manifest`: the manifest cannot
@@ -374,7 +375,7 @@ async def _resolve_video(request: Request, url: str, user_agent: str = None) -> 
     # every member — sender included — resolve the same URL again. Signed
     # stream URLs stay valid for hours, so within the cache TTL those are
     # all the same answer.
-    cached = await get_cached_format(url)
+    cached = None if refresh else await get_cached_format(url)
     if cached and cached.get("stream_url"):
         logger.info(f"Resolve cache hit: {url} (User: {user_email or 'anonymous'})")
         return cached

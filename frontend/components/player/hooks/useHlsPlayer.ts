@@ -20,7 +20,7 @@ export interface UseHlsPlayerOptions {
      * for long-running live streams. The owner should re-resolve and hand
      * this hook a fresh src.
      */
-    onSourceExpired?: () => void;
+    onSourceExpired?: () => Promise<void>;
     onLoadingChange?: (isLoading: boolean) => void;
     onBufferingChange?: (isBuffering: boolean) => void;
     /** How autoplay actually went; see `lib/playback`. */
@@ -81,7 +81,8 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
     const hlsRef = useRef<Hls | null>(null);
     const isAutoPlayingRef = useRef(false);
     const retryCountRef = useRef<number>(0);
-    const lastRetryTimeRef = useRef<number>(0);
+    const recoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const recoverStalledLiveRef = useRef<(() => void) | null>(null);
     const lastSrcRef = useRef<string>('');
     // One expiry report per source: the re-resolve it triggers swaps the src,
     // which resets this. Without the guard a burst of segment 403s would
@@ -167,6 +168,11 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
         }
         lastSrcRef.current = src;
 
+        if (recoveryTimerRef.current !== null) {
+            clearTimeout(recoveryTimerRef.current);
+            recoveryTimerRef.current = null;
+        }
+
         // Destroy existing HLS instance
         if (hlsRef.current) {
             hlsRef.current.destroy();
@@ -239,6 +245,33 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
                 manifestLoadingTimeOut: 20000,
                 fragLoadingTimeOut: 20000,
             });
+
+            const stopWithError = (message = 'Playback failed after multiple retries. Please try refreshing.') => {
+                if (hlsRef.current && hlsRef.current !== hls) return;
+                if (recoveryTimerRef.current !== null) clearTimeout(recoveryTimerRef.current);
+                recoveryTimerRef.current = null;
+                recoverStalledLiveRef.current = null;
+                setIsLoading(false);
+                setIsBuffering(false);
+                callbackRefs.current.onLoadingChange?.(false);
+                callbackRefs.current.onBufferingChange?.(false);
+                callbackRefs.current.onError?.(message);
+                if (hlsRef.current === hls) hls.destroy();
+                hlsRef.current = null;
+            };
+            const scheduleRecovery = (recover: () => void) => {
+                if (hlsRef.current !== hls || recoveryTimerRef.current !== null) return;
+                if (retryCountRef.current >= MAX_RETRIES) {
+                    stopWithError();
+                    return;
+                }
+                retryCountRef.current++;
+                recoveryTimerRef.current = setTimeout(() => {
+                    recoveryTimerRef.current = null;
+                    if (hlsRef.current === hls) recover();
+                }, RETRY_COOLDOWN_MS);
+            };
+            recoverStalledLiveRef.current = () => scheduleRecovery(() => hls.loadSource(src));
 
             hls.loadSource(src);
             hls.attachMedia(video);
@@ -326,45 +359,38 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
                     ) {
                         sourceExpiredRef.current = true;
                         console.warn(`[HLS] Upstream rejected the source (${httpCode}), requesting a fresh stream URL`);
-                        callbackRefs.current.onSourceExpired();
+                        if (recoveryTimerRef.current !== null) clearTimeout(recoveryTimerRef.current);
+                        recoveryTimerRef.current = null;
+                        recoverStalledLiveRef.current = null;
+                        const refreshing = callbackRefs.current.onSourceExpired();
                         hls.destroy();
+                        hlsRef.current = null;
+                        void refreshing.catch((error: unknown) => {
+                            // A newer source owns the player once refresh succeeds.
+                            if (lastSrcRef.current !== src) return;
+                            stopWithError(error instanceof Error ? error.message : 'Could not refresh the stream.');
+                        });
                         return;
                     }
 
-                    const now = Date.now();
-                    const timeSinceLastRetry = now - lastRetryTimeRef.current;
-
-                    // Check if we should attempt recovery
-                    if (retryCountRef.current >= MAX_RETRIES) {
-                        console.error('[HLS] Max retries exceeded, giving up');
-                        callbackRefs.current.onError?.('Playback failed after multiple retries. Please try refreshing.');
-                        hls.destroy();
+                    // Keep transient failures out of the permanent error overlay.
+                    if (data.type !== Hls.ErrorTypes.NETWORK_ERROR && data.type !== Hls.ErrorTypes.MEDIA_ERROR) {
+                        stopWithError();
                         return;
                     }
-
-                    // Cooldown between retries
-                    if (timeSinceLastRetry < RETRY_COOLDOWN_MS) {
-                        console.warn('[HLS] Retry too soon, waiting...');
-                        return;
-                    }
-
-                    retryCountRef.current++;
-                    lastRetryTimeRef.current = now;
-
-                    switch (data.type) {
-                        case Hls.ErrorTypes.NETWORK_ERROR:
-                            callbackRefs.current.onError?.(`Network issue. Retry ${retryCountRef.current}/${MAX_RETRIES}...`);
-                            setTimeout(() => hls.startLoad(), RETRY_COOLDOWN_MS);
-                            break;
-                        case Hls.ErrorTypes.MEDIA_ERROR:
-                            callbackRefs.current.onError?.(`Decoding error. Retry ${retryCountRef.current}/${MAX_RETRIES}...`);
+                    // Pending errors coalesce into a scheduled retry; none is
+                    // discarded merely because it arrived during the cooldown.
+                    scheduleRecovery(() => {
+                        if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
                             hls.recoverMediaError();
-                            break;
-                        default:
-                            callbackRefs.current.onError?.('Fatal playback error.');
-                            hls.destroy();
-                            break;
-                    }
+                        } else if (data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR ||
+                                   data.details === Hls.ErrorDetails.MANIFEST_LOAD_TIMEOUT ||
+                                   data.details === Hls.ErrorDetails.MANIFEST_PARSING_ERROR) {
+                            hls.loadSource(src);
+                        } else {
+                            hls.startLoad();
+                        }
+                    });
                 }
             });
 
@@ -428,6 +454,11 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
             if (initTimer) {
                 window.clearTimeout(initTimer);
             }
+            recoverStalledLiveRef.current = null;
+            if (recoveryTimerRef.current !== null) {
+                clearTimeout(recoveryTimerRef.current);
+                recoveryTimerRef.current = null;
+            }
             if (hlsRef.current) {
                 hlsRef.current.destroy();
                 hlsRef.current = null;
@@ -441,17 +472,37 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
         const video = videoRef.current;
         if (!video || !enabled) return;
 
+        let hasPlayed = false;
+        let stallTimer: ReturnType<typeof setTimeout> | null = null;
+        const clearStallTimer = () => {
+            if (stallTimer !== null) clearTimeout(stallTimer);
+            stallTimer = null;
+        };
         const onWaiting = () => {
             setIsBuffering(true);
             callbackRefs.current.onBufferingChange?.(true);
+            // Live playlists can return 200 forever without advancing. HLS
+            // then has no fatal network error to recover from. Only restart
+            // after playback has begun and a real mid-stream stall persists.
+            if (isLive && hasPlayed && !video.paused && stallTimer === null) {
+                stallTimer = setTimeout(() => {
+                    stallTimer = null;
+                    if (!video.paused && !video.seeking && video.readyState < 3) {
+                        recoverStalledLiveRef.current?.();
+                    }
+                }, 12_000);
+            }
         };
 
         const onCanPlay = () => {
+            clearStallTimer();
             setIsBuffering(false);
             callbackRefs.current.onBufferingChange?.(false);
         };
 
         const onPlaying = () => {
+            hasPlayed = true;
+            clearStallTimer();
             setIsBuffering(false);
             callbackRefs.current.onBufferingChange?.(false);
         };
@@ -461,11 +512,12 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
         video.addEventListener('playing', onPlaying);
 
         return () => {
+            clearStallTimer();
             video.removeEventListener('waiting', onWaiting);
             video.removeEventListener('canplay', onCanPlay);
             video.removeEventListener('playing', onPlaying);
         };
-    }, [enabled, videoRef]);
+    }, [enabled, videoRef, src, isLive]);
 
     return {
         isLoading,

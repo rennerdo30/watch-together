@@ -26,7 +26,7 @@ interface CustomPlayerProps {
     onSeeked?: (time: number) => void;
     onEnd?: () => void;
     /** The CDN rejected the stream URL (403/410) — it needs re-resolving. */
-    onSourceExpired?: () => void;
+    onSourceExpired?: () => Promise<void>;
     playerRef?: React.MutableRefObject<PlayerAPI | null>;
     onTimeUpdate?: (time: number, isPlaying: boolean) => void;
     syncThreshold?: number;
