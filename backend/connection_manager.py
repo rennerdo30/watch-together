@@ -3,6 +3,7 @@ import os
 import time
 import asyncio
 import logging
+import uuid
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -11,6 +12,8 @@ from services.database import save_room, get_all_rooms, delete_room
 from services.sponsorblock import SETTINGS_KEY as SPONSORBLOCK_KEY, normalize_settings
 
 class ConnectionManager:
+    ACTIVITY_LOG_LIMIT = 200
+
     def __init__(self):
         # Map room_id -> List of WebSockets (volatile)
         self.active_connections: Dict[str, List[WebSocket]] = {}
@@ -34,6 +37,11 @@ class ConnectionManager:
         for rid in self.room_states:
             self.room_states[rid]["last_sync_time"] = time.time()
             self.room_states[rid]["members"] = []  # Explicitly reset members on restart
+            activity_log = self.room_states[rid].get("activity_log", [])
+            self.room_states[rid]["activity_log"] = (
+                activity_log[-self.ACTIVITY_LOG_LIMIT:]
+                if isinstance(activity_log, list) else []
+            )
             self.room_states[rid][SPONSORBLOCK_KEY] = normalize_settings(
                 self.room_states[rid].get(SPONSORBLOCK_KEY))
             self._room_locks[rid] = asyncio.Lock()
@@ -217,6 +225,7 @@ class ConnectionManager:
                     "playing_index": -1,
                     "permanent": False,
                     "name": "",
+                    "activity_log": [],
                     SPONSORBLOCK_KEY: normalize_settings(None),
                 }
 
@@ -411,6 +420,47 @@ class ConnectionManager:
                 old_state["last_sync_time"] = time.time()
 
             await self._save_room_state(room_id)
+
+    async def record_activity(
+        self,
+        room_id: str,
+        action: str,
+        actor: Optional[str] = None,
+        video: Optional[dict] = None,
+        **details,
+    ) -> Optional[dict]:
+        """Append one bounded, server-authored room activity entry."""
+        if room_id not in self.room_states:
+            return None
+
+        entry = {
+            "id": uuid.uuid4().hex,
+            "action": action,
+            "actor": actor,
+            "created_at": time.time(),
+        }
+        if video:
+            title = video.get("title")
+            original_url = video.get("original_url")
+            if isinstance(title, str) and title:
+                entry["title"] = title[:300]
+            if isinstance(original_url, str) and original_url:
+                entry["original_url"] = original_url[:2048]
+
+        allowed_details = {
+            "position", "target", "role", "name", "enabled", "timestamp"
+        }
+        entry.update({key: value for key, value in details.items() if key in allowed_details})
+
+        async with self._get_room_lock(room_id):
+            state = self.room_states.get(room_id)
+            if state is None:
+                return None
+            activity_log = state.setdefault("activity_log", [])
+            activity_log.append(entry)
+            del activity_log[:-self.ACTIVITY_LOG_LIMIT]
+            await self._save_room_state(room_id)
+        return entry
 
     async def playback_ready(self, room_id: str, original_url: str) -> bool:
         """Start the room clock once the first viewer actually plays the video."""

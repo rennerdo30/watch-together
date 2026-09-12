@@ -11,6 +11,7 @@ import {
 import { ResolveResponse, resolveUrl, getExtensionToken, regenerateExtensionToken, ExtensionToken, getUserSettings, updateUserSettings, getCookies, saveCookies, type UserSettings } from '@/lib/api';
 import { CustomPlayer } from '@/components/custom-player';
 import { LiveChat } from '@/components/live-chat';
+import { RoomLog } from '@/components/room-log';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { THEMES, DEFAULT_THEME, getThemeById, loadCustomTheme, saveCustomTheme, createCustomTheme } from '@/lib/themes';
 import { ColorModeToggle } from '@/components/color-mode-toggle';
@@ -43,6 +44,11 @@ import toast, { Toaster } from 'react-hot-toast';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragEndEvent, DragStartEvent, DragOverlay } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { SortableQueueItem, QueueItemOverlay } from '@/components/sortable-queue-item';
+import {
+    mergeRoomActivity,
+    normalizeRoomActivity,
+    type RoomActivityEvent,
+} from '@/lib/room-log';
 
 function getWsUrl(roomId: string) {
     if (typeof window === "undefined") return "";
@@ -71,6 +77,8 @@ type WsPayload = {
     is_playing?: boolean;
     timestamp?: number;
     client_time?: number;
+    activity_log?: unknown;
+    activity?: unknown;
     [key: string]: unknown;
 };
 
@@ -110,7 +118,8 @@ export default function RoomPage() {
     const [showSettings, setShowSettings] = useState(false);
     const [activeTheme, setActiveTheme] = useState(DEFAULT_THEME);
     const [useProxy, setUseProxy] = useState(true);
-    const [sidebarTab, setSidebarTab] = useState<'queue' | 'users' | 'chat'>('queue');
+    const [sidebarTab, setSidebarTab] = useState<'queue' | 'users' | 'chat' | 'log'>('queue');
+    const [activityLog, setActivityLog] = useState<RoomActivityEvent[]>([]);
     const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
     const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
     const [showDebug, setShowDebug] = useState(false);
@@ -462,6 +471,7 @@ export default function RoomPage() {
                 if (typeof payload.playing_index === 'number') setPlayingIndex(payload.playing_index);
                 if (typeof payload.permanent === 'boolean') setIsPermanent(payload.permanent);
                 if (typeof payload.name === 'string') setRoomName(payload.name);
+                if ('activity_log' in payload) setActivityLog(normalizeRoomActivity(payload.activity_log));
                 {
                     const settings = parseSponsorBlockSettings(payload.sponsorblock);
                     if (settings) setSponsorBlock(settings);
@@ -489,6 +499,9 @@ export default function RoomPage() {
                         if (diff > syncThresholdRef.current) playerRef.current.currentTime(serverTimestamp);
                     }
                 }
+                break;
+            case 'activity':
+                setActivityLog((history) => mergeRoomActivity(history, payload.activity));
                 break;
             case 'user_joined': if (payload.members) setMembers(payload.members); break;
             case 'user_left': if (payload.members) setMembers(payload.members); break;
@@ -1114,51 +1127,74 @@ export default function RoomPage() {
 
                 {/* Resizable Sidebar */}
                 <aside
-                    aria-label="Queue, audience and live chat"
+                    aria-label="Queue, audience, live chat and room log"
                     className="app-surface border-t lg:border-t-0 lg:border-l border-neutral-800 flex flex-col shrink-0 bg-neutral-900/30 h-[42dvh] w-full lg:h-auto lg:w-[var(--sidebar-width)]"
                 >
                     {/* Compact Tabs */}
-                    <div role="tablist" aria-label="Sidebar sections" className="flex p-1.5 gap-1.5 border-b border-neutral-800 shrink-0">
+                    <div role="tablist" aria-label="Sidebar sections" className="grid grid-cols-4 p-1.5 gap-1 border-b border-neutral-800 shrink-0">
                         <button
                             type="button"
                             role="tab"
+                            id="sidebar-tab-queue"
+                            aria-controls="sidebar-panel"
                             aria-selected={sidebarTab === 'queue'}
                             onClick={() => setSidebarTab('queue')}
-                            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-[13px] font-medium transition-all ${sidebarTab === 'queue'
+                            className={`min-w-0 py-2 rounded-lg text-[11px] font-medium transition-all ${sidebarTab === 'queue'
                                 ? "bg-neutral-800 text-white"
                                 : "text-neutral-400 hover:bg-white/5 hover:text-neutral-200"
                                 }`}
                         >
-                            <ListVideo aria-hidden="true" className="w-3 h-3" />
-                            Queue ({queue.length})
+                            Queue<span className="sr-only"> ({queue.length})</span>
                         </button>
                         <button
                             type="button"
                             role="tab"
+                            id="sidebar-tab-users"
+                            aria-controls="sidebar-panel"
                             aria-selected={sidebarTab === 'users'}
                             onClick={() => setSidebarTab('users')}
-                            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-[13px] font-medium transition-all ${sidebarTab === 'users'
+                            className={`min-w-0 py-2 rounded-lg text-[11px] font-medium transition-all ${sidebarTab === 'users'
                                 ? "bg-neutral-800 text-white"
                                 : "text-neutral-400 hover:bg-white/5 hover:text-neutral-200"
                                 }`}
                         >
-                            <Users aria-hidden="true" className="w-3 h-3" />
-                            Audience ({members.length})
+                            Audience<span className="sr-only"> ({members.length})</span>
                         </button>
                         <button
                             type="button"
                             role="tab"
+                            id="sidebar-tab-chat"
+                            aria-controls="sidebar-panel"
                             aria-selected={sidebarTab === 'chat'}
                             onClick={() => setSidebarTab('chat')}
-                            className={`flex-1 py-2 rounded-lg text-[13px] font-medium transition-all ${sidebarTab === 'chat' ? 'bg-neutral-800 text-white' : 'text-neutral-400 hover:bg-white/5 hover:text-neutral-200'}`}
+                            aria-label="Live chat"
+                            className={`min-w-0 py-2 rounded-lg text-[11px] font-medium transition-all ${sidebarTab === 'chat' ? 'bg-neutral-800 text-white' : 'text-neutral-400 hover:bg-white/5 hover:text-neutral-200'}`}
                         >
-                            Live chat
+                            Chat
+                        </button>
+                        <button
+                            type="button"
+                            role="tab"
+                            id="sidebar-tab-log"
+                            aria-controls="sidebar-panel"
+                            aria-selected={sidebarTab === 'log'}
+                            onClick={() => setSidebarTab('log')}
+                            className={`min-w-0 py-2 rounded-lg text-[11px] font-medium transition-all ${sidebarTab === 'log' ? 'bg-neutral-800 text-white' : 'text-neutral-400 hover:bg-white/5 hover:text-neutral-200'}`}
+                        >
+                            Log
                         </button>
                     </div>
 
                     {/* Content */}
-                    <div className="flex-1 overflow-hidden relative">
-                        {sidebarTab === 'chat' ? (
+                    <div
+                        id="sidebar-panel"
+                        role="tabpanel"
+                        aria-labelledby={`sidebar-tab-${sidebarTab}`}
+                        className="flex-1 overflow-hidden relative"
+                    >
+                        {sidebarTab === 'log' ? (
+                            <RoomLog events={activityLog} />
+                        ) : sidebarTab === 'chat' ? (
                             <LiveChat key={`${videoData?.original_url}:${videoData?.is_live}`} video={videoData} />
                         ) : sidebarTab === 'queue' ? (
                             <DndContext
