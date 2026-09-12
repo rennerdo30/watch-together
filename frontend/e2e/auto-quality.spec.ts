@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { latencyAwareAbrFactory, sampleTimeMs, type AbrManagerLike } from '../lib/abr';
-import { ABR_CACHE_LOAD_THRESHOLD_MS } from '../lib/constants';
 import { stubAdaptiveStream, type VideoRung } from './adaptive-fixture';
 
 /**
@@ -52,9 +51,11 @@ test('the wait for headers is not charged against the bytes of a segment', () =>
   expect(sampleTimeMs(530, { packetNumber: 1, timeToFirstByte: 500 })).toBe(30);
   // Later progress events of the same request measure pure transfer.
   expect(sampleTimeMs(120, { packetNumber: 2, timeToFirstByte: 500 })).toBe(120);
-  // A body that arrived together with its headers gives a bounded sample.
-  expect(sampleTimeMs(500, { packetNumber: 1, timeToFirstByte: 500 })).toBe(ABR_CACHE_LOAD_THRESHOLD_MS);
-  expect(sampleTimeMs(500, { packetNumber: 1, timeToFirstByte: 600 })).toBe(ABR_CACHE_LOAD_THRESHOLD_MS);
+  // Without measurable body transfer time, retain elapsed delivery time.
+  // Inventing a 20ms transfer here inflated a 500ms response by 25x.
+  expect(sampleTimeMs(500, { packetNumber: 1, timeToFirstByte: 500 })).toBe(500);
+  expect(sampleTimeMs(500, { packetNumber: 1, timeToFirstByte: 600 })).toBe(500);
+  expect(sampleTimeMs(510, { packetNumber: 1, timeToFirstByte: 500 })).toBe(510);
   // Cache hits stay under the threshold so Shaka still drops them.
   expect(sampleTimeMs(5, { packetNumber: 1, timeToFirstByte: 3 })).toBe(5);
   // A whole-request sample without a packet number includes the wait too.
@@ -70,11 +71,12 @@ test('the wait for headers is not charged against the bytes of a segment', () =>
 test('the manager hands Shaka the corrected time and everything else untouched', () => {
   const calls: unknown[][] = [];
   class FakeSimpleAbrManager implements AbrManagerLike {
+    getBandwidthEstimate() { return 700_000; }
     segmentDownloaded(...args: unknown[]): void {
       calls.push(args);
     }
   }
-  const manager = latencyAwareAbrFactory({ abr: { SimpleAbrManager: FakeSimpleAbrManager } })();
+  const manager = latencyAwareAbrFactory({ abr: { SimpleAbrManager: FakeSimpleAbrManager } }, () => {})();
   expect(manager).toBeInstanceOf(FakeSimpleAbrManager);
 
   const request = { packetNumber: 1, timeToFirstByte: 400 };
@@ -85,6 +87,24 @@ test('the manager hands Shaka the corrected time and everything else untouched',
     [50, 65_536, true, request, context],
     [110, 65_536, false, { packetNumber: 2, timeToFirstByte: 400 }, context],
   ]);
+});
+
+test('bandwidth memory receives measurements only after enough non-cache bytes', () => {
+  const estimates: number[] = [];
+  class FakeSimpleAbrManager {
+    segmentDownloaded() {}
+    getBandwidthEstimate() { return 8_000_000; }
+  }
+  const manager = latencyAwareAbrFactory(
+    { abr: { SimpleAbrManager: FakeSimpleAbrManager } },
+    bps => estimates.push(bps),
+  )();
+  manager.segmentDownloaded(5, 1_000_000, true); // cache hit
+  manager.segmentDownloaded(100, 8_000, true); // too small for Shaka's EWMA
+  manager.segmentDownloaded(100, 64_000, true);
+  expect(estimates).toEqual([]);
+  manager.segmentDownloaded(100, 64_000, true);
+  expect(estimates).toEqual([8_000_000]);
 });
 
 test('auto opens on the rendition the configured estimate affords, not what the browser claims', async ({ page }) => {

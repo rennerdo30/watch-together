@@ -36,14 +36,14 @@ export function parseStoredEstimate(raw: string | null, now: number): StoredEsti
 /**
  * The bandwidth to open the next load with.
  *
- * Never below the cautious default (a remembered slow connection is not a
- * reason to open lower than usual) and never above a ceiling, so a wild
- * measurement cannot make the first segment a stall.
+ * Respect measured slow connections as well as fast ones. The fixed default
+ * is only for an unknown connection; using it as a floor would overestimate
+ * a known slow link. Cap optimistic measurements before the first request.
  */
 export function openingEstimate(stored: StoredEstimate | null): number {
     if (!stored) return SHAKA_INITIAL_BANDWIDTH_ESTIMATE;
     const discounted = stored.bps * BANDWIDTH_MEMORY_DISCOUNT;
-    return Math.min(SHAKA_MAX_REMEMBERED_BANDWIDTH, Math.max(SHAKA_INITIAL_BANDWIDTH_ESTIMATE, discounted));
+    return Math.min(SHAKA_MAX_REMEMBERED_BANDWIDTH, Math.max(1, discounted));
 }
 
 export function readOpeningEstimate(now = Date.now()): number {

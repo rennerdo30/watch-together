@@ -85,12 +85,13 @@ export const BANDWIDTH_MEMORY_DISCOUNT = 0.8;
 export const SHAKA_MAX_REMEMBERED_BANDWIDTH = 40_000_000;
 /** How often the running estimate is written to storage while playing. */
 export const BANDWIDTH_MEMORY_SAVE_INTERVAL_MS = 10_000;
-/** Seconds of playback before the first write: enough for a real measurement. */
-export const BANDWIDTH_MEMORY_FIRST_SAVE_SECONDS = 2;
+/** Match the EWMA sampling thresholds used by our ABR manager and memory. */
+export const SHAKA_ABR_MIN_SAMPLE_BYTES = 16_000;
+export const SHAKA_ABR_MIN_TOTAL_BYTES = 128_000;
 
 /**
  * How quickly the estimate follows measurements: half-lives, in seconds of
- * downloaded media, of Shaka's fast and slow moving averages (defaults 2
+ * measured transfer time, of Shaka's fast and slow moving averages (defaults 2
  * and 5). Shorter ones let the estimate reach a better rendition sooner
  * after the cautious opening; the switch interval guards against flapping.
  */
@@ -108,9 +109,8 @@ export const SHAKA_SWITCH_INTERVAL_SECONDS = 4;
 
 /**
  * A sample that completes faster than this, in milliseconds, is treated as
- * served from cache and excluded from bandwidth estimation. It is also the
- * floor for a latency-corrected sample (see `lib/abr.ts`), so a body that
- * arrived together with its headers still yields a finite throughput.
+ * served from cache and excluded from bandwidth estimation. Latency
+ * correction also requires at least this much measurable transfer time.
  */
 export const ABR_CACHE_LOAD_THRESHOLD_MS = 20;
 

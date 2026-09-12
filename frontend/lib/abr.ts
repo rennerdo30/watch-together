@@ -13,11 +13,12 @@
  *
  * The correction subtracts the time to first byte from the first sample of
  * each request, leaving the time the bytes actually took to arrive. dash.js
- * does the same by default ("dead time" removal). Latency is absorbed by
- * the buffer, not by picking a worse rendition.
+ * does the same by default ("dead time" removal). Only subtract latency
+ * when the remaining transfer interval is measurable: otherwise an origin
+ * that delivers a buffered body with its headers looks arbitrarily fast.
  */
 
-import { ABR_CACHE_LOAD_THRESHOLD_MS } from './constants';
+import { ABR_CACHE_LOAD_THRESHOLD_MS, SHAKA_ABR_MIN_SAMPLE_BYTES, SHAKA_ABR_MIN_TOTAL_BYTES } from './constants';
 
 /** The fields of a Shaka request the sampler reads. */
 export interface SampledRequest {
@@ -33,8 +34,8 @@ export interface SampledRequest {
  * Only the first progress event of a request includes the wait for headers;
  * later events measure pure transfer and pass through unchanged. A sample
  * already under the cache threshold passes through so Shaka can drop it as
- * a cache hit, and one whose body arrived with its headers is floored at
- * that threshold so it yields a large but finite throughput.
+ * a cache hit. If the body arrived with its headers, retain the original
+ * elapsed time: a synthetic minimum would fabricate a fast transfer.
  */
 export function sampleTimeMs(deltaTimeMs: number, request: SampledRequest | undefined): number {
     if (!Number.isFinite(deltaTimeMs) || deltaTimeMs < ABR_CACHE_LOAD_THRESHOLD_MS) return deltaTimeMs;
@@ -44,11 +45,13 @@ export function sampleTimeMs(deltaTimeMs: number, request: SampledRequest | unde
     }
     const packetNumber = request?.packetNumber;
     if (packetNumber != null && packetNumber > 1) return deltaTimeMs;
-    return Math.max(deltaTimeMs - timeToFirstByte, ABR_CACHE_LOAD_THRESHOLD_MS);
+    const transferTimeMs = deltaTimeMs - timeToFirstByte;
+    return transferTimeMs >= ABR_CACHE_LOAD_THRESHOLD_MS ? transferTimeMs : deltaTimeMs;
 }
 
-/** The one method of Shaka's ABR manager this module overrides. */
+/** The methods used to sample and read Shaka's bandwidth estimator. */
 export interface AbrManagerLike {
+    getBandwidthEstimate(): number;
     segmentDownloaded(
         deltaTimeMs: number,
         numBytes: number,
@@ -68,8 +71,10 @@ export interface ShakaAbrModule {
  * sampling. Everything else — variant choice, switch timing, restrictions —
  * is the stock implementation.
  */
-export function latencyAwareAbrFactory(shaka: ShakaAbrModule): () => AbrManagerLike {
+export function latencyAwareAbrFactory(shaka: ShakaAbrModule, onEstimate: (bps: number) => void): () => AbrManagerLike {
     class LatencyAwareAbrManager extends shaka.abr.SimpleAbrManager {
+        private measuredBytes = 0;
+
         segmentDownloaded(
             deltaTimeMs: number,
             numBytes: number,
@@ -77,7 +82,17 @@ export function latencyAwareAbrFactory(shaka: ShakaAbrModule): () => AbrManagerL
             request?: SampledRequest,
             context?: unknown,
         ): void {
-            super.segmentDownloaded(sampleTimeMs(deltaTimeMs, request), numBytes, allowSwitch, request, context);
+            const sampleMs = sampleTimeMs(deltaTimeMs, request);
+            super.segmentDownloaded(sampleMs, numBytes, allowSwitch, request, context);
+            // Until these thresholds are met, Shaka returns the opening guess.
+            // Saving it would repeatedly discount memory without new evidence.
+            if (Number.isFinite(sampleMs) && sampleMs >= ABR_CACHE_LOAD_THRESHOLD_MS &&
+                Number.isFinite(numBytes) && numBytes >= SHAKA_ABR_MIN_SAMPLE_BYTES) {
+                this.measuredBytes += numBytes;
+                if (this.measuredBytes >= SHAKA_ABR_MIN_TOTAL_BYTES) {
+                    onEstimate(this.getBandwidthEstimate());
+                }
+            }
         }
     }
     return () => new LatencyAwareAbrManager();

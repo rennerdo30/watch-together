@@ -159,7 +159,6 @@ export function CustomPlayer({
     // === HLS PLAYER HOOK ===
     const [hlsLoading, setHlsLoading] = useState(true);
     const [hlsQualities, setHlsQualities] = useState<HlsQualityLevel[]>([]);
-    const [hlsCurrentQuality, setHlsCurrentQuality] = useState(-1);
 
     const hlsPlayer = useHlsPlayer({
         videoRef,
@@ -173,7 +172,6 @@ export function CustomPlayer({
             setHlsQualities(levels);
             setHlsLoading(false);
         },
-        onLevelSwitch: setHlsCurrentQuality,
         onError: setError,
         onSourceExpired,
         onLoadingChange: setHlsLoading,
@@ -195,7 +193,7 @@ export function CustomPlayer({
     // Derive loading/qualities/currentQuality from the active engine
     const isLoading = isMseMode ? shakaPlayer.isLoading : hlsLoading;
     const qualities = isMseMode ? shakaPlayer.qualities : hlsQualities;
-    const currentQuality = isMseMode ? shakaPlayer.currentQuality : hlsCurrentQuality;
+    const currentQuality = isMseMode ? shakaPlayer.currentQuality : hlsPlayer.currentLevel;
 
     // === AUDIO NORMALIZATION HOOK ===
     // Both engines carry audio on the video element.
