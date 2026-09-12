@@ -492,47 +492,13 @@ export default function RoomPage() {
             case 'user_joined': if (payload.members) setMembers(payload.members); break;
             case 'user_left': if (payload.members) setMembers(payload.members); break;
             case 'set_video':
-                // Reset sync state for new video
-                setSyncState(prev => ({ ...prev, timestamp: 0, isPlaying: true }));
-                // The server looks the new video's segments up and announces them.
+                // The server refreshes queued entries before announcing them.
+                // Mount once, immediately; another resolve here delays every viewer.
+                setSyncState(prev => ({ ...prev, timestamp: 0, isPlaying: !!payload.video_data }));
                 setSponsorSegments({ videoUrl: payload.video_data?.original_url ?? null, segments: [] });
-
-                // ALWAYS re-resolve when playing a video to get fresh stream URLs
-                // YouTube URLs expire, so we can't cache them
-                if (payload.video_data?.original_url) {
-                    const queuedVideoData = payload.video_data;
-                    console.log('[Room] Re-resolving video for fresh stream URLs...');
-                    // The queued copy is *not* shown while this runs. Its
-                    // stream URLs are however old the queue entry is, and
-                    // mounting the player on them makes it ask for a
-                    // manifest built from expired URLs — which fails, and
-                    // the failure is what the viewer sees even once the
-                    // fresh URLs arrive. The spinner stays up instead.
-                    setVideoData(null);
-                    setIsRestoringVideo(true);
-
-                    resolveUrl(queuedVideoData.original_url)
-                        .then((freshData) => {
-                            console.log('[Room] Got fresh stream:', freshData.stream_type, freshData.quality);
-                            setVideoData({ ...freshData, added_by: queuedVideoData.added_by });
-                        })
-                        .catch((err) => {
-                            console.warn('[Room] Re-resolve failed:', err.message);
-                            // Fall back to the queued copy: an entry added
-                            // moments ago still has usable URLs, and showing
-                            // something beats showing nothing.
-                            setVideoData(queuedVideoData);
-                        })
-                        .finally(() => {
-                            setIsRestoringVideo(false);
-                            setLoadingQueueIndex(null);
-                        });
-                } else if (payload.video_data) {
-                    setVideoData(payload.video_data);
-                    setLoadingQueueIndex(null);
-                } else {
-                    setLoadingQueueIndex(null);
-                }
+                setVideoData(payload.video_data ?? null);
+                setIsRestoringVideo(false);
+                setLoadingQueueIndex(null);
                 break;
             case 'play':
                 if (playerRef.current) {
@@ -941,7 +907,7 @@ export default function RoomPage() {
                                     audioUrl={getDashUrls()?.audioUrl}
                                     availableQualities={getDashUrls()?.availableQualities}
                                     onPlay={() => {
-                                        if (internalUpdateCount.current === 0) {
+                                        if (internalUpdateCount.current === 0 && !syncState.isPlaying) {
                                             // A live position is only meaningful in this
                                             // player's timeline; never publish it.
                                             const t = videoData.is_live ? 0 : (playerRef.current?.currentTime() || 0);
@@ -973,11 +939,12 @@ export default function RoomPage() {
                                     // Named, so the server can tell this member's
                                     // report of the end from a stale one after
                                     // the room has already moved on.
-                                    onEnd={() => { if (internalUpdateCount.current === 0) sendMsg('video_ended', { original_url: videoData.original_url }); }}
-                                    onTimeUpdate={(time: number, isPlaying: boolean) => {
+                                    onEnd={() => sendMsg('video_ended', { original_url: videoData.original_url })}
+                                    onPlaying={() => sendMsg('playback_ready', { original_url: videoData.original_url })}
+                                    onTimeUpdate={(time: number) => {
                                         // Update actual player time for accurate badge display
                                         setActualPlayerTime(time);
-                                        setSyncState(prev => ({ ...prev, isPlaying }));
+
                                     }}
                                     playerRef={playerRef}
                                     syncThreshold={syncThreshold}

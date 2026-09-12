@@ -141,7 +141,7 @@ class ConnectionManager:
             state = self.room_states[room_id]
             # Calculate current timestamp based on elapsed time if playing
             saved_timestamp = state.get("timestamp", 0)
-            if state.get("is_playing") and state.get("video_data"):
+            if state.get("is_playing") and state.get("video_data") and not state.get("startup_pending"):
                 is_live = state["video_data"].get("is_live", False)
                 if not is_live:
                     elapsed = time.time() - state.get("last_sync_time", time.time())
@@ -170,7 +170,7 @@ class ConnectionManager:
             state["video_data"] = state["video_data"].copy()
 
         # If playing and NOT a livestream, adjust timestamp based on elapsed wall clock time
-        if state.get("is_playing") and state.get("video_data"):
+        if state.get("is_playing") and state.get("video_data") and not state.get("startup_pending"):
             is_live = state["video_data"].get("is_live", False)
             if not is_live:
                 elapsed = time.time() - state.get("last_sync_time", time.time())
@@ -412,6 +412,18 @@ class ConnectionManager:
 
             await self._save_room_state(room_id)
 
+    async def playback_ready(self, room_id: str, original_url: str) -> bool:
+        """Start the room clock once the first viewer actually plays the video."""
+        async with self._get_room_lock(room_id):
+            state = self.room_states.get(room_id, {})
+            if (not state.get("startup_pending") or not state.get("is_playing") or
+                    (state.get("video_data") or {}).get("original_url") != original_url):
+                return False
+            state["startup_pending"] = False
+            state["last_sync_time"] = time.time()
+            await self._save_room_state(room_id)
+            return True
+
     @staticmethod
     def _take_existing(queue: list, video_data: dict) -> Optional[dict]:
         """Remove and return the queue's entry for this video, if it has one.
@@ -467,6 +479,7 @@ class ConnectionManager:
             state["video_data"] = video_data
             state["timestamp"] = 0
             state["is_playing"] = True
+            state["startup_pending"] = True
             state["last_sync_time"] = time.time()
             await self._save_room_state(room_id)
             return video_data, state["queue"], 0
@@ -540,6 +553,9 @@ class ConnectionManager:
                             f"playing {current.get('original_url')!r}")
                 return current or None, queue, playing_index, False
 
+            self._resync_playing_index(state)
+            playing_index = state["playing_index"]
+
             # Check if the finished video is pinned
             was_pinned = False
             if playing_index >= 0 and playing_index < len(queue):
@@ -558,7 +574,7 @@ class ConnectionManager:
                 # Removed, so the next item now sits at the same index. When
                 # the finished video was last, everything left is unwatched
                 # and the queue starts over from the front.
-                next_index = playing_index if playing_index < len(queue) else 0
+                next_index = playing_index if 0 <= playing_index < len(queue) else 0
 
             if queue and next_index >= 0:
                 next_v = queue[next_index]
@@ -566,12 +582,15 @@ class ConnectionManager:
                 state["timestamp"] = 0
                 state["last_sync_time"] = time.time()
                 state["is_playing"] = True
+                state["startup_pending"] = True
                 state["playing_index"] = next_index
                 await self._save_room_state(room_id)
                 return next_v, queue, next_index, True
             else:
                 # No more videos in queue
                 state["video_data"] = None
+                state["startup_pending"] = False
+                state["timestamp"] = 0
                 state["is_playing"] = False
                 state["playing_index"] = -1
                 state["last_sync_time"] = time.time()
@@ -600,6 +619,7 @@ class ConnectionManager:
                 state["timestamp"] = 0
                 state["last_sync_time"] = time.time()
                 state["is_playing"] = True
+                state["startup_pending"] = True
                 state["playing_index"] = index
                 await self._save_room_state(room_id)
                 return target_v, queue, index

@@ -35,6 +35,7 @@ def build_ydl_opts(cookie_path: Optional[str], user_agent: Optional[str] = None,
         'nocheckcertificate': True,
         'logger': logger,
         'skip_download': True,
+        'noplaylist': True,
         'cache_dir': cache_dir,
         'http_headers': {
             'User-Agent': user_agent or DEFAULT_USER_AGENT,
@@ -319,6 +320,33 @@ def _extract_stream_url(info: dict, prefer_dash: bool = True) -> dict:
     return None
 
 
+def _build_resolve_response(url: str, info: dict, stream_info: dict) -> dict:
+    """Shape a resolved video for the client."""
+    response = {
+        "original_url": url,
+        "stream_url": stream_info["url"],
+        "title": info.get("title", "Unknown Title"),
+        "is_live": info.get("is_live", False),
+        "thumbnail": info.get("thumbnail"),
+        "backend_engine": "yt-dlp",
+        "duration": info.get("duration"),
+        "quality": f"{stream_info.get('height', '?')}p" if stream_info.get("height") else "auto",
+        "has_audio": stream_info.get("has_audio", True),
+        "stream_type": stream_info.get("type", "unknown"),
+    }
+    storyboard = extract_storyboard(info)
+    if storyboard:
+        response["storyboard"] = storyboard
+
+    if stream_info.get("type") == "dash":
+        response["video_url"] = stream_info.get("video_url")
+        response["audio_url"] = stream_info.get("audio_url")
+        response["available_qualities"] = stream_info.get("available_qualities", [])
+        response["audio_options"] = stream_info.get("audio_options", [])
+
+    return response
+
+
 async def refresh_video_url(video_data: dict, user_agent: str = None, user_email: str = None) -> dict:
     """
     Re-resolves the stream URL using a multi-strategy fallback system to beat age restrictions.
@@ -332,12 +360,11 @@ async def refresh_video_url(video_data: dict, user_agent: str = None, user_email
     # 1. Check memory cache first
     cached = await get_cached_format(original_url)
     if cached:
-        # Map 'url' to 'stream_url' for frontend compatibility
-        if 'url' in cached:
-            video_data['stream_url'] = cached['url']
-        for key in ["video_url", "audio_url", "available_qualities", "audio_options", "stream_type", "quality", "type", "height", "has_audio", "duration"]:
-            if key in cached:
-                video_data[key] = cached[key]
+        room_fields = {key: video_data[key] for key in ('original_url', 'added_by', 'pinned') if key in video_data}
+        video_data.clear()
+        video_data.update(cached)
+        video_data.update(room_fields)
+        remember_stream_owner(video_data)
         return video_data
 
     logger.info(f"Refreshing stream URL for: {original_url} (User: {user_email}, Added by: {added_by})")
@@ -433,15 +460,12 @@ async def refresh_video_url(video_data: dict, user_agent: str = None, user_email
     stream_data = _extract_stream_url(info)
 
     if stream_data:
-        video_data.update(stream_data)
-        # Map 'url' to 'stream_url' for frontend compatibility
-        if 'url' in stream_data:
-            video_data['stream_url'] = stream_data['url']
-        # The fresh URLs are bound to the session that fetched them.
+        room_fields = {key: video_data[key] for key in ('added_by', 'pinned') if key in video_data}
+        video_data.clear()
+        video_data.update(_build_resolve_response(original_url, info, stream_data))
+        video_data.update(room_fields)
         video_data[RESOLVED_BY_KEY] = resolved_by
-        stream_data[RESOLVED_BY_KEY] = resolved_by
         remember_stream_owner(video_data)
-        # Cache the result
-        await cache_format(original_url, stream_data)
+        await cache_format(original_url, video_data)
 
     return video_data

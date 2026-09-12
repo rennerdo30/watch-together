@@ -411,15 +411,27 @@ chrome.permissions.onRemoved.addListener((permissions) => {
 async function setupAutoSync() {
     const settings = await chrome.storage.sync.get(['autoSync']);
     if (settings.autoSync !== false) {
-        chrome.alarms.create('cookieSync', {
-            periodInMinutes: SYNC_INTERVAL_MINUTES
-        });
-        console.log(`[WT Sync] Auto-sync alarm set for every ${SYNC_INTERVAL_MINUTES} minutes`);
+        const alarm = await chrome.alarms.get('cookieSync');
+        // Creating an existing alarm resets its deadline. Frequent worker
+        // wakes must not postpone sync indefinitely.
+        if (!alarm || alarm.periodInMinutes !== SYNC_INTERVAL_MINUTES) {
+            await chrome.alarms.create('cookieSync', {
+                delayInMinutes: 0.5,
+                periodInMinutes: SYNC_INTERVAL_MINUTES
+            });
+        }
     } else {
-        chrome.alarms.clear('cookieSync');
+        await chrome.alarms.clear('cookieSync');
         console.log('[WT Sync] Auto-sync disabled');
     }
 }
+
+// Alarms can disappear across browser restarts. Reconcile on every worker
+// evaluation, after registering listeners, as well as browser startup.
+chrome.runtime.onStartup.addListener(() => {
+    setupAutoSync().catch(err => console.warn('[WT Sync] Alarm recovery failed:', err));
+});
+setupAutoSync().catch(err => console.warn('[WT Sync] Alarm recovery failed:', err));
 
 /**
  * Handle alarm events

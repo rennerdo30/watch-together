@@ -21,6 +21,7 @@ type HarnessOptions = {
   /** Session storage: what a stopped-and-restarted worker still finds. */
   session?: Record<string, unknown>;
   fetchRules?: FetchRule[];
+  alarms?: Record<string, { periodInMinutes: number; scheduledTime: number }>;
 };
 
 /**
@@ -33,11 +34,12 @@ type HarnessOptions = {
  */
 export async function loadBackground(page: Page, options: HarnessOptions = {}) {
   await page.goto('about:blank');
-  await page.evaluate(({ local, sync, session, fetchRules }) => {
+  await page.evaluate(({ local, sync, session, fetchRules, alarms }) => {
     const localState: Record<string, unknown> = structuredClone(local);
     const syncState: Record<string, unknown> = structuredClone(sync);
     const sessionState: Record<string, unknown> = structuredClone(session);
     const rules = structuredClone(fetchRules);
+    const alarmState = structuredClone(alarms);
 
     function event() {
       const listeners: Array<(...args: unknown[]) => unknown> = [];
@@ -85,6 +87,7 @@ export async function loadBackground(page: Page, options: HarnessOptions = {}) {
     const permissionsRemoved = event();
     const onMessage = event();
     const onInstalled = event();
+    const onStartup = event();
     const onAlarm = event();
     const onCompleted = event();
     const onTabUpdated = event();
@@ -94,9 +97,10 @@ export async function loadBackground(page: Page, options: HarnessOptions = {}) {
       __extensionLocal: localState,
       __extensionSync: syncState,
       __extensionSession: sessionState,
+      __extensionAlarms: alarmState,
       __extensionEvents: {
         permissionsAdded, permissionsRemoved, onMessage, onInstalled,
-        onCompleted, onTabUpdated, onTabRemoved, onAlarm,
+        onCompleted, onTabUpdated, onTabRemoved, onAlarm, onStartup,
       },
       __removedPermissions: [] as string[],
     });
@@ -122,11 +126,15 @@ export async function loadBackground(page: Page, options: HarnessOptions = {}) {
         runtime: {
           onMessage,
           onInstalled,
+          onStartup,
           async sendMessage() { return undefined; },
         },
         alarms: {
-          create() {},
-          async clear() { return true; },
+          async get(name: string) { return alarmState[name]; },
+          async create(name: string, info: { periodInMinutes: number; delayInMinutes?: number }) {
+            alarmState[name] = { ...info, scheduledTime: Date.now() + (info.delayInMinutes ?? info.periodInMinutes) * 60_000 };
+          },
+          async clear(name: string) { delete alarmState[name]; return true; },
           onAlarm,
         },
         cookies: { async getAll() { return []; } },
@@ -156,6 +164,7 @@ export async function loadBackground(page: Page, options: HarnessOptions = {}) {
     sync: options.sync ?? {},
     session: options.session ?? {},
     fetchRules: options.fetchRules ?? [],
+    alarms: options.alarms ?? {},
   });
 
   await page.addScriptTag({

@@ -530,6 +530,8 @@ def test_setting_a_video_announces_its_segments_and_skips_the_first_one(client):
             assert [(s["start"], s["end"], s["category"]) for s in announced["segments"]] == [
                 (0.0, 30.0, "sponsor"), (100.0, 110.0, "intro")]
 
+            ws_admin.send_json({"type": "playback_ready", "payload": {"original_url": WATCH_URL}})
+
             # The video starts inside a sponsor segment: the room is moved
             # past it at once, and the seek says why.
             seek = _drain_until(ws_viewer, "seek")

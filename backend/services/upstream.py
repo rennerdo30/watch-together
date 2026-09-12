@@ -16,6 +16,7 @@ classic SSRF shape. Three properties are enforced here:
 """
 import socket
 import ipaddress
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -184,7 +185,7 @@ async def open_upstream_stream(
     current = url
 
     for _hop in range(max_redirects + 1):
-        pinned = pin_url(current)
+        pinned = await asyncio.to_thread(pin_url, current)
         request = client.build_request("GET", **request_kwargs(pinned, headers))
         response = await client.send(request, stream=True, follow_redirects=False)
 

@@ -203,7 +203,7 @@ class HistoryReporter:
 
     def _position(self, state: dict) -> float:
         position = float(state.get("timestamp", 0) or 0)
-        if state.get("is_playing"):
+        if state.get("is_playing") and not state.get("startup_pending"):
             position += self._now() - state.get("last_sync_time", self._now())
         return position
 
@@ -381,7 +381,7 @@ class HistoryReporter:
                 await self._settle_change(session, state)
             while True:
                 state = self._manager.room_states.get(session.room_id)
-                if not state or self._video_key(state) != session.video_key or not state.get("is_playing"):
+                if not state or self._video_key(state) != session.video_key or not state.get("is_playing") or state.get("startup_pending"):
                     return
                 await self._sleep(YOUTUBE_HISTORY_PING_INTERVAL_SECONDS)
                 state = self._manager.room_states.get(session.room_id)
@@ -389,7 +389,7 @@ class HistoryReporter:
                     return
                 position = self._position(state)
                 await self._report_range(session, position)
-                if not state.get("is_playing"):
+                if not state.get("is_playing") or state.get("startup_pending"):
                     return
         except asyncio.CancelledError:
             raise

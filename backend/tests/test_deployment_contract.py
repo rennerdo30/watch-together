@@ -225,27 +225,19 @@ class TestPlaybackEngineIsNotKeyedOnRoomState:
 
 
 class TestQueuedVideosAreNotPlayedFromStaleUrls:
-    """A queue entry's stream URLs are as old as the entry.
-
-    `set_video` used to show the queued copy immediately as a placeholder
-    and re-resolve behind it. The player mounted on those expired URLs and
-    asked for a manifest built from them; the request failed, and the
-    failure is what the viewer kept seeing even after fresh URLs arrived.
-    The spinner is shown instead until the re-resolve lands.
-    """
+    """Queue URLs are refreshed on the server before set_video is broadcast."""
 
     ROOM_PAGE = REPO_ROOT / "frontend" / "app" / "room" / "[id]" / "page.tsx"
 
-    def test_the_queued_copy_is_not_shown_while_re_resolving(self):
+    def test_server_resolves_before_announcing_and_clients_do_not_repeat_it(self):
         text = self.ROOM_PAGE.read_text()
         set_video = text.split("case 'set_video':")[1].split("case '")[0]
-        assert "setVideoData(null);" in set_video
-        assert "setVideoData(queuedVideoData);" in set_video, (
-            "a resolve failure should still fall back to the queued copy"
-        )
-        # The fallback must be in the failure path, not the happy one.
-        assert set_video.index("setVideoData(null);") < \
-            set_video.index("setVideoData(queuedVideoData);")
+        assert "resolveUrl(" not in set_video
+        assert "setVideoData(payload.video_data ?? null)" in set_video
+        server = (REPO_ROOT / "backend" / "main.py").read_text()
+        for message in ('queue_play', 'video_ended'):
+            handler = server.split(f'elif msg_type == "{message}":')[1].split('elif msg_type ==')[0]
+            assert handler.index('await refresh_video_url') < handler.index('"type": "set_video"')
 
     def test_every_member_sees_the_spinner_not_an_empty_room(self):
         """`loadingQueueIndex` is only set on the client that clicked."""
