@@ -505,7 +505,7 @@ class TestLiveStreamExpiryIsRecoverable:
 
         handler = text.split("Hls.Events.ERROR", 1)[1]
         expiry_at = handler.index("onSourceExpired")
-        retry_at = handler.index("retryCountRef.current >= MAX_RETRIES")
+        retry_at = handler.index("scheduleRecovery(")
         assert expiry_at < retry_at, (
             "the expiry check must run before the retry budget: retrying a "
             "403'd URL burns every retry on an answer that cannot change"
@@ -516,7 +516,7 @@ class TestLiveStreamExpiryIsRecoverable:
         assert "const handleSourceExpired" in text
         handler = text.split("const handleSourceExpired", 1)[1]
         handler = handler.split("const getFinalVideoUrl", 1)[0]
-        assert "resolveUrl(original)" in handler, (
+        assert "resolveUrl(original, { refresh: true })" in handler, (
             "the expiry handler must re-resolve the original URL — nothing "
             "else can mint a fresh signed stream URL"
         )

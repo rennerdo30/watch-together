@@ -704,25 +704,18 @@ export default function RoomPage() {
     // looping — the second failure inside the window surfaces as an error.
     const SOURCE_REFRESH_COOLDOWN_MS = 30_000;
     const lastSourceRefreshRef = useRef(0);
-    const handleSourceExpired = useCallback(() => {
+    const handleSourceExpired = useCallback(async () => {
         const original = videoDataRef.current?.original_url;
-        if (!original) return;
+        if (!original) throw new Error('There is no stream to refresh.');
         const now = Date.now();
         if (now - lastSourceRefreshRef.current < SOURCE_REFRESH_COOLDOWN_MS) {
-            toast.error('The stream keeps rejecting playback — it may have ended.');
-            return;
+            throw new Error('The stream keeps rejecting playback — it may have ended.');
         }
         lastSourceRefreshRef.current = now;
         console.log('[Room] Stream URL expired upstream, re-resolving...');
-        resolveUrl(original)
-            .then((fresh) => {
-                console.log('[Room] Got fresh stream after expiry:', fresh.stream_type, fresh.quality);
-                setVideoData(fresh);
-            })
-            .catch((err: unknown) => {
-                console.warn('[Room] Re-resolve after expiry failed:', err);
-                toast.error(getErrorMessage(err, 'Could not refresh the stream'));
-            });
+        const fresh = await resolveUrl(original, { refresh: true });
+        console.log('[Room] Got fresh stream after expiry:', fresh.stream_type, fresh.quality);
+        setVideoData(fresh);
     }, []);
 
     const getFinalVideoUrl = () => {

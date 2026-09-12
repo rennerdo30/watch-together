@@ -62,7 +62,7 @@ export interface UseShakaPlayerOptions {
     initialTime?: number;
     onError?: (error: string) => void;
     /** The CDN refused the stream URLs (403/410): they need re-resolving. */
-    onSourceExpired?: () => void;
+    onSourceExpired?: () => Promise<void>;
     onLoadingChange?: (isLoading: boolean) => void;
     onBufferingChange?: (isBuffering: boolean) => void;
     /** How autoplay actually went; see `lib/playback`. */
@@ -215,7 +215,13 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
             // per load: the re-resolve swaps the manifest and remounts.
             if (isExpiredSourceError(detail) && callbackRefs.current.onSourceExpired && !expiryReported) {
                 expiryReported = true;
-                callbackRefs.current.onSourceExpired();
+                void callbackRefs.current.onSourceExpired().catch((error: unknown) => {
+                    if (cancelled) return;
+                    setLoading(false);
+                    setIsBuffering(false);
+                    callbackRefs.current.onBufferingChange?.(false);
+                    callbackRefs.current.onError?.(error instanceof Error ? error.message : 'Could not refresh the stream.');
+                });
                 return;
             }
             setLoading(false);

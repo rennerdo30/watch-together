@@ -42,7 +42,7 @@ GVS_HOST_SUFFIX = ".googlevideo.com"
 GVS_MAX_RANGE_BYTES = 10 * 1024 * 1024
 
 # In-memory cache configuration for hot segments
-MEMORY_CACHE_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB in-memory LRU cache
+MEMORY_CACHE_SIZE_BYTES = 256 * 1024 * 1024  # 256 MB in-memory LRU cache
 MEMORY_CACHE_MAX_ITEM_PERCENT = 0.25  # Don't cache items > 25% of max size
 
 # Prefetch configuration
