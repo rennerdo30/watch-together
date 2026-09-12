@@ -13,6 +13,7 @@ import asyncio
 import time
 import json
 import logging
+from typing import Optional
 from urllib.parse import urljoin, quote
 import re
 
@@ -1114,6 +1115,23 @@ async def proxy_stream(request: Request, url: str):
 # WebSocket Handler
 # ============================================================================
 
+async def publish_room_activity(
+    room_id: str,
+    action: str,
+    actor: Optional[str] = None,
+    video: Optional[dict] = None,
+    **details,
+) -> None:
+    """Persist and broadcast one activity derived by the server."""
+    activity = await manager.record_activity(
+        room_id, action, actor=actor, video=video, **details)
+    if activity:
+        await manager.broadcast({
+            "type": "activity",
+            "payload": {"activity": activity},
+        }, room_id)
+
+
 @app.websocket("/ws/{room_id}")
 async def websocket_endpoint(websocket: WebSocket, room_id: str):
     """WebSocket handler for room synchronization."""
@@ -1167,20 +1185,38 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     history_reporter.rearm(room_id)
 
             elif msg_type == "play":
+                state = manager.room_states.get(room_id, {})
+                was_playing = state.get("is_playing", False)
+                current_video = state.get("video_data")
                 await manager.update_state(room_id, {"is_playing": True, "timestamp": payload.get("timestamp", 0)})
                 await manager.broadcast({"type": "play", "payload": payload}, room_id, exclude=websocket)
+                if current_video and not was_playing:
+                    await publish_room_activity(
+                        room_id, "playback_resumed", user_email, current_video)
                 sponsor_skipper.rearm(room_id)
                 history_reporter.rearm(room_id)
 
             elif msg_type == "pause":
+                state = manager.room_states.get(room_id, {})
+                was_playing = state.get("is_playing", False)
+                current_video = state.get("video_data")
                 await manager.update_state(room_id, {"is_playing": False, "timestamp": payload.get("timestamp", 0)})
                 await manager.broadcast({"type": "pause", "payload": payload}, room_id, exclude=websocket)
+                if current_video and was_playing:
+                    await publish_room_activity(
+                        room_id, "playback_paused", user_email, current_video)
                 sponsor_skipper.rearm(room_id)
                 history_reporter.rearm(room_id)
 
             elif msg_type == "seek":
-                await manager.update_state(room_id, {"timestamp": payload.get("timestamp", 0)})
+                seek_timestamp = payload.get("timestamp", 0)
+                current_video = manager.room_states.get(room_id, {}).get("video_data")
+                await manager.update_state(room_id, {"timestamp": seek_timestamp})
                 await manager.broadcast({"type": "seek", "payload": payload}, room_id, exclude=websocket)
+                if current_video and isinstance(seek_timestamp, (int, float)):
+                    await publish_room_activity(
+                        room_id, "playback_seeked", user_email, current_video,
+                        timestamp=max(0, seek_timestamp))
                 sponsor_skipper.rearm(room_id)
                 history_reporter.rearm(room_id)
                 
@@ -1207,6 +1243,8 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 if next_v:
                     await manager.broadcast({"type": "set_video", "payload": {"video_data": next_v}}, room_id)
                     await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": playing_index}}, room_id)
+                    await publish_room_activity(
+                        room_id, "video_started", user_email, next_v)
                     sponsor_skipper.video_changed(room_id)
                     history_reporter.video_changed(room_id)
 
@@ -1224,21 +1262,57 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 queue = await manager.add_to_queue(room_id, video_data)
                 state = manager.room_states.get(room_id, {})
                 await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": state.get("playing_index", -1)}}, room_id)
+                if video_data:
+                    await publish_room_activity(
+                        room_id, "queue_added", user_email, video_data)
 
             elif msg_type == "queue_remove":
-                queue = await manager.remove_from_queue(room_id, payload.get("index"))
+                state = manager.room_states.get(room_id, {})
+                index = payload.get("index")
+                removed_video = None
+                if (isinstance(index, int) and 0 <= index < len(state.get("queue", []))
+                        and index != state.get("playing_index", -1)):
+                    removed_video = state["queue"][index].copy()
+                queue = await manager.remove_from_queue(room_id, index)
                 state = manager.room_states.get(room_id, {})
                 await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": state.get("playing_index", -1)}}, room_id)
+                if removed_video:
+                    await publish_room_activity(
+                        room_id, "queue_removed", user_email, removed_video)
 
             elif msg_type == "queue_reorder":
-                queue = await manager.reorder_queue(room_id, payload.get("old_index"), payload.get("new_index"))
+                state = manager.room_states.get(room_id, {})
+                old_index = payload.get("old_index")
+                new_index = payload.get("new_index")
+                moved_video = None
+                if (isinstance(old_index, int) and isinstance(new_index, int)
+                        and old_index != new_index
+                        and 0 <= old_index < len(state.get("queue", []))
+                        and 0 <= new_index < len(state.get("queue", []))):
+                    moved_video = state["queue"][old_index].copy()
+                queue = await manager.reorder_queue(room_id, old_index, new_index)
                 state = manager.room_states.get(room_id, {})
                 await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": state.get("playing_index", -1)}}, room_id)
+                if moved_video:
+                    await publish_room_activity(
+                        room_id, "queue_reordered", user_email, moved_video,
+                        position=new_index + 1)
 
             elif msg_type == "queue_pin":
-                queue = await manager.toggle_pin(room_id, payload.get("index"))
+                state = manager.room_states.get(room_id, {})
+                index = payload.get("index")
+                pinned_video = None
+                was_pinned = False
+                if isinstance(index, int) and 0 <= index < len(state.get("queue", [])):
+                    pinned_video = state["queue"][index].copy()
+                    was_pinned = bool(pinned_video.get("pinned", False))
+                queue = await manager.toggle_pin(room_id, index)
                 state = manager.room_states.get(room_id, {})
                 await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": state.get("playing_index", -1)}}, room_id)
+                if pinned_video:
+                    await publish_room_activity(
+                        room_id, "queue_unpinned" if was_pinned else "queue_pinned",
+                        user_email, pinned_video)
 
             elif msg_type == "queue_play":
                 next_v, queue, playing_index = await manager.play_from_queue(room_id, payload.get("index"))
@@ -1246,6 +1320,9 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     next_v = await refresh_video_url(next_v, user_email=user_email)
                     await manager.broadcast({"type": "set_video", "payload": {"video_data": next_v}}, room_id)
                 await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": playing_index}}, room_id)
+                if next_v:
+                    await publish_room_activity(
+                        room_id, "video_started", user_email, next_v)
                 sponsor_skipper.video_changed(room_id)
                 history_reporter.video_changed(room_id)
 
@@ -1254,16 +1331,30 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 # once the room has moved on, later reports of the same end
                 # are dropped rather than advancing the queue again.
                 ended_url = payload.get("original_url") if isinstance(payload, dict) else None
+                ended_video = manager.room_states.get(room_id, {}).get("video_data")
                 next_v, queue, playing_index, advanced = await manager.next_video(
                     room_id, ended_url if isinstance(ended_url, str) else None)
                 if advanced:
                     await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": playing_index}}, room_id)
+                    if ended_video:
+                        await publish_room_activity(
+                            room_id,
+                            "video_finished" if isinstance(ended_url, str) else "video_skipped",
+                            None if isinstance(ended_url, str) else user_email,
+                            ended_video,
+                        )
                     if next_v:
                         next_v = await refresh_video_url(next_v, user_email=user_email)
                     if manager.room_states.get(room_id, {}).get("video_data") is next_v:
                         await manager.broadcast({"type": "set_video", "payload": {"video_data": next_v}}, room_id)
                         sponsor_skipper.video_changed(room_id)
                         history_reporter.video_changed(room_id)
+                    if next_v:
+                        await publish_room_activity(
+                            room_id, "video_started", None, next_v)
+                    else:
+                        await publish_room_activity(
+                            room_id, "playback_stopped", None)
 
             elif msg_type == "promote":
                 target = payload.get("target_email")
@@ -1271,6 +1362,9 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 if target and role and await manager.promote_user(room_id, user_email, target, role):
                     state = manager.room_states.get(room_id, {})
                     await manager.broadcast({"type": "roles_update", "payload": {"roles": state.get("roles", {})}}, room_id)
+                    await publish_room_activity(
+                        room_id, "role_changed", user_email,
+                        target=target, role=role)
             
             elif msg_type == "toggle_permanent":
                 if await manager.toggle_permanent(room_id, user_email):
@@ -1279,6 +1373,9 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         "type": "room_settings_update",
                         "payload": {"permanent": state.get("permanent", False)}
                     }, room_id)
+                    await publish_room_activity(
+                        room_id, "room_permanence_changed", user_email,
+                        enabled=state.get("permanent", False))
 
             elif msg_type == "rename_room":
                 if await manager.rename_room(room_id, user_email, payload.get("name")):
@@ -1290,6 +1387,9 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                             "name": state.get("name", ""),
                         }
                     }, room_id)
+                    await publish_room_activity(
+                        room_id, "room_renamed", user_email,
+                        name=state.get("name", ""))
                 else:
                     # Refusing in silence reads as a broken button: the
                     # header sits behind the settings modal and the address
@@ -1307,6 +1407,9 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         "type": "room_settings_update",
                         "payload": {"sponsorblock": applied},
                     }, room_id)
+                    await publish_room_activity(
+                        room_id, "sponsorblock_changed", user_email,
+                        enabled=applied.get("enabled", False))
                     sponsor_skipper.rearm(room_id)
                 else:
                     logger.info(f"Refused SponsorBlock settings change in {room_id} by {user_email}")

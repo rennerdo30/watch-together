@@ -139,9 +139,14 @@ def test_every_member_reporting_the_end_advances_the_room_once(client):
 
         _drain_until(ws_b, "set_video")
 
-        # Nothing else advanced: a ping answers before any further queue update.
+        # Nothing else advanced. Activity messages may describe the one valid
+        # transition, but no second queue update may arrive before the pong.
         ws_b.send_json({"type": "ping", "payload": {"client_time": 1}})
-        message = ws_b.receive_json()
+        for _ in range(5):
+            message = ws_b.receive_json()
+            assert message["type"] != "queue_update", message
+            if message["type"] == "pong":
+                break
         assert message["type"] == "pong", message
 
     from connection_manager import manager

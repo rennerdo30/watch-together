@@ -292,7 +292,10 @@ def _room_settings(row) -> Dict[str, Any]:
 
 
 def _settings_column(state: Dict[str, Any]) -> str:
-    return json.dumps({"sponsorblock": state.get("sponsorblock")})
+    return json.dumps({
+        "sponsorblock": state.get("sponsorblock"),
+        "activity_log": state.get("activity_log", []),
+    })
 
 
 async def get_room(room_id: str) -> Optional[Dict[str, Any]]:
@@ -306,6 +309,7 @@ async def get_room(room_id: str) -> Optional[Dict[str, Any]]:
         if not row:
             return None
         
+        settings = _room_settings(row)
         return {
             "id": row["id"],
             "video_data": json.loads(row["video_data"]) if row["video_data"] else None,
@@ -316,7 +320,8 @@ async def get_room(room_id: str) -> Optional[Dict[str, Any]]:
             "roles": json.loads(row["roles"]) if row["roles"] else {},
             "permanent": bool(row["permanent"]),
             "name": row["name"] or "",
-            "sponsorblock": _room_settings(row).get("sponsorblock"),
+            "sponsorblock": settings.get("sponsorblock"),
+            "activity_log": settings.get("activity_log", []),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
@@ -375,6 +380,7 @@ async def get_all_rooms() -> Dict[str, Dict[str, Any]]:
         
         rooms = {}
         for row in rows:
+            settings = _room_settings(row)
             rooms[row["id"]] = {
                 "video_data": json.loads(row["video_data"]) if row["video_data"] else None,
                 "is_playing": bool(row["is_playing"]),
@@ -384,7 +390,8 @@ async def get_all_rooms() -> Dict[str, Dict[str, Any]]:
                 "roles": json.loads(row["roles"]) if row["roles"] else {},
                 "permanent": bool(row["permanent"]),
                 "name": row["name"] or "",
-                "sponsorblock": _room_settings(row).get("sponsorblock"),
+                "sponsorblock": settings.get("sponsorblock"),
+                "activity_log": settings.get("activity_log", []),
             }
         return rooms
 
@@ -767,4 +774,3 @@ async def get_or_create_token(user_email: str) -> Dict[str, Any]:
     if token:
         return token
     return await create_token(user_email)
-
