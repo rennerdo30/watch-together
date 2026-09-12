@@ -39,8 +39,8 @@ test('the remembered estimate is discounted, bounded, and forgotten when stale',
 
   expect(openingEstimate(null)).toBe(SHAKA_INITIAL_BANDWIDTH_ESTIMATE);
   expect(openingEstimate({ bps: 10e6, at: NOW })).toBe(10e6 * BANDWIDTH_MEMORY_DISCOUNT);
-  // A slow memory never opens lower than the default; a wild one is capped.
-  expect(openingEstimate({ bps: 100_000, at: NOW })).toBe(SHAKA_INITIAL_BANDWIDTH_ESTIMATE);
+  // A measured slow connection must constrain startup; a wild estimate is capped.
+  expect(openingEstimate({ bps: 100_000, at: NOW })).toBe(80_000);
   expect(openingEstimate({ bps: 1e9, at: NOW })).toBe(SHAKA_MAX_REMEMBERED_BANDWIDTH);
 });
 
@@ -73,9 +73,11 @@ test('with nothing remembered the cautious opening rung still applies', async ({
   await expect(quality).toContainText('auto (240p)');
 });
 
-test('the running estimate is written to storage during playback', async ({ page }) => {
-  await openWithMemory(page, null, 'bw-saves');
-  await expect
-    .poll(() => page.evaluate((key) => localStorage.getItem(key), BANDWIDTH_MEMORY_KEY), { timeout: 20_000 })
-    .toMatch(/"bps":\d+/);
+test('short playback without enough measured bytes does not overwrite memory with the opening guess', async ({ page }) => {
+  const stored = { bps: 8_000_000, at: Date.now() - 60_000 };
+  await openWithMemory(page, stored, 'bw-no-measurement');
+  // The complete A/V fixture is smaller than Shaka's 128k measurement minimum.
+  await expect.poll(() => page.locator('video').evaluate((v: HTMLVideoElement) => v.currentTime)).toBeGreaterThan(2.5);
+  const actual = await page.evaluate(key => localStorage.getItem(key), BANDWIDTH_MEMORY_KEY);
+  expect(JSON.parse(actual!)).toEqual(stored);
 });

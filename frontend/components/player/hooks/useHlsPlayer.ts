@@ -13,7 +13,6 @@ export interface UseHlsPlayerOptions {
     initialTime?: number;
     isLive?: boolean;
     onManifestParsed?: (levels: HlsQualityLevel[]) => void;
-    onLevelSwitch?: (level: number) => void;
     onError?: (error: string) => void;
     /**
      * The CDN rejected the source outright (403/410). Retrying the same URL
@@ -45,6 +44,7 @@ export interface UseHlsPlayerReturn {
     isLoading: boolean;
     isBuffering: boolean;
     qualities: HlsQualityLevel[];
+    /** Selected level, or -1 while adaptive quality is enabled. */
     currentLevel: number;
     stats: HlsStats;
     setLevel: (index: number) => void;
@@ -70,7 +70,6 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
         initialTime = 0,
         isLive = false,
         onManifestParsed,
-        onLevelSwitch,
         onError,
         onSourceExpired,
         onLoadingChange,
@@ -97,7 +96,6 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
     // Use refs for callbacks to avoid recreating initHls on every render
     const callbackRefs = useRef({
         onManifestParsed,
-        onLevelSwitch,
         onError,
         onSourceExpired,
         onLoadingChange,
@@ -107,14 +105,13 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
     useEffect(() => {
         callbackRefs.current = {
             onManifestParsed,
-            onLevelSwitch,
             onError,
             onSourceExpired,
             onLoadingChange,
             onBufferingChange,
             onPlaybackStart,
         };
-    }, [onManifestParsed, onLevelSwitch, onError, onSourceExpired, onLoadingChange,
+    }, [onManifestParsed, onError, onSourceExpired, onLoadingChange,
         onBufferingChange, onPlaybackStart]);
 
     // State
@@ -149,7 +146,10 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
      */
     const setLevel = useCallback((index: number) => {
         if (hlsRef.current) {
-            hlsRef.current.currentLevel = index;
+            // Returning to Auto only changes selection for future requests.
+            // currentLevel flushes the buffer, including when assigned -1.
+            if (index === -1) hlsRef.current.loadLevel = -1;
+            else hlsRef.current.currentLevel = index;
             setCurrentLevel(index);
         }
     }, []);
@@ -173,6 +173,7 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
             hlsRef.current = null;
         }
 
+        setCurrentLevel(-1);
         setIsLoading(true);
         callbackRefs.current.onLoadingChange?.(true);
 
@@ -294,8 +295,7 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
             });
 
             hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
-                setCurrentLevel(data.level);
-                callbackRefs.current.onLevelSwitch?.(data.level);
+                setCurrentLevel(hls.autoLevelEnabled ? -1 : hls.manualLevel);
 
                 const level = hls.levels[data.level];
                 if (level) {

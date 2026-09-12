@@ -13,8 +13,9 @@ import {
     SHAKA_SWITCH_INTERVAL_SECONDS,
     SHAKA_ABR_FAST_HALF_LIFE,
     SHAKA_ABR_SLOW_HALF_LIFE,
+    SHAKA_ABR_MIN_SAMPLE_BYTES,
+    SHAKA_ABR_MIN_TOTAL_BYTES,
     BANDWIDTH_MEMORY_SAVE_INTERVAL_MS,
-    BANDWIDTH_MEMORY_FIRST_SAVE_SECONDS,
     SHAKA_SEGMENT_RETRIES,
     SHAKA_RETRY_BASE_DELAY_MS,
     SHAKA_REQUEST_TIMEOUT_MS,
@@ -158,7 +159,6 @@ interface ShakaPlayerInstance {
     destroy(): Promise<void>;
     configure(config: Record<string, unknown>): void;
     getVariantTracks(): ShakaVariantTrack[];
-    getStats(): { estimatedBandwidth: number };
     selectVariantTrack(track: ShakaVariantTrack, clearBuffer?: boolean): void;
     addEventListener(type: string, listener: (event: Event) => void): void;
     removeEventListener(type: string, listener: (event: Event) => void): void;
@@ -189,6 +189,7 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
         let cancelled = false;
         let player: ShakaPlayerInstance | null = null;
         let onProgress: (() => void) | undefined;
+        let measuredBandwidth: number | null = null;
 
         const setLoading = (loading: boolean) => {
             if (cancelled) return;
@@ -290,7 +291,7 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
                 },
                 // Stock variant selection fed with samples that exclude the
                 // wait for each response's headers; see lib/abr.ts.
-                abrFactory: latencyAwareAbrFactory(shaka),
+                abrFactory: latencyAwareAbrFactory(shaka, bps => { measuredBandwidth = bps; }),
                 abr: {
                     // Open on what this connection managed last time, or a
                     // conservative guess, and let measurements take over.
@@ -307,6 +308,8 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
                     advanced: {
                         fastHalfLife: SHAKA_ABR_FAST_HALF_LIFE,
                         slowHalfLife: SHAKA_ABR_SLOW_HALF_LIFE,
+                        minBytes: SHAKA_ABR_MIN_SAMPLE_BYTES,
+                        minTotalBytes: SHAKA_ABR_MIN_TOTAL_BYTES,
                     },
                 },
                 // The player adapts within one codec family, so prefer the
@@ -318,19 +321,17 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
             instance.addEventListener('buffering', onBuffering);
             instance.addEventListener('trackschanged', onTracksChanged);
             instance.addEventListener('adaptation', onTracksChanged);
-            // Keep what the connection is managing, for the next load: once
-            // a little has played, then every so often while it does.
+            // Persist only fresh measurements, never Shaka's opening guess.
             let lastSavedAt = 0;
             onProgress = () => {
-                if (cancelled || video.paused) return;
+                if (cancelled || video.paused || measuredBandwidth === null) return;
                 const now = Date.now();
-                const first = lastSavedAt === 0 && video.currentTime >= BANDWIDTH_MEMORY_FIRST_SAVE_SECONDS;
-                if (!first && now - lastSavedAt < BANDWIDTH_MEMORY_SAVE_INTERVAL_MS) return;
-                const estimate = instance.getStats().estimatedBandwidth;
-                if (estimate > 0) {
-                    rememberBandwidth(estimate, now);
+                if (now - lastSavedAt < BANDWIDTH_MEMORY_SAVE_INTERVAL_MS) return;
+                if (Number.isFinite(measuredBandwidth) && measuredBandwidth > 0) {
+                    rememberBandwidth(measuredBandwidth, now);
                     lastSavedAt = now;
                 }
+                measuredBandwidth = null;
             };
             video.addEventListener('timeupdate', onProgress);
 
