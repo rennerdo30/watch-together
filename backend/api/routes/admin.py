@@ -16,7 +16,7 @@ import os
 import time
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from core import config
 from core.security import get_user_from_request
@@ -49,9 +49,10 @@ def require_admin(request: Request) -> str:
 
 
 @router.get("/overview")
-async def admin_overview(request: Request):
+async def admin_overview(request: Request, response: Response):
     """Rooms, viewers and stored cookie identities at a glance."""
     user = require_admin(request)
+    response.headers["Cache-Control"] = "private, no-store"
 
     rooms = []
     for rid, state in manager.room_states.items():
@@ -92,9 +93,10 @@ async def admin_overview(request: Request):
 
 
 @router.get("/cache")
-async def admin_cache(request: Request):
+async def admin_cache(request: Request, response: Response):
     """Every cache tier, inspectable in one response."""
     user = require_admin(request)
+    response.headers["Cache-Control"] = "private, no-store"
     logger.debug(f"Admin cache inspection served to {user}")
     return {
         "segments": disk_cache_report(max_entries=config.ADMIN_SEGMENT_LIST_LIMIT),

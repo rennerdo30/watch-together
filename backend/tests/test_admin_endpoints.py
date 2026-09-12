@@ -60,6 +60,12 @@ class TestAdminAccessControl:
 
 
 class TestAdminOverview:
+    @pytest.mark.parametrize("path", ["overview", "cache"])
+    def test_live_admin_reports_cannot_be_cached(self, client, admin_configured, path):
+        response = client.get(f"/api/admin/{path}?user={ADMIN}")
+        assert response.status_code == 200
+        assert response.headers.get("cache-control") == "private, no-store"
+
     def test_overview_reports_rooms_and_members(self, client, admin_configured):
         with client.websocket_connect(f"/ws/admin-seen?user={NON_ADMIN}") as ws:
             ws.receive_json()  # sync snapshot

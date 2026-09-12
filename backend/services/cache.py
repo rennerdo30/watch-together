@@ -41,7 +41,7 @@ class MemoryCache:
     LRU in-memory cache for hot video/audio segments.
 
     Features:
-    - Configurable max size (default 100 MB)
+    - Configurable max size (default 256 MB)
     - Audio priority eviction (audio segments evicted last)
     - Async-safe with asyncio.Lock
     - O(1) get/put operations using OrderedDict
