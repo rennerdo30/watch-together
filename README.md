@@ -15,6 +15,7 @@ A real-time video synchronization platform for watching YouTube, Twitch, and 180
 - **Real-time Synchronization**: Sub-second accurate sync via WebSockets with intelligent drift correction
 - **DASH/HLS Streaming**: Separate video/audio streams with quality selection up to 4K
 - **Segment Caching & Prefetch**: Position-aware bucket cache on disk plus an in-memory LRU for hot segments, with look-ahead prefetching of upcoming video/audio segments
+- **Livestream Chat**: On-demand chat panel with Twitch, YouTube, Kick and Owncast adapters. Other providers can use a custom HTTPS chat embed URL or open the original stream. Custom URLs stay with that stream in the current browser tab. Chat updates live independently of the buffered video; provider sign-in and embedding restrictions still apply.
 - **Room System**: Create custom rooms with persistent queue and playback state, showing who added each video
 - **Seek Preview**: Hovering the timeline shows the frame under the pointer (YouTube storyboards)
 - **SponsorBlock**: Community-marked sponsor, self-promotion and reminder segments in YouTube videos are skipped for the whole room at once (the server seeks everyone), shown on the seek bar, and chosen per room by its admin

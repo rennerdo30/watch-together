@@ -609,3 +609,13 @@ class TestLiveStreamsAreNotPositionSynced:
         for handler in ("onPlay={", "onPause={", "onSeeked={"):
             body = text.split(handler, 1)[1].split("}}", 1)[0]
             assert "is_live" in body, f"{handler} publishes a live position"
+
+
+class TestLiveChatFrames:
+    def test_csp_permits_https_chat_frames_without_widening_scripts(self):
+        conf = (REPO_ROOT / 'nginx/nginx.conf').read_text()
+        policy = conf.split('add_header Content-Security-Policy "')[1].split('" always')[0]
+        directives = {parts[0]: parts[1:] for clause in policy.split(';') if (parts := clause.split())}
+        assert directives['frame-src'] == ['https:']
+        assert 'https:' not in directives['script-src']
+        assert directives['frame-ancestors'] == ["'self'"]

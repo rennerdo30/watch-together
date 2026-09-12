@@ -27,6 +27,9 @@ import type { Storyboard } from './storyboard';
 
 export interface ResolveResponse {
     original_url: string;
+    /** Canonical source and provider reported by the resolver, including self-hosted sites. */
+    webpage_url?: string;
+    extractor_key?: string;
     stream_url: string;
     title: string;
     is_live: boolean;
