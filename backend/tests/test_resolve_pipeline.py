@@ -523,3 +523,14 @@ class TestStoryboard:
         response = _build_resolve_response("https://youtu.be/x", info, {"url": "https://cdn/v", "type": "dash"})
         assert response["storyboard"]["frame_duration"] == 7.5
         assert "storyboard" not in _build_resolve_response("https://youtu.be/x", {"formats": []}, {"url": "u"})
+
+
+def test_resolved_video_identifies_self_hosted_chat_provider():
+    from services.resolver import _build_resolve_response
+    response = _build_resolve_response(
+        'https://short.example/live',
+        {'extractor_key': 'Owncast', 'webpage_url': 'https://stream.example/', 'is_live': True},
+        {'url': 'https://stream.example/hls/stream.m3u8'},
+    )
+    assert response['extractor_key'] == 'Owncast'
+    assert response['webpage_url'] == 'https://stream.example/'

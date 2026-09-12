@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { ResolveResponse, resolveUrl, getExtensionToken, regenerateExtensionToken, ExtensionToken, getUserSettings, updateUserSettings, getCookies, saveCookies, type UserSettings } from '@/lib/api';
 import { CustomPlayer } from '@/components/custom-player';
+import { LiveChat } from '@/components/live-chat';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { THEMES, DEFAULT_THEME, getThemeById, loadCustomTheme, saveCustomTheme, createCustomTheme } from '@/lib/themes';
 import { ColorModeToggle } from '@/components/color-mode-toggle';
@@ -109,7 +110,7 @@ export default function RoomPage() {
     const [showSettings, setShowSettings] = useState(false);
     const [activeTheme, setActiveTheme] = useState(DEFAULT_THEME);
     const [useProxy, setUseProxy] = useState(true);
-    const [sidebarTab, setSidebarTab] = useState<'queue' | 'users'>('queue');
+    const [sidebarTab, setSidebarTab] = useState<'queue' | 'users' | 'chat'>('queue');
     const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
     const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
     const [showDebug, setShowDebug] = useState(false);
@@ -1113,7 +1114,7 @@ export default function RoomPage() {
 
                 {/* Resizable Sidebar */}
                 <aside
-                    aria-label="Queue and audience"
+                    aria-label="Queue, audience and live chat"
                     className="app-surface border-t lg:border-t-0 lg:border-l border-neutral-800 flex flex-col shrink-0 bg-neutral-900/30 h-[42dvh] w-full lg:h-auto lg:w-[var(--sidebar-width)]"
                 >
                     {/* Compact Tabs */}
@@ -1144,11 +1145,22 @@ export default function RoomPage() {
                             <Users aria-hidden="true" className="w-3 h-3" />
                             Audience ({members.length})
                         </button>
+                        <button
+                            type="button"
+                            role="tab"
+                            aria-selected={sidebarTab === 'chat'}
+                            onClick={() => setSidebarTab('chat')}
+                            className={`flex-1 py-2 rounded-lg text-[13px] font-medium transition-all ${sidebarTab === 'chat' ? 'bg-neutral-800 text-white' : 'text-neutral-400 hover:bg-white/5 hover:text-neutral-200'}`}
+                        >
+                            Live chat
+                        </button>
                     </div>
 
                     {/* Content */}
                     <div className="flex-1 overflow-hidden relative">
-                        {sidebarTab === 'queue' ? (
+                        {sidebarTab === 'chat' ? (
+                            <LiveChat key={`${videoData?.original_url}:${videoData?.is_live}`} video={videoData} />
+                        ) : sidebarTab === 'queue' ? (
                             <DndContext
                                 sensors={sensors}
                                 collisionDetection={closestCenter}

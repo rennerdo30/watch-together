@@ -324,6 +324,8 @@ def _build_resolve_response(url: str, info: dict, stream_info: dict) -> dict:
     """Shape a resolved video for the client."""
     response = {
         "original_url": url,
+        "webpage_url": info.get("webpage_url"),
+        "extractor_key": info.get("extractor_key"),
         "stream_url": stream_info["url"],
         "title": info.get("title", "Unknown Title"),
         "is_live": info.get("is_live", False),
