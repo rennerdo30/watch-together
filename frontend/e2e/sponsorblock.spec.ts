@@ -39,14 +39,18 @@ async function playVideo(page: import('@playwright/test').Page) {
 test('the room is moved past a sponsor segment, is told why, and sees every segment on the seek bar',
   async ({ page }) => {
     await joinRoom(page, uniqueRoomId('sb-skip'), ADMIN);
-    const media = await playVideo(page);
-
-    // Record every position the player reports, so the jump itself can be
-    // asserted: reaching 3s proves nothing on a 6s clip that simply plays.
-    await media.evaluate((v: HTMLVideoElement & { __positions?: number[] }) => {
-      v.__positions = [];
-      v.addEventListener('timeupdate', () => v.__positions!.push(v.currentTime));
+    // Keep observations outside the media element: completing the queue now
+    // removes the player, so polling its final currentTime races that cleanup.
+    await page.evaluate(() => {
+      const state = window as unknown as { sponsorPositions: number[] };
+      state.sponsorPositions = [];
+      document.addEventListener('timeupdate', event => {
+        if (event.target instanceof HTMLVideoElement) state.sponsorPositions.push(event.target.currentTime);
+      }, true);
     });
+    const media = await playVideo(page);
+    const recordedPositions = () => page.evaluate(() =>
+      (window as unknown as { sponsorPositions: number[] }).sponsorPositions);
 
     // Both segments are drawn, whether or not they are skipped.
     await expect(page.locator('[data-sponsor-segment="sponsor"]')).toHaveCount(1, { timeout: 10_000 });
@@ -58,13 +62,13 @@ test('the room is moved past a sponsor segment, is told why, and sees every segm
     await expect
       .poll(() => media.evaluate((v: HTMLVideoElement) => v.currentTime), { timeout: 10_000 })
       .toBeGreaterThanOrEqual(3);
-    const positions = await media.evaluate((v: HTMLVideoElement & { __positions?: number[] }) => v.__positions ?? []);
+    const positions = await recordedPositions();
     expect(positions.some((t) => t < 1.5)).toBe(true);
     expect(positions.filter((t) => t > 1.6 && t < 2.8)).toEqual([]);
 
     // The intro is not in the default selection, so it plays through.
     await expect
-      .poll(() => media.evaluate((v: HTMLVideoElement) => v.currentTime >= 5.6 || v.ended), { timeout: 15_000 })
+      .poll(async () => (await recordedPositions()).some(t => t >= 5.6), { timeout: 15_000 })
       .toBe(true);
     await expect(page.getByText(/skipped intermission/i)).toHaveCount(0);
   });

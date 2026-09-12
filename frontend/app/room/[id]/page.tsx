@@ -916,11 +916,12 @@ export default function RoomPage() {
                                         }
                                     }}
                                     onPause={() => {
-                                        if (internalUpdateCount.current === 0) {
-                                            const t = videoData.is_live ? 0 : (playerRef.current?.currentTime() || 0);
-                                            sendMsg('pause', { timestamp: t });
-                                            setSyncState(prev => ({ ...prev, isPlaying: false, timestamp: t, lastSync: new Date().toLocaleTimeString() }));
-                                        }
+                                        // The player suppresses only pauses applied by
+                                        // sync. Unrelated room messages must not swallow
+                                        // a user's pause and let the next heartbeat resume it.
+                                        const t = videoData.is_live ? 0 : (playerRef.current?.currentTime() || 0);
+                                        sendMsg('pause', { timestamp: t });
+                                        setSyncState(prev => ({ ...prev, isPlaying: false, timestamp: t, lastSync: new Date().toLocaleTimeString() }));
                                     }}
                                     onSeeked={(time: number) => {
                                         // Scrubbing a DVR window is a local affair: the

@@ -32,6 +32,9 @@ async function playUrl(page: import('@playwright/test').Page, url: string) {
   await expect(media).toHaveCount(1, { timeout: 15_000 });
   await expect.poll(() => media.evaluate((v: HTMLVideoElement) => v.readyState),
     { timeout: 20_000 }).toBeGreaterThan(0);
+  // Metadata can arrive before the asynchronous autoplay attempt. Pause only
+  // after it starts, so this test exercises a paused remount rather than load.
+  await expect.poll(() => media.evaluate((v: HTMLVideoElement) => !v.paused)).toBe(true);
   return media;
 }
 

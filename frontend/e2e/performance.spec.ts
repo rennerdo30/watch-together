@@ -71,3 +71,58 @@ test('slow initial media still starts at the beginning', async ({ page }) => {
   await expect.poll(() => page.evaluate(() => (window as unknown as { firstPlayedAt?: number }).firstPlayedAt),
     { timeout: 25_000 }).toBeLessThan(1);
 });
+
+test('a user pause beside a heartbeat is sent, while remote pauses are not echoed', async ({ page }) => {
+  const original = 'https://youtu.be/performance-pause';
+  await stubAdaptiveStream(page, original);
+  await page.addInitScript(() => {
+    const Native = window.WebSocket;
+    const sent: string[] = [];
+    window.WebSocket = class extends Native {
+      constructor(url: string | URL, protocols?: string | string[]) {
+        super(url, protocols);
+        Object.assign(window, { roomSocket: this, sent });
+      }
+      send(data: Parameters<WebSocket['send']>[0]) {
+        if (typeof data === 'string') sent.push(data);
+        super.send(data);
+      }
+    };
+  });
+  await page.goto(`/room/perf-pause-${Date.now()}?user=performance@example.com`);
+  await expect(page.getByLabel('Connected to the room')).toBeVisible();
+  await page.getByPlaceholder('Paste video URL...').fill(original);
+  await page.getByPlaceholder('Paste video URL...').press('Enter');
+  const video = page.locator('video');
+  await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.currentTime)).toBeGreaterThan(0.5);
+  await page.evaluate(() => {
+    const video = document.querySelector('video')!;
+    (window as unknown as { roomSocket: WebSocket }).roomSocket.dispatchEvent(new MessageEvent('message', {
+      data: JSON.stringify({ type: 'heartbeat', payload: { timestamp: video.currentTime, is_playing: true } }),
+    }));
+    video.pause();
+  });
+  await expect(page.getByText('Paused', { exact: true }).first()).toBeVisible();
+  const pauseCount = () => page.evaluate(() => (window as unknown as { sent: string[] }).sent
+    .filter(raw => JSON.parse(raw).type === 'pause').length);
+  expect(await pauseCount()).toBe(1);
+  await page.evaluate(() => {
+    const socket = (window as unknown as { roomSocket: WebSocket }).roomSocket;
+    const video = document.querySelector('video')!;
+    // Simulate the server applying playback to this viewer.
+    socket.dispatchEvent(new MessageEvent('message', {
+      data: JSON.stringify({ type: 'play', payload: { timestamp: video.currentTime } }),
+    }));
+  });
+  await expect.poll(() => video.evaluate((v: HTMLVideoElement) => !v.paused)).toBe(true);
+  await page.evaluate(() => {
+    const socket = (window as unknown as { roomSocket: WebSocket }).roomSocket;
+    const video = document.querySelector('video')!;
+    socket.dispatchEvent(new MessageEvent('message', {
+      data: JSON.stringify({ type: 'pause', payload: { timestamp: video.currentTime } }),
+    }));
+  });
+  await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.paused)).toBe(true);
+  await page.waitForTimeout(500);
+  expect(await pauseCount()).toBe(1);
+});
