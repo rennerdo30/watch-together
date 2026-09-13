@@ -269,7 +269,7 @@ export default function AdminPage() {
           />
           <StatCard
             icon={<Database aria-hidden="true" className="h-5 w-5" />}
-            label="Users with cookies"
+            label="Members with cookies in memory"
             value={overview ? numberFormatter.format(overview.cookie_users.length) : '—'}
           />
         </div>

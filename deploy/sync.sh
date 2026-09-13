@@ -127,7 +127,7 @@ ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" "mkdir -p ${REMOTE}"
 # Directory sources also keep `--delete` scoped: it prunes only within each
 # transferred directory and never touches unrelated entries at the
 # destination root (such as .env).
-run_rsync deploy backend frontend nginx "${DEST}"
+run_rsync deploy backend frontend nginx extension "${DEST}"
 
 echo "✓ sync complete"
 

@@ -16,9 +16,8 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from fastapi.testclient import TestClient
 
-from core.security import get_user_cookie_path
 from services import stream_owner
-from services.user_cookies import clear_cache
+from services.user_cookies import clear_all
 
 ADDER = "adder@example.com"
 OTHER = "other@example.com"
@@ -27,37 +26,28 @@ STREAM = "https://rr1---sn-x.googlevideo.com/videoplayback?itag=137&clen=1000&lm
 AUDIO = "https://rr1---sn-x.googlevideo.com/videoplayback?itag=140&clen=500&lmt=1&sig=for-adder"
 
 
-def _write_cookies(user, value):
-    path = get_user_cookie_path(user)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+def _hold_cookies(user, value):
+    from services.user_cookies import store
     far = int(time.time()) + 86400
-    with open(path, "w") as f:
-        f.write("# Netscape HTTP Cookie File\n" + "\t".join(
-            [".googlevideo.com", "TRUE", "/", "FALSE", str(far), "SID", value]) + "\n")
-    return path
+    store(user, "# Netscape HTTP Cookie File\n" + "\t".join(
+        [".googlevideo.com", "TRUE", "/", "FALSE", str(far), "SID", value]) + "\n")
 
 
 @pytest.fixture(autouse=True)
 def clean():
     stream_owner.forget_all()
-    clear_cache()
+    clear_all()
     yield
     stream_owner.forget_all()
-    clear_cache()
+    clear_all()
 
 
 @pytest.fixture
 def cookie_files():
-    """Cookie files for both members.
-
-    Requested *after* the app client in tests that start the app: startup
-    migrates loose cookie files into the database and removes them.
-    """
-    created = [_write_cookies(ADDER, "adder-secret"), _write_cookies(OTHER, "other-secret")]
+    """Both members' cookies are held in memory, as after an extension sync."""
+    _hold_cookies(ADDER, "adder-secret")
+    _hold_cookies(OTHER, "other-secret")
     yield
-    for p in created:
-        if os.path.exists(p):
-            os.remove(p)
 
 
 def _video(resolved_by=ADDER):
@@ -120,24 +110,23 @@ def client():
 
 
 def test_resolving_records_who_resolved(client, monkeypatch):
-    import asyncio
     import main as main_module
-    from services.database import save_user_cookies
+    from services.user_cookies import store
     from tests.test_resolve_pipeline import FAKE_INFO
 
     seen = []
 
     def fake_extract(url, opts):
-        seen.append(opts.get("cookiefile"))
+        path = opts.get("cookiefile")
+        seen.append(open(path, encoding="utf-8").read() if path else None)
         return FAKE_INFO
 
     monkeypatch.setattr(main_module, "_extract_with_options", fake_extract)
-    # The member's cookies are in the database but not on disk, as after a
-    # restart. Resolving must restore and use them, not go anonymous.
-    asyncio.run(save_user_cookies(ADDER, "# Netscape HTTP Cookie File\n"))
-    assert not os.path.exists(get_user_cookie_path(ADDER))
+    far = int(time.time()) + 86400
+    store(ADDER, "# Netscape HTTP Cookie File\n" + "\t".join(
+        [".youtube.com", "TRUE", "/", "TRUE", str(far), "SID", "adder-yt"]) + "\n")
     with_cookies = client.get("/api/resolve", params={"url": "https://youtu.be/r1", "user": ADDER}).json()
-    assert seen[-1] == get_user_cookie_path(ADDER)
+    assert "adder-yt" in seen[-1]
     assert with_cookies["resolved_by"] == ADDER
     assert stream_owner.owner_of(with_cookies["video_url"]) == ADDER
 

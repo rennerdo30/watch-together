@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 from fastapi import WebSocket
+from core.config import GUEST_IDENTITY
 from services.database import save_room, get_all_rooms, delete_room
 from services.sponsorblock import SETTINGS_KEY as SPONSORBLOCK_KEY, normalize_settings
 
@@ -23,6 +24,19 @@ class ConnectionManager:
         self._state_lock = asyncio.Lock()
         # Per-room locks for more granular locking
         self._room_locks: Dict[str, asyncio.Lock] = {}
+
+    def member_emails(self, room_id: str) -> List[str]:
+        """Identities connected to a room right now, in join order, without duplicates or guests.
+
+        These are the members whose cookies a resolve for this room may run
+        with; someone who has left is not offered.
+        """
+        seen: List[str] = []
+        for ws in self.active_connections.get(room_id, []):
+            email = getattr(ws, "user_email", None)
+            if email and email != GUEST_IDENTITY and email not in seen:
+                seen.append(email)
+        return seen
 
     def _get_room_lock(self, room_id: str) -> asyncio.Lock:
         """Get or create a lock for a specific room."""
@@ -262,7 +276,7 @@ class ConnectionManager:
         await self._save_room_state(room_id)
 
         # Update members list based on current active connections
-        active_emails = [getattr(ws, "user_email", "Guest") for ws in self.active_connections[room_id]]
+        active_emails = [getattr(ws, "user_email", GUEST_IDENTITY) for ws in self.active_connections[room_id]]
         self.room_states[room_id]["members"] = [{"email": email} for email in sorted(list(set(active_emails)))]
 
         # Send adjusted current room state to the new user
@@ -286,7 +300,7 @@ class ConnectionManager:
                 self.active_connections[room_id].remove(websocket)
             
             # Update members list
-            active_emails = [getattr(ws, "user_email", "Guest") for ws in self.active_connections[room_id]]
+            active_emails = [getattr(ws, "user_email", GUEST_IDENTITY) for ws in self.active_connections[room_id]]
             if room_id in self.room_states:
                 self.room_states[room_id]["members"] = [{"email": email} for email in sorted(list(set(active_emails)))]
 

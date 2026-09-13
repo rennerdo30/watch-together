@@ -9,7 +9,7 @@ import { useAudioNormalization, useHlsPlayer, useShakaPlayer, HlsQualityLevel, A
 import { startPlayback, type PlaybackStart } from '@/lib/playback';
 import type { SponsorSegment } from '@/lib/sponsorblock';
 import type { Storyboard } from '@/lib/storyboard';
-import { useLocalStorageState } from '@/lib/hooks/useLocalStorageState';
+import { useLocalStorageState, parseStoredBoolean } from '@/lib/hooks/useLocalStorageState';
 import { useVideoEnhancement } from './player/hooks/useVideoEnhancement';
 
 interface CustomPlayerProps {
@@ -52,8 +52,6 @@ interface PlayerAPI {
     getVideoElement: () => HTMLVideoElement | null;
 }
 
-const parseStoredBoolean = (stored: string | null, fallback: boolean) =>
-    stored === null ? fallback : stored === 'true';
 
 const parseStoredVolume = (stored: string | null, fallback: number) => {
     if (stored === null) return fallback;

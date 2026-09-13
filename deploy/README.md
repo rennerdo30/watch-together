@@ -68,17 +68,25 @@ the list of keys it still needs, so running it before editing is harmless.
 ./deploy/deploy.sh
 ```
 
-Rebuilds both images and restarts. The backend data volume — SQLite database,
-per-user cookie files, segment cache — survives. Add `--reset-data` to wipe
-it (asks for confirmation first).
+Rebuilds both images and restarts. The backend data volume — SQLite database
+and segment cache — survives (cookies are never on it). Add `--reset-data`
+to wipe it (asks for confirmation first).
 
 Useful flags: `--skip-sync` (remote-only), `--dry-run`, `--host=`/`--user=`.
+
+## DNS over HTTPS
+
+Every container resolves external names through the `dns` service, a
+`cloudflared proxy-dns` sidecar forwarding to Cloudflare over HTTPS, so the
+host's resolver sees no query from the stack. It has a fixed address inside
+the stack's subnet (`WT_SUBNET`, `WT_DNS_IP` in `.env`). If the defaults
+collide with another network on the host, change both together and recreate
+the network once: `docker compose down && docker compose up -d`.
 
 ## Identity
 
 The backend can tell who a request belongs to in two ways, and the difference
-matters because identity selects **which user's stored YouTube cookies get
-used**:
+matters because identity selects **which user's YouTube cookies get used**:
 
 - **`CF_ACCESS_TEAM_DOMAIN` + `CF_ACCESS_AUD` set** — the signed
   `Cf-Access-Jwt-Assertion` is verified against your team's public keys.

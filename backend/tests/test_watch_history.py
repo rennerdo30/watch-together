@@ -194,18 +194,21 @@ class Pings:
 
 @pytest.fixture
 def opted_in(monkeypatch, tmp_path):
-    """MEMBER has the setting on and a cookie file; no database involved."""
-    cookie_file = tmp_path / "cookies.txt"
-    cookie_file.write_text("# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t1900000000\tSID\tsecret\n")
+    """MEMBER has the setting on and cookies; no database involved."""
+    from contextlib import asynccontextmanager
+
+    cookie_path = tmp_path / "cookies.txt"
+    cookie_path.write_text("# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t1900000000\tSID\tsecret\n")
 
     async def settings(email):
         return {"youtube_history": email == MEMBER}
 
-    async def cookie_path(email):
-        return str(cookie_file) if email == MEMBER else None
+    @asynccontextmanager
+    async def cookie_file(email):
+        yield str(cookie_path) if email == MEMBER else None
 
     monkeypatch.setattr(watch_history, "load_user_settings", settings)
-    monkeypatch.setattr(watch_history, "ensure_cookie_file", cookie_path)
+    monkeypatch.setattr(watch_history, "cookie_file", cookie_file)
     monkeypatch.setattr(watch_history, "get_cookie_header", lambda email, url: "SID=secret")
 
 

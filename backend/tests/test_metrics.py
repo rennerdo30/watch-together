@@ -378,28 +378,17 @@ class TestDiskCacheServesSegmentsWithoutRefetching:
         """Give two viewers their own cookies for the test origin."""
         import time as _time
         from urllib.parse import urlparse
-        from core.security import get_user_cookie_path
-        from services.user_cookies import clear_cache
+        from services.user_cookies import clear_all, store
 
         url, _ = counting_origin
         host = urlparse(url).hostname
-        written = []
         expiry = int(_time.time()) + 3600
         for email, value in (("alice@example.com", "alice"), ("bob@example.com", "bob")):
-            path = get_user_cookie_path(email)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w") as handle:
-                handle.write("# Netscape HTTP Cookie File\n")
-                handle.write("\t".join([
-                    host, "FALSE", "/", "FALSE", str(expiry), "SID", value,
-                ]) + "\n")
-            written.append(path)
-        clear_cache()
+            store(email, "# Netscape HTTP Cookie File\n" + "\t".join([
+                host, "FALSE", "/", "FALSE", str(expiry), "SID", value,
+            ]) + "\n")
         yield
-        for path in written:
-            if os.path.exists(path):
-                os.remove(path)
-        clear_cache()
+        clear_all()
 
     async def _drop_memory_cache(self):
         """Force the next read to come off disk rather than out of memory."""

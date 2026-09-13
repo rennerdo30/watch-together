@@ -111,7 +111,7 @@ from the verified claims.
 > **Why this matters**: without these variables the backend falls back to
 > trusting the plain `Cf-Access-Authenticated-User-Email` header. That header
 > is set by Cloudflare, but anyone who can reach the origin directly can also
-> send it, and identity selects which user's stored cookies are used. Set both
+> send it, and identity selects which user's cookies are used. Set both
 > variables, and keep the origin unreachable except through the tunnel.
 
 Setting them also turns on `REQUIRE_AUTHENTICATION`, so anonymous WebSocket
@@ -249,11 +249,34 @@ Data is stored in `./data/` (mapped via Docker volume):
 
 ```
 data/
-├── cookies/           # User cookie files (Netscape format)
-│   └── user@email.txt
-├── rooms.json         # Room state persistence
+├── watchtogether.db   # Rooms, format cache, extension tokens, user settings
+├── cache/             # Segment cache
 └── yt_dlp_cache/      # yt-dlp download cache
 ```
+
+Cookies are deliberately absent: the backend holds them in memory only, for
+as long as the extension keeps refreshing them (`COOKIE_MEMORY_TTL_SECONDS`,
+30 minutes after the last sync). yt-dlp reads them from a scratch file in a
+private directory under `/dev/shm` (RAM) that exists for one extraction.
+Set `COOKIE_SCRATCH_DIR` to move it. A backend that stored cookies in an
+earlier version removes them at startup.
+
+### DNS over HTTPS
+
+Every container resolves external names through the `dns` service, a
+`cloudflared proxy-dns` sidecar that forwards to Cloudflare over HTTPS.
+Docker's embedded DNS still answers container names and only forwards the
+rest, so the host's resolver never sees which hosts the backend fetches
+from. The sidecar needs a fixed address inside the stack's subnet:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `WT_SUBNET` | Subnet of the compose network | `172.28.0.0/24` |
+| `WT_DNS_IP` | Address of the DNS-over-HTTPS sidecar, inside `WT_SUBNET` | `172.28.0.53` |
+
+Change both together if the default range collides with another network on
+the host. A network that already exists has to be recreated once for the
+new subnet to apply: `docker compose down && docker compose up -d`.
 
 ### Nginx Configuration
 
@@ -278,18 +301,28 @@ All containers have memory and CPU limits configured via `deploy.resources.limit
 
 ## Browser Extension
 
-The browser extension automatically syncs cookies from YouTube/Twitch to the server.
+The browser extension syncs cookies from YouTube, Twitch and Kick to the
+server — the only way cookies get there. The server keeps them in memory
+while the extension keeps refreshing them and drops them 30 minutes after
+the last sync, so a closed browser's cookies do not linger.
 
 ### Installation
 
-Chrome, from a packaged build (recommended):
+From the instance (recommended): open Settings in any room and use the
+**Chrome / Edge** or **Firefox** button under "Install Extension". The
+backend packages the build from the `extension/` folder that docker-compose
+mounts read-only at `/app/extension` (`EXTENSION_SOURCE_DIR`), so members get
+the build matching the server they use. The deploy bundle rsyncs the folder
+along with the rest; without it the download answers 503.
 
-1. Download `watch-together-chrome-nightly.zip` from the
-   [Nightly release](../../releases/tag/nightly) — rebuilt from every commit on
-   `main` — and verify it against the published `.sha256` if you like
-2. Extract the archive
-3. Open `chrome://extensions`, enable "Developer mode"
-4. Click "Load unpacked" and select the extracted folder
+- Chrome / Edge: extract `watch-together-chrome.zip`, open `chrome://extensions`,
+  enable "Developer mode", click "Load unpacked" and select the folder
+- Firefox: open `about:debugging#/runtime/this-firefox`, "Load Temporary Add-on",
+  pick the ZIP (a temporary add-on lasts until Firefox restarts)
+
+The same packager (`backend/services/extension_package.py`) builds the
+[Nightly release](../../releases/tag/nightly) from every commit on `main`,
+with a `.sha256` beside each archive.
 
 From a checkout (either browser):
 
@@ -304,7 +337,8 @@ From a checkout (either browser):
 2. Open your Watch Together instance while signed in, then click the extension
    icon and connect that site — the extension asks the instance who you are and
    stores the resulting token locally, on this browser only
-3. Cookies are synced automatically from then on
+3. Cookies are synced every ten minutes from then on, on browser start, when
+   you open the instance, and when you return to the browser after a while
 
 The account shown in the popup and in Settings is always the one the backend
 confirms owns the stored token. If you sign in as somebody else, the extension
@@ -361,18 +395,17 @@ docker compose down && docker compose up -d --build
 
 ### Video Not Loading / 403 Forbidden
 
-**Cause**: Age-restricted or region-locked content without valid cookies.
+**Cause**: Age-restricted or region-locked content, or a bot check, without a
+signed-in session.
 
 **Fix**:
-1. Install the browser extension
+1. Install the browser extension (Settings → Install Extension)
 2. Log in to YouTube in your browser
 3. Visit Watch Together - cookies sync automatically
 4. Retry the video
 
-Or manually:
-1. Export cookies using [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)
-2. Go to Settings → Cookie Authentication
-3. Paste and save
+Any member of the room who has the extension is enough for YouTube, Twitch
+and Kick videos: their session is lent to the room while they are in it.
 
 ### WebSocket Connection Failed
 
@@ -425,9 +458,10 @@ lsof -i :3000
 
 ### No Quality Options Available
 
-**Cause**: Invalid or expired cookies.
+**Cause**: Invalid or expired cookies, or none: the server drops cookies 30
+minutes after the extension last synced them.
 
 **Fix**:
-1. Re-sync cookies via extension
-2. Or delete and re-upload cookies manually
+1. Open the instance with the extension connected — it syncs on arrival
+2. Or click "Sync now" in the extension popup
 3. Check backend logs: `docker compose logs backend | grep -i cookie`

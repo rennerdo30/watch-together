@@ -3,7 +3,6 @@ Core module exports.
 """
 from core.config import (
     CACHE_DIR,
-    COOKIES_DIR,
     YTDLP_CACHE_DIR,
     MAX_CACHE_SIZE_BYTES,
     CACHE_TTL_SECONDS,
@@ -16,11 +15,10 @@ from core.config import (
     GVS_MAX_RANGE_BYTES,
     FORMAT_CACHE_TTL_SECONDS,
 )
-from core.security import get_user_cookie_path, get_user_from_request
+from core.security import get_user_from_request
 
 __all__ = [
     "CACHE_DIR",
-    "COOKIES_DIR",
     "YTDLP_CACHE_DIR", 
     "MAX_CACHE_SIZE_BYTES",
     "CACHE_TTL_SECONDS",
@@ -32,6 +30,5 @@ __all__ = [
     "GVS_HOST_SUFFIX",
     "GVS_MAX_RANGE_BYTES",
     "FORMAT_CACHE_TTL_SECONDS",
-    "get_user_cookie_path",
     "get_user_from_request",
 ]

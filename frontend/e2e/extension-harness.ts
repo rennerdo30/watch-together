@@ -92,6 +92,8 @@ export async function loadBackground(page: Page, options: HarnessOptions = {}) {
     const onCompleted = event();
     const onTabUpdated = event();
     const onTabRemoved = event();
+    const onFocusChanged = event();
+    const onIdleStateChanged = event();
 
     Object.assign(window, {
       __extensionLocal: localState,
@@ -101,6 +103,7 @@ export async function loadBackground(page: Page, options: HarnessOptions = {}) {
       __extensionEvents: {
         permissionsAdded, permissionsRemoved, onMessage, onInstalled,
         onCompleted, onTabUpdated, onTabRemoved, onAlarm, onStartup,
+        onFocusChanged, onIdleStateChanged,
       },
       __removedPermissions: [] as string[],
     });
@@ -144,6 +147,8 @@ export async function loadBackground(page: Page, options: HarnessOptions = {}) {
           onRemoved: onTabRemoved,
         },
         webRequest: { onCompleted },
+        windows: { WINDOW_ID_NONE: -1, onFocusChanged },
+        idle: { onStateChanged: onIdleStateChanged },
       },
     });
 

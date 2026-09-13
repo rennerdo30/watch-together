@@ -7,6 +7,10 @@ const LOCAL_STORAGE_CHANGE = 'w2g-local-storage-change';
 type Parser<T> = (stored: string | null, fallback: T) => T;
 type Serializer<T> = (value: T) => string;
 
+/** Parser for a flag stored as the strings "true" / "false". */
+export const parseStoredBoolean: Parser<boolean> = (stored, fallback) =>
+  stored === null ? fallback : stored === 'true';
+
 /**
  * Hydration-safe React state backed by localStorage.
  *

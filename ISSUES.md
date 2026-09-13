@@ -77,7 +77,20 @@ Verified fixed, each with a test that fails against the old behaviour:
 - **Connection Limit Race Condition** — limit checks are inside `_state_lock`.
 - **Unbounded In-Flight Cache** — bounded with a TTL, cleaned under the lock.
 - **Room Lock Memory Leak** — locks are deleted with their rooms and orphans swept.
-- **Incomplete Cookie Validation** — every data line is validated.
+- **Incomplete Cookie Validation** — every data line is validated, HttpOnly lines included.
+- **Cookies at Rest** — cookies were kept in the database and as files. They now
+  exist only in process memory while the extension keeps refreshing them, and
+  yt-dlp reads them from a RAM-backed scratch file that lives for one extraction.
+- **Unbounded Cookie Sharing** — resolution fell back to another user's cookies for any
+  URL. Lending now needs the lender connected to the room, an allowlisted site
+  (YouTube, Twitch, Kick) and a single-video page, so nobody can read a lender's
+  feeds or history through the room.
+- **Dead Extension Downloads** — Settings linked to `/extension/<browser>`, which nothing
+  served. The backend packages the extension from the mounted source.
+- **Extension Stopped Syncing** — a request without a deadline held a boolean sync guard
+  at "in progress" forever, and skipped alarms were never caught up. Requests time
+  out, a stale guard is superseded, and the worker syncs when the instance is opened,
+  when the browser starts and when the user returns.
 - **WebSocket Message Validation** — type checked, length capped, frames capped.
 - **Sidebar Resize Race / useDashSync Interval Collision** — stable callbacks; the old
   interval is cleared before a new one is created.
@@ -100,9 +113,8 @@ Verified fixed, each with a test that fails against the old behaviour:
 
 ### Pending
 - [ ] **HTTP/2 streaming root cause** — reproduce and read the new proxy metrics
-- [ ] **Encrypt cookies at rest** — currently plaintext files with owner-only permissions
-- [ ] **Make the shared-cookie fallback opt-in** — resolution deliberately falls back to
-      another user's cookies, which should be a visible setting rather than a default
+- [ ] **Show lenders when their session was used** — the requester sees whose cookies
+      resolved a video; the room activity log does not record it yet
 
 ## Reporting Issues
 

@@ -38,33 +38,25 @@ class TestHealthEndpoints:
 
 
 class TestCookieEndpoints:
-    """Test cookie management endpoints."""
-    
+    """Test the cookie status endpoints."""
+
     def test_get_cookies_requires_auth(self, client):
         """GET /api/cookies should require user identity."""
         response = client.get("/api/cookies")
         assert response.status_code == 401
-    
+
     def test_get_cookies_with_query_param(self, client):
         """GET /api/cookies should work with query param auth."""
         response = client.get("/api/cookies?user=test@example.com")
         assert response.status_code == 200
         data = response.json()
-        assert "has_cookies" in data
-    
-    def test_post_cookies_requires_auth(self, client):
-        """POST /api/cookies should require user identity."""
-        response = client.post("/api/cookies", json={"content": "test"})
-        assert response.status_code == 401
-    
-    def test_post_cookies_rejects_empty(self, client):
-        """POST /api/cookies should reject empty content."""
-        response = client.post(
-            "/api/cookies?user=test@example.com",
-            json={"content": ""}
-        )
-        assert response.status_code == 400
-    
+        assert data["has_cookies"] is False
+
+    def test_cookies_cannot_be_uploaded_through_the_web(self, client):
+        """Cookies only arrive through the extension; there is no upload route."""
+        response = client.post("/api/cookies?user=test@example.com", json={"content": "test"})
+        assert response.status_code == 405
+
     def test_delete_cookies_requires_auth(self, client):
         """DELETE /api/cookies should require user identity."""
         response = client.delete("/api/cookies")

@@ -8,11 +8,22 @@
 #   - No source bind mounts. Both images contain their own code, so a deploy
 #     is a rebuild rather than a file copy, and the running container cannot
 #     be changed by editing files on the host.
-#   - Backend data lives in a named volume, so the SQLite database, cookie
-#     files and segment cache survive rebuilds.
+#   - Backend data lives in a named volume, so the SQLite database and the
+#     segment cache survive rebuilds. Cookies are never on it: they live in
+#     the backend's memory while the extension keeps refreshing them.
+#   - Every container resolves DNS over HTTPS through the `dns` service.
 #   - Nothing binds a host port.
 
 name: watch-together
+
+# Every container resolves external names through the `dns` service below,
+# which forwards them to Cloudflare over DNS-over-HTTPS. Docker's embedded
+# DNS still answers container names itself and only forwards the rest, so
+# no plaintext DNS query leaves the stack. The address must lie inside the
+# network's subnet (WT_SUBNET); override both together if the default range
+# collides with something on the host.
+x-doh-resolver: &doh_resolver
+  - ${WT_DNS_IP:-172.28.0.53}
 
 services:
   backend:
@@ -20,10 +31,13 @@ services:
       context: ../backend
     image: watch-together/backend:latest
     restart: unless-stopped
+    dns: *doh_resolver
     depends_on:
+      - dns
       - bgutil-provider
     environment:
       BGUTIL_YTDLP_POT_PROVIDER_URL: http://bgutil-provider:4416
+      EXTENSION_SOURCE_DIR: /app/extension
       # Never enable in production: it lets ?user= set any identity.
       DEVELOPMENT_MODE: "false"
       # Verified identities allowed to use /api/admin. Empty disables the
@@ -52,8 +66,10 @@ services:
       # turns caching off partway through. Raise it on a host with room.
       MAX_CACHE_SIZE_GB: ${MAX_CACHE_SIZE_GB:-4}
     volumes:
-      # SQLite database, per-user cookie files, and the segment cache.
+      # SQLite database and the segment cache. Cookies are never on it.
       - backend_data:/app/data
+      # The extension source, packaged on demand for members to download.
+      - ../extension:/app/extension:ro
     networks: [ watch_net ]
     expose: [ "8000" ]
     deploy:
@@ -66,6 +82,9 @@ services:
     # Solves YouTube BotGuard challenges so yt-dlp can obtain PO tokens.
     image: brainicism/bgutil-ytdlp-pot-provider:0.7.2
     restart: unless-stopped
+    dns: *doh_resolver
+    depends_on:
+      - dns
     networks: [ watch_net ]
     expose: [ "4416" ]
     deploy:
@@ -79,7 +98,9 @@ services:
       context: ../frontend
     image: watch-together/frontend:latest
     restart: unless-stopped
+    dns: *doh_resolver
     depends_on:
+      - dns
       - backend
     environment:
       # Server-side rendering reaches the backend over the internal network.
@@ -95,7 +116,9 @@ services:
   nginx:
     image: nginx:1.27-alpine
     restart: unless-stopped
+    dns: *doh_resolver
     depends_on:
+      - dns
       - frontend
       - backend
     volumes:
@@ -113,10 +136,33 @@ services:
           memory: 256M
           cpus: '0.5'
 
+  dns:
+    # DNS-over-HTTPS resolver for the whole stack (see x-doh-resolver).
+    # cloudflared's proxy-dns listens on port 53 and carries every query to
+    # Cloudflare over HTTPS; it reaches 1.1.1.1 by address, so it needs no
+    # resolver of its own.
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: proxy-dns --address 0.0.0.0 --port 53 --upstream https://1.1.1.1/dns-query --upstream https://1.0.0.1/dns-query
+    # cloudflared runs unprivileged; let it bind the DNS port inside its own
+    # network namespace.
+    sysctls:
+      - net.ipv4.ip_unprivileged_port_start=0
+    networks:
+      watch_net:
+        ipv4_address: ${WT_DNS_IP:-172.28.0.53}
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: '0.25'
+
   cloudflared:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
+    dns: *doh_resolver
     depends_on:
+      - dns
       - nginx
     # Transport for the tunnel. QUIC recovers from loss far better than
     # HTTP/2 over a long-haul path, which matters when the viewer is a
@@ -135,6 +181,9 @@ services:
 networks:
   watch_net:
     name: watch_net
+    ipam:
+      config:
+        - subnet: ${WT_SUBNET:-172.28.0.0/24}
 
 volumes:
   backend_data:

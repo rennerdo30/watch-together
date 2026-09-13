@@ -20,7 +20,7 @@ A real-time video synchronization platform for watching YouTube, Twitch, and 180
 - **Seek Preview**: Hovering the timeline shows the frame under the pointer (YouTube storyboards)
 - **SponsorBlock**: Community-marked sponsor, self-promotion and reminder segments in YouTube videos are skipped for the whole room at once (the server seeks everyone), shown on the seek bar, and chosen per room by its admin
 - **Cookie Authentication**: Bypass age-restrictions and regional blocks with your own cookies
-- **YouTube Watch History (opt-in)**: With your cookies on file, videos the room watches can be recorded in your own YouTube history with the position you stopped at, the way YouTube's player reports it. Off until you switch it on in the settings dialog
+- **YouTube Watch History (opt-in)**: While the extension is syncing your cookies, videos the room watches can be recorded in your own YouTube history with the position you stopped at, the way YouTube's player reports it. Off until you switch it on in the settings dialog
 - **Browser Extension**: Automatic cookie sync from your browser (Chrome/Firefox)
 - **Audio Normalization**: "Night mode" audio with configurable gain boost
 - **Client-side Video Enhancement (Beta)**: Opt-in local upscaling with automatic animation/live-action selection, WebGPU neural processing and a lightweight WebGL fallback. Open player settings → Video enhancement. [Compatibility and implementation details](frontend/lib/upscaling/README.md).
@@ -123,23 +123,24 @@ CI runs exactly these, plus manifest/syntax checks on the browser extension.
 
 ## Cookie Authentication
 
-To watch age-restricted or region-locked content:
+Most videos only play from a server with a signed-in session. Cookies reach
+the server one way only: through the browser extension.
 
-### Option 1: Browser Extension (Recommended)
-1. Install the extension — download the ZIP from the
-   [Nightly release](../../releases/tag/nightly), built from the latest `main`,
-   or load the `/extension` folder unpacked
-2. Log in to YouTube/Twitch in your browser
+1. Install the extension — Settings (gear icon) in any room offers a download
+   for Chrome/Edge and Firefox, packaged by the instance itself; the
+   [Nightly release](../../releases/tag/nightly) carries the same builds
+2. Log in to YouTube, Twitch or Kick in your browser
 3. Open your Watch Together instance while signed in, then connect it from the
    extension popup
-4. The extension automatically syncs cookies to the server
+4. The extension syncs your cookies every ten minutes while the browser is
+   open, and again whenever you open the instance
 
-### Option 2: Manual Upload
-1. Export cookies using [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)
-2. Open Settings (gear icon) in any room
-3. Paste Netscape-formatted cookies and save
-
-> **Note:** Cookies are stored server-side and linked to your identity. Guest users cannot save cookies.
+> **Cookies are never stored.** The server keeps them in memory only, drops
+> them half an hour after the last sync or as soon as you disconnect the
+> extension, and never writes them to disk or its database. While you are in a
+> room, YouTube, Twitch and Kick links other members paste can be resolved with
+> your session — single videos only, never your feeds, playlists or history.
+> Members without the extension are told about it once, above the URL box.
 
 ## Project Structure
 
