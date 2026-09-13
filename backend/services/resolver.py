@@ -335,7 +335,7 @@ async def refresh_video_url(video_data: dict, user_agent: str = None, user_email
     # 1. Check memory cache first
     cached = await get_cached_format(original_url)
     if cached:
-        room_fields = {key: video_data[key] for key in ('original_url', 'added_by', 'pinned') if key in video_data}
+        room_fields = {key: video_data[key] for key in ('original_url', 'added_by', 'pinned', 'progress') if key in video_data}
         video_data.clear()
         video_data.update(cached)
         video_data.update(room_fields)
@@ -431,7 +431,7 @@ async def refresh_video_url(video_data: dict, user_agent: str = None, user_email
     stream_data = _extract_stream_url(info)
 
     if stream_data:
-        room_fields = {key: video_data[key] for key in ('added_by', 'pinned') if key in video_data}
+        room_fields = {key: video_data[key] for key in ('added_by', 'pinned', 'progress') if key in video_data}
         video_data.clear()
         video_data.update(_build_resolve_response(original_url, info, stream_data))
         video_data.update(room_fields)

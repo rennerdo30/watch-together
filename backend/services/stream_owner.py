@@ -92,6 +92,9 @@ def sanitize_client_video(video_data: dict, cached: Optional[dict]) -> None:
     with the resolver's cookies.
     """
     video_data.pop(RESOLVED_BY_KEY, None)
+    # Watch progress is the server's record of the room's own playback, never
+    # something the message body gets to assert.
+    video_data.pop("progress", None)
     if not cached or RESOLVED_BY_KEY not in cached:
         return
     if identities(video_data) <= identities(cached):

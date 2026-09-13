@@ -40,6 +40,11 @@ export interface ResolveResponse {
     is_live: boolean;
     thumbnail?: string;
     duration?: number;
+    /**
+     * Seconds watched the last time the room left this video, used to resume
+     * it. Set and owned by the server from the room's own playback position.
+     */
+    progress?: number;
     backend_engine: string;
     pinned?: boolean;
     /** Identity of the member who put it in the room; set by the server. */
