@@ -766,11 +766,24 @@ class TestContainersResolveOverHttps:
 
     def test_a_doh_resolver_service_exists(self, compose):
         assert "\n  dns:\n" in compose
-        assert "proxy-dns --address 0.0.0.0 --port 53" in compose
-        assert "--upstream https://1.1.1.1/dns-query" in compose
-        assert "--upstream https://1.0.0.1/dns-query" in compose
-        # cloudflared is unprivileged; port 53 needs this inside the namespace.
-        assert "net.ipv4.ip_unprivileged_port_start=0" in compose
+        assert "image: adguard/dnsproxy:v0.84.2" in compose
+        assert "-l 0.0.0.0 -p 53" in compose
+        assert "-u https://1.1.1.1/dns-query" in compose
+        assert "-u https://1.0.0.1/dns-query" in compose
+
+    def test_the_resolver_image_is_version_pinned(self, compose):
+        """A floating `latest` tag crash-looped production.
+
+        cloudflared 2026.2.0 removed `proxy-dns`, so the unpinned resolver
+        image in the deploy compose began exiting at once while the local
+        compose (pinned to an older cloudflared) kept working. Pin the tag.
+        """
+        import re
+        match = re.search(r"\n  dns:\n(?:.*\n)*?    image: (\S+)", compose)
+        assert match, "the dns service has no image"
+        image = match.group(1)
+        assert not image.endswith(":latest"), image
+        assert ":v" in image, image
 
     def test_the_resolver_has_a_fixed_address_inside_the_subnet(self, compose):
         assert "ipv4_address: ${WT_DNS_IP:-172.28.0.53}" in compose
@@ -787,3 +800,4 @@ class TestContainersResolveOverHttps:
         assert len(others) >= 4
         assert services_block.count("dns: *doh_resolver") == len(others)
         assert services_block.count("      - dns\n") == len(others)
+

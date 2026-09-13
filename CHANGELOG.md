@@ -26,8 +26,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - The extension syncs Kick cookies, gives every request a deadline,
   supersedes a sync that never finished, and catches up when the browser
   starts, when the instance is opened and when the user returns after a while.
-- Every container resolves DNS over HTTPS through a `cloudflared proxy-dns`
-  sidecar (`WT_SUBNET`, `WT_DNS_IP`).
+- Every container resolves DNS over HTTPS through an AdGuard `dnsproxy`
+  sidecar (`WT_SUBNET`, `WT_DNS_IP`). The image is pinned: cloudflared
+  removed its `proxy-dns` command in 2026.2.0, and the deploy compose's
+  floating `latest` tag turned that release into a crash-looping resolver
+  while the pinned local compose kept working.
+- The tunnel connector tracks `cloudflare/cloudflared:latest` in both compose
+  files; the local file had drifted to 2024.12.2.
 
 ### Performance and playback reliability
 

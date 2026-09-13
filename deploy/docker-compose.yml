@@ -138,23 +138,20 @@ services:
 
   dns:
     # DNS-over-HTTPS resolver for the whole stack (see x-doh-resolver).
-    # cloudflared's proxy-dns listens on port 53 and carries every query to
+    # AdGuard's dnsproxy listens on port 53 and carries every query to
     # Cloudflare over HTTPS; it reaches 1.1.1.1 by address, so it needs no
-    # resolver of its own.
-    image: cloudflare/cloudflared:latest
+    # resolver of its own. Pinned, not `latest`: cloudflared's proxy-dns
+    # disappeared in 2026.2.0 and a floating tag crash-looped the stack.
+    image: adguard/dnsproxy:v0.84.2
     restart: unless-stopped
-    command: proxy-dns --address 0.0.0.0 --port 53 --upstream https://1.1.1.1/dns-query --upstream https://1.0.0.1/dns-query
-    # cloudflared runs unprivileged; let it bind the DNS port inside its own
-    # network namespace.
-    sysctls:
-      - net.ipv4.ip_unprivileged_port_start=0
+    command: -l 0.0.0.0 -p 53 -u https://1.1.1.1/dns-query -u https://1.0.0.1/dns-query
     networks:
       watch_net:
         ipv4_address: ${WT_DNS_IP:-172.28.0.53}
     deploy:
       resources:
         limits:
-          memory: 64M
+          memory: 128M
           cpus: '0.25'
 
   cloudflared:
