@@ -732,9 +732,20 @@ class TestExtensionSurvivesWorkerSleep:
 
     def test_missed_alarms_are_caught_up_when_the_user_returns(self):
         background = self.BACKGROUND.read_text(encoding="utf-8")
-        assert "chrome.windows.onFocusChanged.addListener" in background
-        assert "chrome.idle.onStateChanged.addListener" in background
+        assert "listenIfAvailable('windows', chrome.windows, 'onFocusChanged'" in background
+        assert "listenIfAvailable('idle', chrome.idle, 'onStateChanged'" in background
         assert "syncIfStale(" in background
+
+    def test_optional_apis_are_registered_on_defensively(self):
+        """chrome.idle is undefined until the extension is reloaded with the new manifest.
+
+        A bare top-level addListener on it threw, and the whole worker died
+        with every listener below it — reported from the field as
+        "Cannot read properties of undefined (reading 'onStateChanged')".
+        """
+        background = self.BACKGROUND.read_text(encoding="utf-8")
+        assert "chrome.idle.onStateChanged.addListener" not in background
+        assert "chrome.windows.onFocusChanged.addListener" not in background
         for name in ("manifest.json", "manifest.v2.json"):
             manifest = json.loads((EXTENSION / name).read_text(encoding="utf-8"))
             assert "idle" in manifest["permissions"], f"{name} lacks the idle permission"

@@ -116,3 +116,23 @@ test('a disconnected extension does not knock on the instance when focused', asy
   // and been recorded as the sync status.
   expect(await lastSyncStatus(page)).toBeUndefined();
 });
+
+test('a browser that lacks an optional API still runs the worker', async ({ page }) => {
+  // Until Chrome reloads the extension, a permission added to the manifest is
+  // not granted and its API object is undefined. Registering on it must not
+  // kill the worker: the alarm and the instance-tab sync below it must still work.
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await loadBackground(page, {
+    local: { activeConnection: CONNECTION },
+    fetchRules: CONNECTED_RULES,
+    omitApis: ['idle'],
+  });
+  expect(errors).toEqual([]);
+
+  await page.evaluate(() => {
+    const { onTabUpdated } = (window as unknown as Harness).__extensionEvents;
+    onTabUpdated.listeners.forEach((listener) => listener(2, { status: 'complete' }, { url: 'https://watch.example/room/abc' }));
+  });
+  await expect.poll(() => lastSyncStatus(page)).toBe(RAN_WITHOUT_COOKIES);
+});
