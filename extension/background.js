@@ -812,12 +812,30 @@ async function syncIfStale(trigger) {
     }
 }
 
-chrome.windows.onFocusChanged.addListener((windowId) => {
+/**
+ * Register on an API the worker may not have.
+ *
+ * A permission added to the manifest (idle, in 1.3.0) only applies once
+ * Chrome reloads the extension; until then the API object is undefined,
+ * and a bare addListener at the top level throws — killing the whole
+ * worker, every listener below it included. A missing catch-up trigger
+ * costs one delayed sync; a dead worker costs all of them.
+ */
+function listenIfAvailable(namespace, api, eventName, listener) {
+    const event = api && api[eventName];
+    if (!event) {
+        console.warn(`[WT Sync] chrome.${namespace}.${eventName} is unavailable; reload the extension to apply its manifest`);
+        return;
+    }
+    event.addListener(listener);
+}
+
+listenIfAvailable('windows', chrome.windows, 'onFocusChanged', (windowId) => {
     if (windowId === chrome.windows.WINDOW_ID_NONE) return;
     syncIfStale('window focused').catch(err => console.warn('[WT Sync] Catch-up sync failed:', err));
 });
 
-chrome.idle.onStateChanged.addListener((state) => {
+listenIfAvailable('idle', chrome.idle, 'onStateChanged', (state) => {
     if (state !== 'active') return;
     syncIfStale('user active again').catch(err => console.warn('[WT Sync] Catch-up sync failed:', err));
 });

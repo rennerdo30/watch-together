@@ -22,6 +22,8 @@ type HarnessOptions = {
   session?: Record<string, unknown>;
   fetchRules?: FetchRule[];
   alarms?: Record<string, { periodInMinutes: number; scheduledTime: number }>;
+  /** chrome.* namespaces to leave out, as a browser without the permission would. */
+  omitApis?: string[];
 };
 
 /**
@@ -34,7 +36,7 @@ type HarnessOptions = {
  */
 export async function loadBackground(page: Page, options: HarnessOptions = {}) {
   await page.goto('about:blank');
-  await page.evaluate(({ local, sync, session, fetchRules, alarms }) => {
+  await page.evaluate(({ local, sync, session, fetchRules, alarms, omitApis }) => {
     const localState: Record<string, unknown> = structuredClone(local);
     const syncState: Record<string, unknown> = structuredClone(sync);
     const sessionState: Record<string, unknown> = structuredClone(session);
@@ -152,6 +154,10 @@ export async function loadBackground(page: Page, options: HarnessOptions = {}) {
       },
     });
 
+    for (const api of omitApis) {
+      delete (window as unknown as { chrome: Record<string, unknown> }).chrome[api];
+    }
+
     window.fetch = async (input: RequestInfo | URL) => {
       const url = String(input);
       const rule = rules.find((candidate) => url.includes(candidate.includes));
@@ -170,6 +176,7 @@ export async function loadBackground(page: Page, options: HarnessOptions = {}) {
     session: options.session ?? {},
     fetchRules: options.fetchRules ?? [],
     alarms: options.alarms ?? {},
+    omitApis: options.omitApis ?? [],
   });
 
   await page.addScriptTag({
