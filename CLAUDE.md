@@ -58,7 +58,7 @@ message.
 - Docker Compose orchestration
 - Nginx reverse proxy
 - Cloudflare Tunnel for external access
-- Cloudflare DNS-over-HTTPS for every container (a `cloudflared proxy-dns` sidecar)
+- Cloudflare DNS-over-HTTPS for every container (an `adguard/dnsproxy` sidecar)
 
 ## Project Structure
 

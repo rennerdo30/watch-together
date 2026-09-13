@@ -76,8 +76,8 @@ Useful flags: `--skip-sync` (remote-only), `--dry-run`, `--host=`/`--user=`.
 
 ## DNS over HTTPS
 
-Every container resolves external names through the `dns` service, a
-`cloudflared proxy-dns` sidecar forwarding to Cloudflare over HTTPS, so the
+Every container resolves external names through the `dns` service, an AdGuard
+`dnsproxy` sidecar forwarding to Cloudflare over HTTPS, so the
 host's resolver sees no query from the stack. It has a fixed address inside
 the stack's subnet (`WT_SUBNET`, `WT_DNS_IP` in `.env`). If the defaults
 collide with another network on the host, change both together and recreate

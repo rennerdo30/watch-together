@@ -263,8 +263,8 @@ earlier version removes them at startup.
 
 ### DNS over HTTPS
 
-Every container resolves external names through the `dns` service, a
-`cloudflared proxy-dns` sidecar that forwards to Cloudflare over HTTPS.
+Every container resolves external names through the `dns` service, an AdGuard
+`dnsproxy` sidecar that forwards to Cloudflare over HTTPS.
 Docker's embedded DNS still answers container names and only forwards the
 rest, so the host's resolver never sees which hosts the backend fetches
 from. The sidecar needs a fixed address inside the stack's subnet:
