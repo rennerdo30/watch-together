@@ -9,10 +9,12 @@
  * - Send video to Watch Together room
  */
 
-// Default domains to sync cookies from
+// Default domains to sync cookies from. YouTube, Twitch and Kick are the
+// sites whose videos a room may resolve with a member's session.
 const DEFAULT_DOMAINS = [
     '.youtube.com',
     '.twitch.tv',
+    '.kick.com',
     '.vimeo.com',
     '.dailymotion.com',
     '.crunchyroll.com'
@@ -20,7 +22,10 @@ const DEFAULT_DOMAINS = [
 
 // Sync interval in minutes. YouTube rotates session cookies often enough
 // that a copy half an hour old is regularly refused ("Sign in to confirm
-// you're not a bot"); ten minutes keeps the server's copy current.
+// you're not a bot"); ten minutes keeps the server's copy current. The
+// server also drops a copy it has not seen refreshed for a few of these
+// intervals (COOKIE_MEMORY_TTL_SECONDS in backend/core/config.py), so a
+// closed browser's cookies do not linger there.
 const SYNC_INTERVAL_MINUTES = 10;
 
 /**
@@ -34,8 +39,25 @@ const SYNC_INTERVAL_MINUTES = 10;
  */
 const DETECTED_STREAMS_KEY = 'detectedStreams';
 
-// Sync mutex to prevent concurrent sync operations
-let syncInProgress = false;
+/**
+ * When the running sync started, or 0.
+ *
+ * A boolean "in progress" flag once stuck at true: a sync whose request
+ * never completed (a stalled tunnel, a sleeping laptop mid-request) kept
+ * every later alarm answering "already in progress", and the extension
+ * silently stopped syncing until Chrome happened to restart the worker.
+ * A start time lets a sync that has run far past any request timeout be
+ * declared dead and superseded.
+ */
+let syncStartedAt = 0;
+const SYNC_STUCK_AFTER_MS = 120_000;
+
+// Every request to the instance gives up after this long. Without a limit
+// a request that never answers holds the sync — and with it every future
+// sync — open for as long as the worker lives.
+const FETCH_TIMEOUT_MS = 20_000;
+// Resolving a video runs yt-dlp on the server and takes longer.
+const RESOLVE_TIMEOUT_MS = 90_000;
 
 // Rate limiting for sync operations
 let lastSyncTime = 0;
@@ -103,9 +125,14 @@ async function clearActiveConnection() {
     await chrome.storage.local.remove([ACTIVE_CONNECTION_KEY]);
 }
 
+/** fetch() against the instance, never without a deadline. */
+function instanceFetch(url, init = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+    return fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+}
+
 /** Fetch the token and its owner in one authenticated response. */
 async function fetchInstanceConnection(origin) {
-    const tokenResponse = await fetch(`${origin}/api/token`, {
+    const tokenResponse = await instanceFetch(`${origin}/api/token`, {
         credentials: 'include',
         cache: 'no-store',
     });
@@ -130,7 +157,7 @@ async function fetchInstanceConnection(origin) {
 
 /** Validate a token and return the identity bound to it by the backend. */
 async function fetchTokenStatus(connection) {
-    const response = await fetch(`${connection.origin}/api/extension/status`, {
+    const response = await instanceFetch(`${connection.origin}/api/extension/status`, {
         headers: { 'Authorization': `Bearer ${connection.token}` },
         cache: 'no-store',
     });
@@ -156,7 +183,7 @@ async function fetchTokenStatus(connection) {
 
 /** Fetch the identity of the browser's current Access session. */
 async function fetchSessionIdentity(origin) {
-    const response = await fetch(`${origin}/api/me`, {
+    const response = await instanceFetch(`${origin}/api/me`, {
         credentials: 'include',
         cache: 'no-store',
     });
@@ -319,7 +346,7 @@ async function disconnectInstance() {
     if (!connection) return { success: true };
 
     try {
-        await fetch(`${connection.origin}/api/extension/token`, {
+        await instanceFetch(`${connection.origin}/api/extension/token`, {
             method: 'DELETE',
             headers: { 'Authorization': `Bearer ${connection.token}` },
             cache: 'no-store',
@@ -350,7 +377,9 @@ chrome.runtime.onInstalled.addListener(async () => {
     // a current connection; the user reconnects once under the new schema.
     await purgeLegacyCredentials();
 
-    // Set default settings
+    // Set default settings. An existing domain list is the user's and is
+    // left alone: a site added to the defaults later (Kick) is offered on
+    // the options page, not pushed into their selection.
     const settings = await chrome.storage.sync.get(['domains', 'autoSync']);
     if (!settings.domains) {
         await chrome.storage.sync.set({ domains: DEFAULT_DOMAINS });
@@ -427,9 +456,12 @@ async function setupAutoSync() {
 }
 
 // Alarms can disappear across browser restarts. Reconcile on every worker
-// evaluation, after registering listeners, as well as browser startup.
+// evaluation, after registering listeners, as well as browser startup. The
+// server dropped this browser's cookies while it was closed, so sync right
+// away rather than waiting for the first alarm.
 chrome.runtime.onStartup.addListener(() => {
     setupAutoSync().catch(err => console.warn('[WT Sync] Alarm recovery failed:', err));
+    syncCookies().catch(err => console.warn('[WT Sync] Startup sync failed:', err));
 });
 setupAutoSync().catch(err => console.warn('[WT Sync] Alarm recovery failed:', err));
 
@@ -654,7 +686,7 @@ async function getCookiesForDomains(domains) {
 
 /** Send one cookie payload with the active bearer token. */
 async function postCookieSync(connection, netscapeContent, domains) {
-    return fetch(`${connection.origin}/api/extension/sync`, {
+    return instanceFetch(`${connection.origin}/api/extension/sync`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -680,12 +712,15 @@ async function syncCookies({ allowReconnect = true } = {}) {
         console.log(`[WT Sync] Rate limited, wait ${waitSec}s`);
         return { success: false, error: `Please wait ${waitSec}s before syncing again` };
     }
-    if (syncInProgress) {
+    if (syncStartedAt && startedAt - syncStartedAt < SYNC_STUCK_AFTER_MS) {
         console.log('[WT Sync] Sync already in progress, skipping');
         return { success: false, error: 'Sync already in progress' };
     }
+    if (syncStartedAt) {
+        console.warn('[WT Sync] A previous sync never finished; superseding it');
+    }
 
-    syncInProgress = true;
+    syncStartedAt = startedAt;
     lastSyncTime = startedAt;
     console.log('[WT Sync] Starting cookie sync...');
 
@@ -753,9 +788,39 @@ async function syncCookies({ allowReconnect = true } = {}) {
         await chrome.storage.local.set({ lastSyncStatus: err.message });
         return { success: false, error: err.message };
     } finally {
-        syncInProgress = false;
+        syncStartedAt = 0;
     }
 }
+
+/**
+ * Catch up when the alarm could not: sync if the last one is older than
+ * the interval. Chrome fires no alarms while the machine sleeps and may
+ * defer them while the browser is idle, and the server drops a copy it has
+ * not seen refreshed for a while — so the moment the user is back at the
+ * browser is the moment to make sure it holds current cookies. Only for a
+ * connected extension: a disconnected one would otherwise knock on the
+ * instance at every window focus.
+ */
+async function syncIfStale(trigger) {
+    if (!await getActiveConnection()) return;
+    const { lastSync } = await chrome.storage.local.get(['lastSync']);
+    if (lastSync && Date.now() - lastSync < SYNC_INTERVAL_MINUTES * 60_000) return;
+    console.log(`[WT Sync] Last sync is stale (${trigger}), syncing`);
+    const result = await syncCookies();
+    if (!result.success) {
+        console.log(`[WT Sync] Catch-up sync (${trigger}) did not run:`, result.error);
+    }
+}
+
+chrome.windows.onFocusChanged.addListener((windowId) => {
+    if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+    syncIfStale('window focused').catch(err => console.warn('[WT Sync] Catch-up sync failed:', err));
+});
+
+chrome.idle.onStateChanged.addListener((state) => {
+    if (state !== 'active') return;
+    syncIfStale('user active again').catch(err => console.warn('[WT Sync] Catch-up sync failed:', err));
+});
 
 // ============================================================================
 // Network Interception for HLS/MPD Detection
@@ -848,6 +913,28 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 });
 
 /**
+ * Sync as soon as the user opens the connected instance.
+ *
+ * The server keeps cookies only while this extension keeps refreshing
+ * them, so after a night with the browser closed it has none. Waiting for
+ * the next alarm would leave the user in a room for up to ten minutes with
+ * nothing to offer; a sync on arrival has them there before the first
+ * link is pasted. The regular rate limit still applies.
+ */
+async function syncCookiesForInstanceTab(tabId, changeInfo, tab) {
+    if (changeInfo.status !== 'complete' || !tab || !tab.url) return;
+    const connection = await getActiveConnection();
+    if (!connection || !tab.url.startsWith(`${connection.origin}/`)) return;
+    console.log('[WT Sync] Instance opened, syncing cookies');
+    const result = await syncCookies();
+    if (!result.success) {
+        console.log('[WT Sync] Sync on instance open skipped:', result.error);
+    }
+}
+
+chrome.tabs.onUpdated.addListener(syncCookiesForInstanceTab);
+
+/**
  * Get detected stream for current tab
  */
 async function getDetectedStream(tabId) {
@@ -898,13 +985,13 @@ async function sendToRoom(roomId, videoUrl, pageUrl) {
         }
 
         // Resolve the video through the backend
-        const resolveResponse = await fetch(`${connection.origin}/api/resolve?url=${encodeURIComponent(urlToSend)}`, {
+        const resolveResponse = await instanceFetch(`${connection.origin}/api/resolve?url=${encodeURIComponent(urlToSend)}`, {
             credentials: 'include',
             headers: {
                 'Authorization': `Bearer ${connection.token}`,
             },
             cache: 'no-store',
-        });
+        }, RESOLVE_TIMEOUT_MS);
 
         if (!resolveResponse.ok) {
             const error = await resolveResponse.json().catch(() => ({ detail: 'Failed to resolve video' }));

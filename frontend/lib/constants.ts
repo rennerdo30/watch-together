@@ -7,6 +7,20 @@ export const REPOSITORY_URL = 'https://github.com/rennerdo30/watch-together';
 /** The browser extension lives in the `extension/` folder of the main repo. */
 export const EXTENSION_SOURCE_URL = `${REPOSITORY_URL}/tree/main/extension`;
 
+/** Packaged extension builds, served by the backend from the mounted source. */
+export const EXTENSION_DOWNLOAD_PATH = '/api/extension/download';
+export type ExtensionBrowser = 'chrome' | 'firefox';
+
+/** Remembers that the viewer dismissed the "install the extension" hint. */
+export const EXTENSION_HINT_DISMISSED_KEY = 'wt_extension_hint_dismissed';
+
+/**
+ * How long the server keeps a synced cookie copy in memory after the last
+ * sync. Mirrors COOKIE_MEMORY_TTL_SECONDS in backend/core/config.py; a
+ * contract test keeps the two in step.
+ */
+export const COOKIE_MEMORY_TTL_MINUTES = 30;
+
 /** How often the landing page refreshes the list of active rooms. */
 export const ROOM_LIST_POLL_INTERVAL_MS = 10_000;
 

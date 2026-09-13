@@ -1,10 +1,12 @@
 """
 Shared test fixtures.
 
-Every test runs against a temporary database and cookie directory. This
+Every test runs against a temporary database and cache directory. This
 keeps runs reproducible on a clean checkout (CI has no pre-existing
 database, so anything touching persistence would fail) and stops the
 suite from writing into the real `data/` directory during development.
+Cookies never touch storage at all; the in-memory store is emptied between
+tests.
 """
 import os
 import sys
@@ -25,35 +27,23 @@ def isolated_data_dir():
 
     import services.database as database
     import core.config as config
-    import core.security as security
 
-    cookies_dir = os.path.join(tmp_dir, "cookies")
     cache_dir = os.path.join(tmp_dir, "cache")
-    os.makedirs(cookies_dir, exist_ok=True)
     os.makedirs(cache_dir, exist_ok=True)
 
     database.DB_DIR = tmp_dir
     database.DB_FILE = os.path.join(tmp_dir, "watchtogether.db")
     database.LEGACY_ROOMS_FILE = os.path.join(tmp_dir, "rooms.json")
-    database.LEGACY_COOKIES_DIR = cookies_dir
+    database.PERSISTED_COOKIE_DIRS = (os.path.join(tmp_dir, "cookies"),)
     # Modules bind these names at import time, so every binding site has
     # to be redirected, not just the definition in core.config.
-    config.COOKIES_DIR = cookies_dir
     config.CACHE_DIR = cache_dir
-    security.COOKIES_DIR = cookies_dir
 
     import services.cache as cache_module
     cache_module.CACHE_DIR = cache_dir
 
     import main as main_module
-    main_module.COOKIES_DIR = cookies_dir
     main_module.CACHE_DIR = cache_dir
-
-    import api.routes.cookies as cookies_routes
-    cookies_routes.COOKIES_DIR = cookies_dir
-
-    import api.routes.extension as extension_routes
-    extension_routes.COOKIES_DIR = cookies_dir
 
     database.init_database()
 
@@ -120,6 +110,16 @@ def offline_watch_history():
     offline()
     yield
     offline()
+
+
+@pytest.fixture(autouse=True)
+def empty_cookie_store():
+    """No member's cookies survive from one test into the next."""
+    from services import user_cookies
+
+    user_cookies.clear_all()
+    yield
+    user_cookies.clear_all()
 
 
 @pytest.fixture(autouse=True)

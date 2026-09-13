@@ -1,23 +1,32 @@
 """
 Browser extension sync API routes.
+
+The extension is the only way cookies reach the server. A synced copy is
+held in memory (see `services/user_cookies.py`) and never written anywhere;
+it expires unless the extension keeps refreshing it.
 """
-import os
+import asyncio
 import logging
-from typing import List, Optional
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 from fastapi import APIRouter, Request, Response, HTTPException, Header
 import pydantic
 
-from core.config import COOKIES_DIR, COOKIE_FILE_MODE
-from core.security import get_user_cookie_path
+from core import config
 from core.rate_limit import check_rate_limit
+from services import extension_package, user_cookies
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/extension", tags=["extension"])
 
-# Counted separately from browser cookie uploads so a busy extension
+# Counted separately from other per-user endpoints so a busy extension
 # cannot lock a user out of the web UI, or the other way round.
 RATE_LIMIT_SCOPE = "extension-sync"
 NO_STORE_HEADERS = {"Cache-Control": "private, no-store"}
+
+# browser key -> (source fingerprint, archive). Rebuilt only when a source
+# file changes, so serving the download costs a stat per packaged file.
+_package_cache: Dict[str, Tuple[tuple, bytes]] = {}
 
 
 class CookieSyncRequest(pydantic.BaseModel):
@@ -53,6 +62,7 @@ async def validate_bearer_token(authorization: str) -> str:
 @router.post("/sync")
 async def sync_cookies(
     request: Request,
+    response: Response,
     sync_data: CookieSyncRequest,
     authorization: str = Header(None)
 ):
@@ -62,65 +72,43 @@ async def sync_cookies(
     Body: { cookies: "# Netscape...", domains: [...], browser: "chrome" }
     """
     # Validate token
+    response.headers.update(NO_STORE_HEADERS)
     user_email = await validate_bearer_token(authorization)
     check_rate_limit(user_email, scope=RATE_LIMIT_SCOPE)
 
     # Extract token ID for updating sync stats
     token_id = authorization[7:]
 
+    content = sync_data.cookies
+    if not content.strip():
+        raise HTTPException(status_code=400, detail="Empty cookie content", headers=NO_STORE_HEADERS)
+
     try:
-        content = sync_data.cookies
-        if not content.strip():
-            raise HTTPException(status_code=400, detail="Empty cookie content")
+        entry = user_cookies.store(
+            user_email, content, browser=sync_data.browser, domains=sync_data.domains)
+    except user_cookies.CookieFormatError as exc:
+        raise HTTPException(status_code=400, detail=str(exc), headers=NO_STORE_HEADERS)
 
-        # Validate size (1MB limit, same as cookie upload)
-        if len(content.encode('utf-8')) > 1 * 1024 * 1024:
-            raise HTTPException(status_code=400, detail="Cookie content exceeds 1MB limit")
-
-        # Validate Netscape format (all data lines must have 7 tab-separated fields)
-        data_lines = [l.strip() for l in content.splitlines() if l.strip() and not l.strip().startswith('#')]
-        if not data_lines:
-            raise HTTPException(status_code=400, detail="No cookie data lines found")
-        for line in data_lines:
-            parts = line.split('\t')
-            if len(parts) != 7:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid Netscape cookie format. Each data line must have 7 tab-separated fields."
-                )
-
-        # 1. Save to Database
-        from services.database import save_user_cookies, update_token_sync
-        await save_user_cookies(user_email, content)
-
-        # 2. Sync to Filesystem (for yt-dlp usage)
-        cookie_path = get_user_cookie_path(user_email)
-        if cookie_path:
-            os.makedirs(os.path.dirname(cookie_path), exist_ok=True)
-            import aiofiles
-            async with aiofiles.open(cookie_path, 'w') as f:
-                await f.write(content)
-            os.chmod(cookie_path, COOKIE_FILE_MODE)
-
-        # 3. Update token sync stats
+    try:
+        from services.database import update_token_sync
         await update_token_sync(token_id)
+    except Exception as exc:
+        # The sync itself succeeded; the counter is bookkeeping.
+        logger.warning(f"Could not record sync statistics for {user_email}: {exc}")
 
-        logger.info(
-            f"Extension sync: user={user_email}, "
-            f"browser={sync_data.browser or 'unknown'}, "
-            f"domains={sync_data.domains}"
-        )
+    logger.info(
+        f"Extension sync: user={user_email}, "
+        f"browser={sync_data.browser or 'unknown'}, "
+        f"domains={sync_data.domains}, cookies={len(entry.cookies)}"
+    )
 
-        return {
-            "status": "ok",
-            "message": "Cookies synced successfully",
-            "domains": sync_data.domains,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Extension sync failed for {user_email}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "status": "ok",
+        "message": "Cookies synced successfully",
+        "domains": sync_data.domains,
+        "cookie_count": len(entry.cookies),
+        "expires_at": entry.expires_at,
+    }
 
 
 @router.get("/status")
@@ -134,9 +122,8 @@ async def get_status(response: Response, authorization: str = Header(None)):
     user_email = await validate_bearer_token(authorization)
     token_id = authorization[7:]
 
-    from services.database import get_token, user_has_cookies
+    from services.database import get_token
     token = await get_token(token_id)
-    has_cookies = await user_has_cookies(user_email)
 
     return {
         "status": "ok",
@@ -144,7 +131,7 @@ async def get_status(response: Response, authorization: str = Header(None)):
         "user_email": user_email,
         "last_sync_at": token["last_sync_at"] if token else None,
         "sync_count": token["sync_count"] if token else 0,
-        "has_cookies": has_cookies,
+        **user_cookies.status(user_email),
     }
 
 
@@ -159,11 +146,54 @@ async def revoke_extension_token(
     session. Disconnecting an extension must not depend on that session still
     being the same user, or revoke some other user's credentials after an
     account switch.
+
+    The cookies that token delivered go with it: disconnecting is the
+    member's way of saying "stop using my session now".
     """
-    await validate_bearer_token(authorization)
+    user_email = await validate_bearer_token(authorization)
     token_id = authorization[7:]
 
     from services.database import revoke_token
     revoked = await revoke_token(token_id)
+    user_cookies.forget(user_email)
     response.headers.update(NO_STORE_HEADERS)
     return {"status": "ok", "revoked": bool(revoked)}
+
+
+@router.get("/download/{browser}")
+async def download_extension(browser: str):
+    """A packaged build of the extension, straight from this instance.
+
+    Built from the `extension/` folder the deployment mounts, so members
+    get the build matching the backend they talk to rather than hunting
+    for a release page.
+    """
+    build = extension_package.BUILDS.get(browser)
+    if build is None:
+        raise HTTPException(status_code=404, detail="No packaged build exists for that browser")
+
+    source = Path(config.EXTENSION_SOURCE_DIR)
+    try:
+        fingerprint = await asyncio.to_thread(extension_package.source_fingerprint, source, build)
+        cached = _package_cache.get(browser)
+        if cached and cached[0] == fingerprint:
+            archive = cached[1]
+        else:
+            archive = await asyncio.to_thread(extension_package.build_archive, source, build)
+            _package_cache[browser] = (fingerprint, archive)
+            logger.info(f"Packaged the {build.label} extension from {source} ({len(archive)} bytes)")
+    except extension_package.ExtensionSourceMissing as exc:
+        logger.error(f"Extension source unavailable at {source}: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail="The extension source is not available on this server",
+        )
+
+    return Response(
+        content=archive,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{build.filename}"',
+            "Cache-Control": config.EXTENSION_PACKAGE_CACHE_CONTROL,
+        },
+    )

@@ -12,7 +12,6 @@ cache tier — the disk segment cache, the in-memory segment cache, the
 resolved-format cache and the proxy transfer metrics — plus the
 destructive maintenance actions for each.
 """
-import os
 import time
 import logging
 
@@ -24,6 +23,7 @@ from connection_manager import manager
 from services.cache import memory_cache, disk_cache_report, clear_disk_cache
 from services.database import get_all_cached_formats, clear_format_cache
 from services.metrics import proxy_metrics
+from services import user_cookies
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +32,6 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 # Process start, for the uptime figure. The module is imported once at
 # application startup.
 STARTED_AT = time.time()
-
-COOKIE_FILE_SUFFIX = ".txt"
-
 
 def require_admin(request: Request) -> str:
     """Resolve the verified identity and demand it is an admin."""
@@ -50,7 +47,7 @@ def require_admin(request: Request) -> str:
 
 @router.get("/overview")
 async def admin_overview(request: Request, response: Response):
-    """Rooms, viewers and stored cookie identities at a glance."""
+    """Rooms, viewers and the members whose cookies are currently held."""
     user = require_admin(request)
     response.headers["Cache-Control"] = "private, no-store"
 
@@ -62,7 +59,7 @@ async def admin_overview(request: Request, response: Response):
             "id": rid,
             "name": state.get("name", ""),
             "active_users": len(connections),
-            "members": sorted({getattr(ws, "user_email", "Guest") for ws in connections}),
+            "members": sorted({getattr(ws, "user_email", config.GUEST_IDENTITY) for ws in connections}),
             "current_video": video_data.get("title"),
             "is_live": bool(video_data.get("is_live")),
             "is_playing": bool(state.get("is_playing")),
@@ -70,14 +67,7 @@ async def admin_overview(request: Request, response: Response):
             "permanent": bool(state.get("permanent")),
         })
 
-    try:
-        cookie_users = sorted(
-            name[: -len(COOKIE_FILE_SUFFIX)]
-            for name in os.listdir(config.COOKIES_DIR)
-            if name.endswith(COOKIE_FILE_SUFFIX)
-        )
-    except FileNotFoundError:
-        cookie_users = []
+    cookie_users = user_cookies.holders()
 
     logger.debug(f"Admin overview served to {user}")
     return {

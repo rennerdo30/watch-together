@@ -1,4 +1,4 @@
-import { BACKEND_ORIGIN } from '@/lib/constants';
+import { BACKEND_ORIGIN, EXTENSION_DOWNLOAD_PATH, type ExtensionBrowser } from '@/lib/constants';
 
 // When running server-side (SSG/SSR), use internal docker URL. Client-side
 // requests stay relative so nginx routes them, unless BACKEND_ORIGIN points
@@ -27,6 +27,11 @@ import type { Storyboard } from './storyboard';
 
 export interface ResolveResponse {
     original_url: string;
+    /**
+     * The member whose cookies the resolve ran with, if any. Another
+     * member's when the caller had none and the room lent theirs.
+     */
+    resolved_by?: string | null;
     /** Canonical source and provider reported by the resolver, including self-hosted sites. */
     webpage_url?: string;
     extractor_key?: string;
@@ -60,9 +65,19 @@ export interface RoomSummary {
     queue_size: number;
 }
 
-export async function resolveUrl(url: string, options: { refresh?: boolean } = {}): Promise<ResolveResponse> {
+/**
+ * Resolve a video for a room.
+ *
+ * `room` lets the backend borrow cookies from a member of that room who is
+ * signed in to the video's site when the caller has none of their own.
+ */
+export async function resolveUrl(
+    url: string,
+    options: { refresh?: boolean; room?: string } = {},
+): Promise<ResolveResponse> {
     const encodedUrl = encodeURIComponent(url);
     const ua = typeof window !== 'undefined' ? encodeURIComponent(navigator.userAgent) : '';
+    const roomParam = options.room ? `&room=${encodeURIComponent(options.room)}` : '';
 
     // Pass user identity for cookie lookup (dev mode uses query param)
     let userParam = '';
@@ -73,7 +88,7 @@ export async function resolveUrl(url: string, options: { refresh?: boolean } = {
     }
 
     const refreshParam = options.refresh ? '&refresh=true' : '';
-    const res = await fetch(`${API_BASE_URL}/api/resolve?url=${encodedUrl}&user_agent=${ua}${userParam}${refreshParam}`);
+    const res = await fetch(`${API_BASE_URL}/api/resolve?url=${encodedUrl}&user_agent=${ua}${userParam}${refreshParam}${roomParam}`);
 
     if (!res.ok) {
         const errorData = await res.json().catch(() => ({ detail: 'Unknown error' }));
@@ -82,24 +97,47 @@ export async function resolveUrl(url: string, options: { refresh?: boolean } = {
 
     return res.json();
 }
-/** The user's stored cookies, masked or not as the server decides. */
-export async function getCookies(): Promise<{ has_cookies: boolean; content: string }> {
-    const res = await fetch(`${API_BASE_URL}/api/cookies${getUserParam()}`, { cache: 'no-store' });
-    if (!res.ok) throw new Error('Failed to load cookies');
-    const data = await res.json();
-    return { has_cookies: Boolean(data.has_cookies), content: typeof data.content === 'string' ? data.content : '' };
+/**
+ * Whether the server currently holds the user's cookies, and until when.
+ *
+ * Cookies only ever arrive through the browser extension and live in the
+ * server's memory; the server never returns their values.
+ */
+export interface CookieStatus {
+    has_cookies: boolean;
+    /** Unix seconds of the last extension sync. */
+    synced_at?: number;
+    /** Unix seconds after which the server drops them unless synced again. */
+    expires_at?: number;
+    cookie_count?: number;
+    browser?: string | null;
 }
 
-export async function saveCookies(content: string): Promise<void> {
-    const res = await fetch(`${API_BASE_URL}/api/cookies${getUserParam()}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content }),
-    });
+export async function getCookies(): Promise<CookieStatus> {
+    const res = await fetch(`${API_BASE_URL}/api/cookies${getUserParam()}`, { cache: 'no-store' });
+    if (!res.ok) throw new Error('Failed to load the cookie status');
+    const data = await res.json();
+    return {
+        has_cookies: Boolean(data.has_cookies),
+        synced_at: typeof data.synced_at === 'number' ? data.synced_at : undefined,
+        expires_at: typeof data.expires_at === 'number' ? data.expires_at : undefined,
+        cookie_count: typeof data.cookie_count === 'number' ? data.cookie_count : undefined,
+        browser: typeof data.browser === 'string' ? data.browser : null,
+    };
+}
+
+/** Drop the user's cookies from the server now, ahead of their expiry. */
+export async function forgetCookies(): Promise<void> {
+    const res = await fetch(`${API_BASE_URL}/api/cookies${getUserParam()}`, { method: 'DELETE' });
     if (!res.ok) {
         const errorData = await res.json().catch(() => ({ detail: 'Unknown error' }));
-        throw new Error(errorData.detail || 'Failed to save cookies');
+        throw new Error(errorData.detail || 'Failed to forget cookies');
     }
+}
+
+/** Where a packaged build of the extension can be downloaded from this instance. */
+export function extensionDownloadUrl(browser: ExtensionBrowser): string {
+    return `${API_BASE_URL}${EXTENSION_DOWNLOAD_PATH}/${browser}`;
 }
 
 /** Per-user preferences, stored on the server. */

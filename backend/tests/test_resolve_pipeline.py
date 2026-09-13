@@ -534,3 +534,192 @@ def test_resolved_video_identifies_self_hosted_chat_provider():
     )
     assert response['extractor_key'] == 'Owncast'
     assert response['webpage_url'] == 'https://stream.example/'
+
+
+class TestRoomMembersLendCookies:
+    """A member without the extension pastes a link; someone in the room is signed in.
+
+    Most members never install the extension, so the requester usually has
+    no cookies and YouTube answers the server's datacenter address with
+    "Sign in to confirm you're not a bot". A member connected to the same
+    room who *is* signed in to the site lends their cookies for that one
+    resolve — and only for a single-video page of an allowlisted site, so
+    nobody can read a lender's feeds or history through the room.
+    """
+
+    REQUESTER = "no-extension@example.com"
+    LENDER = "signed-in@example.com"
+    ROOM = "lend-room"
+    WATCH = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+    @pytest.fixture
+    def extraction(self, monkeypatch):
+        """Record the cookie file content each attempt would use, and its fate."""
+        import main as main_module
+        seen = {"paths": [], "contents": []}
+
+        def fake_extract(url, ydl_opts):
+            path = ydl_opts.get("cookiefile")
+            seen["paths"].append(path)
+            seen["contents"].append(open(path, encoding="utf-8").read() if path else None)
+            return FAKE_INFO
+
+        monkeypatch.setattr(main_module, "_extract_with_options", fake_extract)
+        return seen
+
+    @pytest.fixture
+    def app_client(self):
+        from main import app
+        with TestClient(app) as c:
+            yield c
+
+    def _hold(self, email, domain, value):
+        from tests.test_user_cookies import hold_cookies
+        hold_cookies(email, [(domain, "SID", value)])
+
+    def _resolve(self, client, url, user=REQUESTER, room=ROOM):
+        params = {"url": url, "user": user}
+        if room is not None:
+            params["room"] = room
+        return client.get("/api/resolve", params=params)
+
+    def test_a_connected_member_lends_cookies_for_a_video(self, app_client, extraction):
+        from services import stream_owner
+        self._hold(self.LENDER, ".youtube.com", "lender-secret")
+
+        with app_client.websocket_connect(f"/ws/{self.ROOM}?user={self.LENDER}") as ws:
+            ws.receive_json()
+            response = self._resolve(app_client, self.WATCH)
+
+        assert response.status_code == 200, response.text
+        assert "lender-secret" in extraction["contents"][0]
+        assert response.json()["resolved_by"] == self.LENDER
+        # The stream URLs are bound to the lender's session, as for any resolve.
+        assert stream_owner.owner_of(response.json()["video_url"]) == self.LENDER
+        # The cookie file did not outlive the extraction.
+        assert not os.path.exists(extraction["paths"][0])
+
+    def test_nobody_lends_to_a_room_they_are_not_in(self, app_client, extraction):
+        self._hold(self.LENDER, ".youtube.com", "lender-secret")
+
+        with app_client.websocket_connect(f"/ws/another-room?user={self.LENDER}") as ws:
+            ws.receive_json()
+            response = self._resolve(app_client, "https://youtu.be/not-in-room")
+        assert response.json()["resolved_by"] is None
+        assert extraction["contents"] == [None]
+
+        # Nor after leaving, nor when no room is named at all.
+        assert self._resolve(app_client, "https://youtu.be/left-room").json()["resolved_by"] is None
+        assert self._resolve(app_client, "https://youtu.be/no-room", room=None).json()["resolved_by"] is None
+
+    def test_requesters_own_cookies_are_preferred(self, app_client, extraction):
+        self._hold(self.LENDER, ".youtube.com", "lender-secret")
+        self._hold(self.REQUESTER, ".youtube.com", "own-secret")
+
+        with app_client.websocket_connect(f"/ws/{self.ROOM}?user={self.LENDER}") as ws:
+            ws.receive_json()
+            response = self._resolve(app_client, "https://youtu.be/own-first")
+        assert response.json()["resolved_by"] == self.REQUESTER
+        assert "own-secret" in extraction["contents"][0]
+        assert "lender-secret" not in extraction["contents"][0]
+
+    def test_a_lenders_feed_and_history_are_off_limits(self, app_client, extraction):
+        self._hold(self.LENDER, ".youtube.com", "lender-secret")
+
+        with app_client.websocket_connect(f"/ws/{self.ROOM}?user={self.LENDER}") as ws:
+            ws.receive_json()
+            for url in ("https://www.youtube.com/feed/history",
+                        "https://www.youtube.com/playlist?list=WL",
+                        "https://www.youtube.com/@channel/videos"):
+                response = self._resolve(app_client, url)
+                assert response.json()["resolved_by"] is None, url
+        assert all(content is None for content in extraction["contents"])
+
+    def test_only_allowlisted_sites_are_shared(self, app_client, extraction):
+        self._hold(self.LENDER, ".vimeo.com", "lender-vimeo")
+
+        with app_client.websocket_connect(f"/ws/{self.ROOM}?user={self.LENDER}") as ws:
+            ws.receive_json()
+            response = self._resolve(app_client, "https://vimeo.com/123456")
+        assert response.json()["resolved_by"] is None
+        assert extraction["contents"] == [None]
+
+    def test_a_member_signed_in_elsewhere_does_not_lend(self, app_client, extraction):
+        """Twitch cookies say nothing about YouTube."""
+        self._hold(self.LENDER, ".twitch.tv", "lender-twitch")
+
+        with app_client.websocket_connect(f"/ws/{self.ROOM}?user={self.LENDER}") as ws:
+            ws.receive_json()
+            assert self._resolve(app_client, "https://youtu.be/twitch-only").json()["resolved_by"] is None
+            assert self._resolve(app_client, "https://www.twitch.tv/videos/1").json()["resolved_by"] == self.LENDER
+
+    def test_a_watch_url_in_playlist_context_is_still_one_video(self, app_client, extraction):
+        self._hold(self.LENDER, ".youtube.com", "lender-secret")
+
+        with app_client.websocket_connect(f"/ws/{self.ROOM}?user={self.LENDER}") as ws:
+            ws.receive_json()
+            response = self._resolve(app_client, "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=WL&index=2")
+        assert response.json()["resolved_by"] == self.LENDER
+
+    def test_the_manifest_endpoint_lends_the_same_way(self, app_client, extraction, monkeypatch):
+        import main as main_module
+
+        async def fake_build(client_, duration_seconds, video_formats, audio_formats, proxy_base, headers=None):
+            return "<MPD/>"
+
+        monkeypatch.setattr(main_module, "build_manifest_for_formats", fake_build)
+        self._hold(self.LENDER, ".youtube.com", "lender-secret")
+
+        with app_client.websocket_connect(f"/ws/{self.ROOM}?user={self.LENDER}") as ws:
+            ws.receive_json()
+            response = app_client.get("/api/dash-manifest", params={
+                "url": "https://youtu.be/manifest-first", "user": self.REQUESTER, "room": self.ROOM})
+        assert response.status_code == 200, response.text
+        assert "lender-secret" in extraction["contents"][0]
+
+    def test_room_ids_are_sanitized_before_lookup(self, app_client, extraction):
+        from main import sanitize_room_id
+        assert sanitize_room_id("../etc/passwd") == "etcpasswd"
+        assert sanitize_room_id(None) == ""
+        self._hold(self.LENDER, ".youtube.com", "lender-secret")
+        with app_client.websocket_connect(f"/ws/{self.ROOM}?user={self.LENDER}") as ws:
+            ws.receive_json()
+            # The same room, spelled with characters the WebSocket path strips.
+            response = self._resolve(app_client, "https://www.youtube.com/watch?v=aBcDeFgHiJk", room=f"{self.ROOM}/../")
+        assert response.json()["resolved_by"] == self.LENDER
+
+    def test_every_extraction_stays_a_single_video(self):
+        """Borrowed cookies plus a playlist extraction would list a lender's playlist."""
+        for source in ("main.py", "services/resolver.py"):
+            text = (BACKEND_ROOT / source).read_text(encoding="utf-8")
+            assert "'noplaylist': True" in text, f"{source} no longer forces single-video extraction"
+
+    def test_queue_playback_lends_from_the_room_too(self, app_client, monkeypatch):
+        """A queued video re-resolved when its turn comes uses the room's members."""
+        from services import resolver
+
+        seen = {}
+
+        def choose(url, requester, members):
+            seen["members"] = list(members)
+            return None
+
+        async def no_cache(url):
+            return None
+
+        monkeypatch.setattr(resolver, "choose_cookie_source", choose)
+        monkeypatch.setattr(resolver, "get_cached_format", no_cache)
+
+        with app_client.websocket_connect(f"/ws/{self.ROOM}?user={self.LENDER}") as ws:
+            ws.receive_json()
+            with app_client.websocket_connect(f"/ws/{self.ROOM}?user={self.REQUESTER}") as ws2:
+                ws2.receive_json()
+                ws2.send_json({"type": "queue_add", "payload": {"video_data": {
+                    "original_url": "https://youtu.be/queued", "stream_url": "https://cdn.example.com/q",
+                    "title": "Queued", "added_by": self.REQUESTER}}})
+                ws2.send_json({"type": "queue_play", "payload": {"index": 0}})
+                for _ in range(10):
+                    if seen:
+                        break
+                    ws2.receive_json()
+        assert self.LENDER in seen.get("members", [])

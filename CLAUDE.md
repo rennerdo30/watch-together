@@ -58,6 +58,7 @@ message.
 - Docker Compose orchestration
 - Nginx reverse proxy
 - Cloudflare Tunnel for external access
+- Cloudflare DNS-over-HTTPS for every container (a `cloudflared proxy-dns` sidecar)
 
 ## Project Structure
 
@@ -70,7 +71,8 @@ backend/
 │   ├── database.py           # SQLite persistence
 │   ├── cache.py              # Caching & disk management
 │   ├── upstream.py           # SSRF-safe fetching: validation, IP pinning, redirects
-│   ├── user_cookies.py       # Per-user cookie lookup for upstream requests
+│   ├── user_cookies.py       # Memory-only cookie store: extension sync, TTL, lending to a room, yt-dlp scratch file
+│   ├── extension_package.py  # Packages the browser extension for download (CI uses the same code)
 │   ├── manifest.py           # DASH manifest generation for adaptive streams
 │   ├── mp4_index.py          # Fragmented-MP4 box scanning (init/index ranges)
 │   ├── metrics.py            # Per-transfer proxy metrics
@@ -128,8 +130,12 @@ docker compose up -d --build
 4. Drift >3s: hard seek to correct position
 
 ### Video Resolution Flow
-1. Client requests `/api/resolve?url=...`
-2. Backend tries cookie sources: user's cookies → shared user's cookies → no cookies
+1. Client requests `/api/resolve?url=...&room=<id>`
+2. Backend picks whose cookies run the extraction (`services/user_cookies.choose_cookie_source`):
+   the requester's if they cover the site; otherwise, for a **single-video page of an
+   allowlisted site** (`COOKIE_SHARE_EXTRACTORS`: YouTube, Twitch, Kick), the first member
+   connected to that room who is signed in there; otherwise nobody. Feeds, playlists and
+   channels are never resolved with a lender's session.
 3. Returns HLS/DASH manifest URL or direct stream, recording `resolved_by`: every
    later fetch of those URLs (manifest probes, proxied segments) carries **that**
    member's cookies whoever asks — the URLs are bound to the session that fetched them
@@ -154,6 +160,14 @@ kept frame-accurate, which is a platform property, not a tuning problem.
   validated IP pinned for the connection, every redirect hop re-validated.
 - Cookies are per user and per request; any response fetched with cookies is cached
   under a key including the user's identity.
+- **Cookies are never persisted.** They arrive only through the browser extension's
+  sync endpoint, live in process memory (`services/user_cookies.py`), and are dropped
+  `COOKIE_MEMORY_TTL_SECONDS` after the last sync, when the member disconnects the
+  extension, or when the process ends. yt-dlp gets a scratch file in a private
+  directory (RAM-backed `/dev/shm` where available) for one extraction; it is removed
+  right after. Nothing ever returns a cookie value to a browser.
+- A member's cookies are lent to a room only while that member is connected to it, and
+  only for single-video pages of the allowlisted sites.
 - **Single worker only.** Room state, caches and the rate limiter are in process memory;
   startup refuses `WEB_CONCURRENCY > 1`.
 
@@ -243,13 +257,17 @@ cd frontend && npm run test:e2e
 cd frontend && npm run build && npm run lint
 ```
 
-Tests run against a temporary database and cookie directory (see
+Tests run against a temporary database and cache directory (see
 `backend/tests/conftest.py`), so they neither depend on nor pollute `backend/data/`.
+The in-memory cookie store is emptied between tests.
 
 ## Important Notes
 
 - Room state persists for 5 minutes after last user leaves
-- User cookies are stored in `data/cookies/{email}.txt` (Netscape format, mode 0600)
+- Cookies are held in memory only, while the extension keeps refreshing them; nothing
+  under `data/` ever contains one
+- The extension is downloadable from the instance (`/api/extension/download/{browser}`),
+  packaged from the `extension/` folder docker-compose mounts read-only
 - Room IDs are sanitized to alphanumeric + hyphen/underscore only
 - The proxy rewrites manifest URLs to avoid CORS issues
 - yt-dlp requires Node.js runtime for JavaScript challenge execution

@@ -6,9 +6,9 @@ import {
     Loader2, Users, Link as LinkIcon,
     Plus, SkipForward,
     Play, ListVideo, Settings, X, Palette, ShieldCheck, Home, Bug,
-    Crown, Shield, User as UserIcon, ChevronDown, Lock, Copy, Check, Infinity, Sun, ExternalLink, Scissors
+    Crown, Shield, User as UserIcon, ChevronDown, Lock, Copy, Check, Infinity, Sun, ExternalLink, Scissors, Puzzle
 } from 'lucide-react';
-import { ResolveResponse, resolveUrl, getExtensionToken, regenerateExtensionToken, ExtensionToken, getUserSettings, updateUserSettings, getCookies, saveCookies, type UserSettings } from '@/lib/api';
+import { ResolveResponse, resolveUrl, getExtensionToken, regenerateExtensionToken, ExtensionToken, getUserSettings, updateUserSettings, getCookies, forgetCookies, extensionDownloadUrl, type CookieStatus, type UserSettings } from '@/lib/api';
 import { CustomPlayer } from '@/components/custom-player';
 import { LiveChat } from '@/components/live-chat';
 import { RoomLog } from '@/components/room-log';
@@ -30,7 +30,9 @@ import {
 import {
     APP_NAME,
     BACKEND_ORIGIN,
+    COOKIE_MEMORY_TTL_MINUTES,
     COPY_FEEDBACK_DURATION_MS,
+    EXTENSION_HINT_DISMISSED_KEY,
     EXTENSION_SOURCE_URL,
     FONT_SIZE_DEFAULT,
     FONT_SIZE_MAX,
@@ -40,6 +42,7 @@ import {
     SIDEBAR_MIN_WIDTH,
 } from '@/lib/constants';
 import toast, { Toaster } from 'react-hot-toast';
+import { useLocalStorageState, parseStoredBoolean } from '@/lib/hooks/useLocalStorageState';
 
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragEndEvent, DragStartEvent, DragOverlay } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
@@ -157,12 +160,15 @@ export default function RoomPage() {
     const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
     const isResizing = useRef(false);
     const [fontSize, setFontSize] = useState(FONT_SIZE_DEFAULT);
-    const [cookieContent, setCookieContent] = useState('');
-    const [isSavingCookies, setIsSavingCookies] = useState(false);
     const [isLoadingCookies, setIsLoadingCookies] = useState(true);
-    // Whether the server holds cookies for this user: gates features that
-    // act on their account, independent of what the textarea shows.
+    // Whether the server holds cookies for this user right now: gates
+    // features that act on their account, and decides whether to suggest
+    // installing the extension.
     const [hasSavedCookies, setHasSavedCookies] = useState(false);
+    const [cookieStatus, setCookieStatus] = useState<CookieStatus | null>(null);
+    const [isForgettingCookies, setIsForgettingCookies] = useState(false);
+    const [extensionHintDismissed, setExtensionHintDismissed] = useLocalStorageState(
+        EXTENSION_HINT_DISMISSED_KEY, false, parseStoredBoolean, String);
     const [userSettings, setUserSettings] = useState<UserSettings | null>(null);
     const [isCopyingDebug, setIsCopyingDebug] = useState(false);
 
@@ -387,11 +393,9 @@ export default function RoomPage() {
             try {
                 const data = await getCookies();
                 setHasSavedCookies(data.has_cookies);
-                if (data.has_cookies && data.content) {
-                    setCookieContent(data.content);
-                }
+                setCookieStatus(data);
             } catch (err) {
-                console.error('Failed to load cookies:', err);
+                console.error('Failed to load the cookie status:', err);
             } finally {
                 setIsLoadingCookies(false);
             }
@@ -409,7 +413,7 @@ export default function RoomPage() {
             // Cookies may have arrived from the extension since the page
             // loaded; what the dialog offers depends on whether they exist.
             getCookies()
-                .then((data) => setHasSavedCookies(data.has_cookies))
+                .then((data) => { setHasSavedCookies(data.has_cookies); setCookieStatus(data); })
                 .catch(() => { /* the initial load already reported this */ });
             setIsLoadingToken(true);
             try {
@@ -445,7 +449,7 @@ export default function RoomPage() {
                         if (syncVideoData.original_url) {
                             console.log('[Room] Sync: Re-resolving video for fresh stream URLs...');
                             setIsRestoringVideo(true);
-                            resolveUrl(syncVideoData.original_url)
+                            resolveUrl(syncVideoData.original_url, { room: roomId })
                                 .then((freshData) => {
                                     console.log('[Room] Sync: Got fresh stream:', freshData.stream_type, freshData.quality);
                                     // Who added it is room knowledge, not something a resolve returns.
@@ -682,15 +686,21 @@ export default function RoomPage() {
         }
     };
 
+    // Whose session a resolve ran with, when it was not the viewer's own.
+    const lentBy = (data: ResolveResponse) =>
+        data.resolved_by && data.resolved_by !== currentUser
+            ? ` (using ${displayName(data.resolved_by)}'s cookies)`
+            : '';
+
     const handleLoadNow = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!inputUrl || loading) return;
         setLoading(true);
         try {
-            const data = await resolveUrl(inputUrl);
+            const data = await resolveUrl(inputUrl, { room: roomId });
             sendMsg('set_video', { video_data: data });
             setInputUrl('');
-            toast.success(`Playing: ${data.title}`);
+            toast.success(`Playing: ${data.title}${lentBy(data)}`);
         } catch (err: unknown) {
             console.error(err);
             toast.error(getErrorMessage(err, 'Failed to resolve video'));
@@ -701,10 +711,10 @@ export default function RoomPage() {
         if (!inputUrl || loading || queueing) return;
         setQueueing(true);
         try {
-            const data = await resolveUrl(inputUrl);
+            const data = await resolveUrl(inputUrl, { room: roomId });
             sendMsg('queue_add', { video_data: data });
             setInputUrl('');
-            toast.success(`Added to queue: ${data.title}`);
+            toast.success(`Added to queue: ${data.title}${lentBy(data)}`);
         } catch (err: unknown) {
             console.error(err);
             toast.error(getErrorMessage(err, 'Failed to resolve video'));
@@ -727,10 +737,10 @@ export default function RoomPage() {
         }
         lastSourceRefreshRef.current = now;
         console.log('[Room] Stream URL expired upstream, re-resolving...');
-        const fresh = await resolveUrl(original, { refresh: true });
+        const fresh = await resolveUrl(original, { refresh: true, room: roomId });
         console.log('[Room] Got fresh stream after expiry:', fresh.stream_type, fresh.quality);
         setVideoData(fresh);
-    }, []);
+    }, [roomId]);
 
     const getFinalVideoUrl = () => {
         if (!videoData) return "";
@@ -757,7 +767,9 @@ export default function RoomPage() {
             ? null
             : new URLSearchParams(window.location.search).get('user');
         const userSuffix = mockUser ? `&user=${encodeURIComponent(mockUser)}` : '';
-        return `${BACKEND_ORIGIN}/api/dash-manifest?url=${encodeURIComponent(videoData.original_url)}${userSuffix}`;
+        // The room lets the backend borrow a member's cookies if it has to
+        // resolve the video again (after a restart, or an expired entry).
+        return `${BACKEND_ORIGIN}/api/dash-manifest?url=${encodeURIComponent(videoData.original_url)}&room=${encodeURIComponent(roomId)}${userSuffix}`;
     };
 
     // Get DASH-specific URLs (proxied if needed)
@@ -1074,6 +1086,37 @@ export default function RoomPage() {
                                 </div>
                             </div>
                         </section>
+                    )}
+
+                    {/* Most videos need a signed-in session. A member without the
+                        extension has none to offer, so suggest it once — until
+                        cookies arrive or the viewer dismisses the hint. */}
+                    {currentUser && currentUser !== 'Guest' && !isLoadingCookies && !hasSavedCookies && !extensionHintDismissed && (
+                        <div
+                            role="status"
+                            data-testid="extension-hint"
+                            className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100 shrink-0"
+                        >
+                            <Puzzle aria-hidden="true" className="w-4 h-4 shrink-0 mt-0.5 text-amber-300" />
+                            <p className="flex-1 leading-relaxed">
+                                Many videos only play with a signed-in account. Install the browser extension so the room can use your session.
+                            </p>
+                            <button
+                                type="button"
+                                onClick={() => setShowSettings(true)}
+                                className="shrink-0 rounded-md bg-amber-500/20 hover:bg-amber-500/30 px-2 py-1 font-medium text-amber-100 transition-colors"
+                            >
+                                Install
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setExtensionHintDismissed(true)}
+                                aria-label="Dismiss the extension hint"
+                                className="shrink-0 rounded-md p-1 text-amber-200/70 hover:text-amber-100 transition-colors"
+                            >
+                                <X aria-hidden="true" className="w-3.5 h-3.5" />
+                            </button>
+                        </div>
                     )}
 
                     {/* URL input */}
@@ -1613,56 +1656,50 @@ export default function RoomPage() {
                                     </div>
                                 </button>
 
-                                {/* Cookie Manager */}
+                                {/* Cookie status. Cookies only ever arrive through the
+                                    extension and live in the server's memory; there is
+                                    nothing to paste and nothing to read back. */}
                                 <div className="pt-4 border-t border-zinc-800">
-                                    <label htmlFor="room-cookies" className="text-xs font-medium text-zinc-400 flex items-center gap-2 mb-3">
+                                    <p className="text-xs font-medium text-zinc-400 flex items-center gap-2 mb-3">
                                         <ShieldCheck aria-hidden="true" className="w-4 h-4" /> Cookie authentication
-                                    </label>
-                                    <div className="bg-zinc-800/30 rounded-xl border border-zinc-800 p-4 space-y-3">
+                                    </p>
+                                    <div className="bg-zinc-800/30 rounded-xl border border-zinc-800 p-4 space-y-3" data-testid="cookie-status">
                                         <p className="text-xs text-zinc-400 leading-relaxed">
-                                            Upload YouTube cookies (Netscape format) to access age-restricted content.
+                                            A signed-in session lets the room play age-restricted and bot-checked videos. Your cookies reach the server only through the browser extension, stay in memory, and are dropped {COOKIE_MEMORY_TTL_MINUTES} minutes after the last sync or as soon as you disconnect the extension. While you are in a room, YouTube, Twitch and Kick links other members paste can be resolved with your session.
                                         </p>
-                                        <textarea
-                                            id="room-cookies"
-                                            spellCheck={false}
-                                            placeholder={isLoadingCookies ? "Loading saved cookies..." : "# Netscape HTTP Cookie File..."}
-                                            className="w-full h-48 bg-zinc-900 border border-zinc-700 rounded-lg p-3 text-xs font-mono text-zinc-300 focus:border-[color:var(--accent-primary)] resize-y placeholder:text-zinc-500"
-                                            value={cookieContent}
-                                            onChange={(e) => setCookieContent(e.target.value)}
-                                            disabled={isLoadingCookies}
-                                        />
-                                        <div className="flex justify-between items-center">
-                                            <div className="flex items-center gap-2 text-xs text-zinc-500">
-                                                <Lock className="w-3 h-3" />
-                                                <span>Stored on server</span>
+                                        <div className="flex flex-wrap items-center justify-between gap-3">
+                                            <div className="flex items-center gap-2 text-xs text-zinc-400">
+                                                <Lock aria-hidden="true" className="w-3 h-3" />
+                                                <span>
+                                                    {isLoadingCookies
+                                                        ? 'Checking...'
+                                                        : hasSavedCookies
+                                                            ? `In memory${cookieStatus?.synced_at ? `, synced ${new Date(cookieStatus.synced_at * 1000).toLocaleTimeString()}` : ''}${cookieStatus?.expires_at ? `, kept until ${new Date(cookieStatus.expires_at * 1000).toLocaleTimeString()}` : ''}`
+                                                            : 'No cookies on the server'}
+                                                </span>
                                             </div>
-                                            <button
-                                                onClick={async () => {
-                                                    if (!cookieContent.trim().includes('# Netscape')) {
-                                                        toast.error("Invalid Netscape format");
-                                                        return;
-                                                    }
-                                                    if (!currentUser || currentUser === 'Guest') {
-                                                        toast.error("You must be logged in to save cookies");
-                                                        return;
-                                                    }
-                                                    setIsSavingCookies(true);
-                                                    try {
-                                                        await saveCookies(cookieContent);
-                                                        toast.success("Cookies saved!");
-                                                        setCookieContent('');
-                                                        setHasSavedCookies(true);
-                                                    } catch (err: unknown) {
-                                                        toast.error(getErrorMessage(err, "Failed to save cookies"));
-                                                    } finally {
-                                                        setIsSavingCookies(false);
-                                                    }
-                                                }}
-                                                disabled={isSavingCookies || !cookieContent || !currentUser || currentUser === 'Guest'}
-                                                className="px-4 py-2 bg-[color:var(--accent-primary)] hover:brightness-110 on-accent-light text-xs font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                            >
-                                                {isSavingCookies ? "Saving..." : "Save Cookies"}
-                                            </button>
+                                            {hasSavedCookies && (
+                                                <button
+                                                    type="button"
+                                                    onClick={async () => {
+                                                        setIsForgettingCookies(true);
+                                                        try {
+                                                            await forgetCookies();
+                                                            setHasSavedCookies(false);
+                                                            setCookieStatus({ has_cookies: false });
+                                                            toast.success('Cookies dropped from the server');
+                                                        } catch (err: unknown) {
+                                                            toast.error(getErrorMessage(err, 'Failed to forget cookies'));
+                                                        } finally {
+                                                            setIsForgettingCookies(false);
+                                                        }
+                                                    }}
+                                                    disabled={isForgettingCookies}
+                                                    className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-xs font-medium text-zinc-300 hover:text-white transition-colors disabled:opacity-50"
+                                                >
+                                                    {isForgettingCookies ? 'Forgetting...' : 'Forget now'}
+                                                </button>
+                                            )}
                                         </div>
                                     </div>
 
@@ -1692,7 +1729,7 @@ export default function RoomPage() {
                                                     <p className="text-xs text-zinc-500 mt-0.5">
                                                         {hasSavedCookies
                                                             ? 'YouTube videos the room watches appear in your history and remember where you stopped, as if you watched them yourself. Uses your cookies.'
-                                                            : 'Save your cookies above (or connect the browser extension) to enable this.'}
+                                                            : 'Connect the browser extension so your cookies are available, then switch this on.'}
                                                     </p>
                                                 </div>
                                                 <div className={`w-10 h-5 shrink-0 rounded-full transition-all flex items-center px-0.5 ${userSettings?.youtube_history ? 'bg-red-500' : 'bg-zinc-700'}`}>
@@ -1710,7 +1747,7 @@ export default function RoomPage() {
                                     </p>
                                     <div className="bg-zinc-800/30 rounded-xl border border-zinc-800 p-4 space-y-4">
                                         <p className="text-xs text-zinc-400 leading-relaxed">
-                                            Install the browser extension to automatically sync cookies from YouTube, Twitch, and other sites.
+                                            Install the browser extension to sync your cookies from YouTube, Twitch, Kick and other sites. It re-syncs every few minutes while your browser is open; the server keeps nothing once it stops.
                                         </p>
 
                                         {/* API Token */}
@@ -1784,10 +1821,9 @@ export default function RoomPage() {
                                             <span className="ui-label">Install Extension</span>
                                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                                 <a
-                                                    href="/extension/chrome"
+                                                    href={extensionDownloadUrl('chrome')}
                                                     className="flex items-center justify-center gap-2 h-10 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 rounded-lg text-xs font-medium text-zinc-300 hover:text-white transition-colors"
-                                                    target="_blank"
-                                                    rel="noopener noreferrer"
+                                                    download
                                                 >
                                                     <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
                                                         <path d="M12 0C8.21 0 4.831 1.757 2.632 4.501l3.953 6.848A5.454 5.454 0 0 1 12 6.545h10.691A12 12 0 0 0 12 0zM1.931 5.47A11.943 11.943 0 0 0 0 12c0 6.012 4.42 10.991 10.189 11.864l3.953-6.847a5.45 5.45 0 0 1-6.865-2.29zm13.342 2.166a5.446 5.446 0 0 1 1.45 7.09l.002.001h-.002l-5.344 9.257c.206.01.413.016.621.016 6.627 0 12-5.373 12-12 0-1.54-.29-3.011-.818-4.364zM12 16.364a4.364 4.364 0 1 1 0-8.728 4.364 4.364 0 0 1 0 8.728z"/>
@@ -1795,26 +1831,14 @@ export default function RoomPage() {
                                                     Chrome / Edge
                                                 </a>
                                                 <a
-                                                    href="/extension/firefox"
+                                                    href={extensionDownloadUrl('firefox')}
                                                     className="flex items-center justify-center gap-2 h-10 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 rounded-lg text-xs font-medium text-zinc-300 hover:text-white transition-colors"
-                                                    target="_blank"
-                                                    rel="noopener noreferrer"
+                                                    download
                                                 >
                                                     <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
                                                         <path d="M8.824 7.287c.008 0 .004 0 0 0zm-2.8-1.4c.006 0 .003 0 0 0zm16.754 2.161c-.505-1.215-1.53-2.528-2.333-2.943.654 1.283 1.033 2.57 1.177 3.53l.002.02c-1.314-3.278-3.544-4.6-5.366-7.477-.096-.147-.19-.3-.283-.453a3.95 3.95 0 0 1-.145-.282 2.421 2.421 0 0 1-.159-.402c-.002-.012-.003-.024-.005-.036-.009-.064-.015-.13-.019-.195a1.085 1.085 0 0 1 .014-.579.027.027 0 0 0-.02-.03.02.02 0 0 0-.015.001l-.016.007c-.03.017-.06.033-.09.051l-.046.027-.038.023a7.14 7.14 0 0 0-.97.713c-.296.25-.58.522-.85.817a9.28 9.28 0 0 0-.78.914 9.887 9.887 0 0 0-.936 1.467 12.095 12.095 0 0 0-1.265 3.486l-.101.496-.013.072-.074.443c-.03.188-.054.38-.075.572l-.027.293-.029.343-.035.568-.013.634c0 .207.003.414.01.62.032.98.174 1.943.422 2.875.164.612.371 1.21.62 1.787a11.929 11.929 0 0 0 5.217 5.478c.173.093.345.185.52.27l.098.047c.296.142.597.275.904.395l.006.002c.216.082.435.16.658.23l.182.059.249.072.252.068.23.057.256.056.223.046.258.05.218.039.262.039.219.031.262.03.222.024.262.02.224.016.264.011.224.009.266.003.221.002c.176-.001.352-.01.527-.023l.128-.014.182-.015.24-.035.135-.018.22-.044.122-.025.228-.059.109-.028.237-.078.093-.031.252-.1.072-.03.268-.125.05-.023.282-.155.026-.016.27-.175.009-.007a6.947 6.947 0 0 0 .532-.42l.029-.026c.08-.072.157-.147.232-.224l.058-.06.19-.215.071-.088.156-.21.083-.121.13-.211.08-.141.108-.21.068-.144.091-.217.055-.143.079-.236.044-.145.066-.26.03-.138.049-.293.019-.125.031-.328.009-.116.012-.386v-.035a8.102 8.102 0 0 0-.115-1.275l-.039-.195a7.63 7.63 0 0 0-.14-.59l-.062-.203a7.094 7.094 0 0 0-.218-.606l-.063-.148a6.77 6.77 0 0 0-.308-.6 6.05 6.05 0 0 0-.393-.584 6.25 6.25 0 0 0-.142-.18 6.37 6.37 0 0 0-.148-.177 5.83 5.83 0 0 0-.311-.337 5.6 5.6 0 0 0-.325-.306 5.434 5.434 0 0 0-.168-.143 5.138 5.138 0 0 0-.351-.266 5.116 5.116 0 0 0-.177-.12 5.023 5.023 0 0 0-.367-.219 5.1 5.1 0 0 0-.181-.096c-.124-.062-.251-.12-.379-.173a4.987 4.987 0 0 0-.183-.074 5.104 5.104 0 0 0-.39-.134 5.08 5.08 0 0 0-.181-.054 5.115 5.115 0 0 0-.4-.095 5.156 5.156 0 0 0-.175-.033 5.297 5.297 0 0 0-.411-.055 5.48 5.48 0 0 0-.166-.015 5.718 5.718 0 0 0-.423-.019c-.052 0-.104-.002-.156 0a6.076 6.076 0 0 0-.437.018c-.046.002-.092.008-.138.012a6.449 6.449 0 0 0-.45.057c-.04.006-.08.016-.12.023a6.901 6.901 0 0 0-.46.106c-.034.01-.069.021-.103.031a7.397 7.397 0 0 0-.468.16c-.027.01-.055.022-.082.033a7.921 7.921 0 0 0-.475.219c-.021.01-.042.022-.063.033a8.498 8.498 0 0 0-.481.28c-.016.01-.032.022-.048.032a9.117 9.117 0 0 0-.485.345c-.01.008-.02.017-.03.025a9.776 9.776 0 0 0-.488.412c-.006.005-.012.012-.018.017a10.494 10.494 0 0 0-.49.483l-.007.007a11.28 11.28 0 0 0-.49.557v.001a12.157 12.157 0 0 0-.49.636 13.18 13.18 0 0 0-.487.72l-.003.004a14.382 14.382 0 0 0-.482.809 15.927 15.927 0 0 0-.474.902c-.152.32-.303.644-.453.971a18.933 18.933 0 0 0-.444 1.044c-.136.357-.27.717-.401 1.08a20.58 20.58 0 0 0-.375 1.128c-.109.37-.215.743-.316 1.118-.092.34-.18.683-.264 1.026-.076.31-.148.621-.217.933-.063.285-.124.571-.18.857-.052.263-.1.527-.146.79-.042.24-.082.48-.118.72-.034.224-.064.449-.092.673-.026.21-.05.42-.072.63-.02.198-.038.396-.053.593-.014.187-.027.373-.037.559-.01.177-.016.353-.022.528-.005.167-.009.333-.01.498-.001.159 0 .316.002.474.002.152.008.304.015.455.007.146.017.291.029.436.012.14.027.28.044.418.018.135.038.269.061.402.024.131.05.26.08.389.031.127.065.252.102.376.04.122.082.242.128.361.049.118.101.233.157.347.06.113.122.222.19.33.07.107.145.21.224.31.084.103.172.2.265.295.1.099.205.19.316.278.12.094.245.18.377.26.145.087.296.163.455.231.178.074.364.133.557.177.221.05.45.078.686.085a3.78 3.78 0 0 0 .736-.047c.284-.047.57-.127.852-.24.325-.13.645-.304.952-.52.355-.25.693-.554 1.003-.91.346-.398.654-.862.91-1.393.283-.585.5-1.252.634-2.002.147-.828.193-1.754.127-2.766-.073-1.108-.28-2.312-.647-3.606-.406-1.429-.999-2.96-1.823-4.595-.912-1.812-2.095-3.748-3.623-5.809-1.688-2.277-3.757-4.702-6.313-7.281z"/>
                                                     </svg>
                                                     Firefox
-                                                </a>
-                                                <a
-                                                    href="/extension/safari"
-                                                    className="flex items-center justify-center gap-2 h-10 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 rounded-lg text-xs font-medium text-zinc-300 hover:text-white transition-colors"
-                                                    target="_blank"
-                                                    rel="noopener noreferrer"
-                                                >
-                                                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                                                        <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm0 1.5c5.799 0 10.5 4.701 10.5 10.5S17.799 22.5 12 22.5 1.5 17.799 1.5 12 6.201 1.5 12 1.5zm0 1.5a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm4.5 4.5l-6 3-3 6 6-3 3-6zm-4.5 3.75a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5z"/>
-                                                    </svg>
-                                                    Safari
                                                 </a>
                                                 <a
                                                     href={EXTENSION_SOURCE_URL}

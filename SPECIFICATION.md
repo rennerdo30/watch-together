@@ -87,10 +87,11 @@ The backend uses yt-dlp with a multi-pass cookie strategy to maximize video acce
 │     ├── HIT: Return cached manifest URLs                        │
 │     └── MISS: Continue to resolution                            │
 │                                                                  │
-│  2. Cookie priority chain:                                       │
-│     ├── a) Requesting user's cookies                            │
-│     ├── b) Adding user's cookies (for shared queue items)       │
-│     └── c) No cookies (fallback)                                │
+│  2. Whose cookies (memory-only, from the extension):            │
+│     ├── a) Requester's, if they cover the site                  │
+│     ├── b) A connected room member's — allowlisted sites,       │
+│     │      single-video pages only (YouTube, Twitch, Kick)      │
+│     └── c) None                                                 │
 │                                                                  │
 │  3. yt-dlp extraction:                                          │
 │     ├── Format: bestvideo*+bestaudio/best                       │
@@ -323,8 +324,10 @@ type ServerMessage =
 | `/api/proxy` | GET | Proxy video segments |
 | `/api/rooms` | GET | List active rooms |
 | `/api/rooms/{id}` | GET | Get room details |
-| `/api/cookies` | POST | Upload user cookies |
-| `/api/cookies` | DELETE | Delete user cookies |
+| `/api/cookies` | GET | Whether the server holds the user's cookies, and until when |
+| `/api/cookies` | DELETE | Drop the user's cookies from memory now |
+| `/api/extension/sync` | POST | Extension delivers cookies (bearer token) |
+| `/api/extension/download/{browser}` | GET | Packaged extension build (chrome, firefox) |
 
 ### WebSocket
 
@@ -337,7 +340,7 @@ type ServerMessage =
 1. **SSRF Protection**: `validate_proxy_url()` blocks access to private/reserved/loopback IPs via `ipaddress` module + DNS resolution
 2. **CORS**: Configurable via `ALLOWED_ORIGINS` env var. Credentials disabled when wildcard origin is used
 3. **Authentication**: Cloudflare Zero Trust header (`cf-access-authenticated-user-email`) in production; `?user=` query param only when `DEVELOPMENT_MODE=true`
-4. **Cookie Storage**: Stored server-side in Netscape format, linked to user identity. Upload limited to 1MB with format validation
+4. **Cookies**: Never persisted. Delivered only by the extension (1MB limit, strict Netscape validation), held in process memory until 30 minutes after the last sync or until the member disconnects the extension, written for yt-dlp to a private RAM-backed scratch file for one extraction. Lent to a room only while the owner is connected, only for single-video pages of YouTube, Twitch and Kick
 5. **Room Access**: All users can join any room (authentication handled by Cloudflare)
 6. **Connection Limits**: `MAX_CONNECTIONS_PER_ROOM` (50) and `MAX_CONNECTIONS_PER_USER` (10) prevent resource exhaustion
 7. **Room ID Sanitization**: IDs restricted to alphanumeric + hyphen/underscore via regex

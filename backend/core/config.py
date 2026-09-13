@@ -5,7 +5,6 @@ import os
 
 # Cache configuration
 CACHE_DIR = "data/cache"
-COOKIES_DIR = "data/cookies"
 # yt-dlp's own cache (player JS, signature timestamps). Kept on the data
 # volume so a container rebuild does not force it to re-fetch everything.
 YTDLP_CACHE_DIR = "data/yt_dlp_cache"
@@ -74,8 +73,40 @@ POT_PROVIDER_EXTRACTOR_ARGS = {
     "youtubepot-bgutilhttp": {"base_url": [POT_PROVIDER_URL]},
 }
 
-# Cookie files hold live session credentials: owner read/write only.
-COOKIE_FILE_MODE = 0o600
+# Cookies are live session credentials and are never persisted: the copy
+# the extension posts lives in process memory and is dropped this long
+# after its last refresh. The extension re-syncs every ten minutes
+# (SYNC_INTERVAL_MINUTES in extension/background.js), so this tolerates two
+# missed syncs and still lets a closed browser's copy die within the hour.
+COOKIE_MEMORY_TTL_SECONDS = 30 * 60
+COOKIE_MAX_BYTES = 1 * 1024 * 1024  # One member's Netscape cookie file
+COOKIE_STORE_MAX_USERS = 200  # Bounds memory: at most this many members' cookies at once
+
+# yt-dlp reads cookies from a file, so one is written for the duration of a
+# single extraction and removed afterwards. It goes into a fresh private
+# directory under this location — /dev/shm is RAM-backed on Linux and in
+# Docker, so nothing reaches a disk; elsewhere the system temp directory.
+_RAM_BACKED_TMP = "/dev/shm"
+COOKIE_SCRATCH_DIR = os.environ.get(
+    "COOKIE_SCRATCH_DIR",
+    _RAM_BACKED_TMP if os.path.isdir(_RAM_BACKED_TMP) and os.access(_RAM_BACKED_TMP, os.W_OK) else None,
+)
+COOKIE_SCRATCH_PREFIX = "wt-cookies-"
+COOKIE_FILE_MODE = 0o600  # The scratch file: owner read/write only
+
+# Sites whose videos may be resolved with a *room member's* cookies when the
+# requester has none: the single-video extractors of YouTube, Twitch and
+# Kick. Channel, playlist, feed and history pages are deliberately absent —
+# extracted with a lender's session they would publish that member's
+# account to the room. A member's own cookies are not limited by this list.
+COOKIE_SHARE_EXTRACTORS = frozenset({
+    "youtube",
+    "twitch:vod", "twitch:clips", "twitch:stream",
+    "kick:vod", "kick:clips", "kick:live",
+})
+# Query parameters that put a watch URL into playlist context. yt-dlp runs
+# with `noplaylist`, so the extraction stays a single video either way.
+YOUTUBE_PLAYLIST_PARAMS = frozenset({"list", "index", "start_radio"})
 
 # Rate limiting for upload endpoints
 RATE_LIMIT_WINDOW_SECONDS = 60.0
@@ -113,9 +144,23 @@ MANIFEST_MIN_BANDWIDTH = 1000  # Floor so a manifest never declares 0 bps
 MANIFEST_MAX_VIDEO_REPRESENTATIONS = 24  # Room for a full ladder per codec family
 MANIFEST_MAX_AUDIO_REPRESENTATIONS = 2
 
-# Per-user cookie jar caching for upstream fetches
-COOKIE_JAR_CACHE_TTL_SECONDS = 60  # Re-read a user's cookie file at most this often
-COOKIE_JAR_CACHE_MAX_USERS = 50  # Parsed jars kept in memory
+# Identity of a WebSocket member the deployment could not authenticate.
+# Guests never own cookies and are never a cookie source for a room.
+GUEST_IDENTITY = "Guest"
+
+# Page hosts whose login lives on a different cookie domain. A member's jar
+# is checked against the page they paste; a youtu.be short link is served
+# by youtube.com's session, so it is looked up there.
+COOKIE_HOST_ALIASES = {
+    "youtu.be": "www.youtube.com",
+}
+
+# Where the browser extension's source is read from when a member downloads
+# a packaged build. The folder lives beside `backend/` in the repository and
+# is mounted read-only into the container by docker-compose.
+EXTENSION_SOURCE_DIR = os.environ.get("EXTENSION_SOURCE_DIR", os.path.join("..", "extension"))
+# A packaged build is served from memory until any source file changes.
+EXTENSION_PACKAGE_CACHE_CONTROL = "private, max-age=300"
 
 # Upstream fetching (media proxy) limits
 UPSTREAM_MAX_REDIRECTS = 3  # Redirect hops followed, each one re-validated
@@ -210,6 +255,6 @@ METRICS_SLOW_UPSTREAM_MS = 5000  # Upstream fetches slower than this are counted
 METRICS_DEFAULT_SAMPLE_LIMIT = 50  # Samples returned by the metrics endpoint
 
 # Ensure directories exist
-for directory in [CACHE_DIR, COOKIES_DIR, "data", YTDLP_CACHE_DIR]:
+for directory in [CACHE_DIR, "data", YTDLP_CACHE_DIR]:
     if not os.path.exists(directory):
         os.makedirs(directory)

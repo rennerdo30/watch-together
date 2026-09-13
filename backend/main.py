@@ -27,13 +27,13 @@ import yt_dlp
 
 # Import modules
 from core.config import (
-    CACHE_DIR, COOKIES_DIR, YTDLP_CACHE_DIR,
+    CACHE_DIR, YTDLP_CACHE_DIR, GUEST_IDENTITY,
     MAX_CACHEABLE_FILE_BYTES, FORMAT_CACHE_TTL_SECONDS,
     METRICS_DEFAULT_SAMPLE_LIMIT, POT_PROVIDER_EXTRACTOR_ARGS,
     MANIFEST_MAX_VIDEO_REPRESENTATIONS, MANIFEST_MAX_AUDIO_REPRESENTATIONS,
 )
 from core.security import (
-    get_user_cookie_path, get_user_from_request, get_user_from_websocket,
+    get_user_from_request, get_user_from_websocket,
     log_auth_configuration,
 )
 from core.access_jwt import is_configured as access_is_configured
@@ -52,14 +52,14 @@ from services.upstream import (
     UnsafeUpstreamError, pin_url, request_kwargs,
     open_upstream_stream, resolve_upstream,
 )
-from services.user_cookies import get_cookie_header
+from services.user_cookies import choose_cookie_source, cookie_file, get_cookie_header
 from services.manifest import build_manifest_for_formats, ManifestError
 from services.metrics import (
     proxy_metrics, OUTCOME_OK, OUTCOME_UPSTREAM_ERROR,
     OUTCOME_CLIENT_ABORTED, OUTCOME_TRUNCATED,
 )
 from services.database import init_database, cache_format, get_cached_format
-from services.resolver import refresh_video_url, _extract_stream_url, _build_resolve_response, ensure_cookie_file
+from services.resolver import refresh_video_url, _extract_stream_url, _build_resolve_response
 from api.routes.cookies import router as cookies_router
 from api.routes.rooms import router as rooms_router
 from api.routes.tokens import router as tokens_router
@@ -329,28 +329,38 @@ def _extract_with_options(url: str, ydl_opts: dict) -> dict:
         return info
 
 
+ROOM_ID_DISALLOWED = re.compile(r'[^a-zA-Z0-9_-]')
+
+
+def sanitize_room_id(room_id: Optional[str]) -> str:
+    """Room ids are alphanumeric plus hyphen and underscore; anything else is dropped."""
+    return ROOM_ID_DISALLOWED.sub('', room_id or '')
+
+
 @app.get("/api/resolve")
 async def resolve_stream(
     request: Request,
     url: str = Query(..., description="The URL of the video/stream to resolve"),
     user_agent: str = Query(None, description="User agent from the client browser"),
     refresh: bool = Query(False, description="Replace a rejected cached stream URL"),
+    room: str = Query(None, description="Room whose signed-in members may lend their cookies"),
 ):
     """
     Uses yt-dlp to resolve the input URL to a playable stream URL.
     """
-    return await resolve_video(request, url, user_agent, refresh=refresh)
+    return await resolve_video(request, url, user_agent, refresh=refresh, room_id=sanitize_room_id(room))
 
 
 _resolve_tasks: dict[tuple, asyncio.Task] = {}
 
 
-async def resolve_video(request: Request, url: str, user_agent: str = None, *, refresh: bool = False) -> dict:
+async def resolve_video(request: Request, url: str, user_agent: str = None, *,
+                        refresh: bool = False, room_id: str = "") -> dict:
     """Share expensive extraction among concurrent requests by the same user."""
-    key = (url, get_user_from_request(request), user_agent, refresh)
+    key = (url, get_user_from_request(request), user_agent, refresh, room_id)
     task = _resolve_tasks.get(key)
     if task is None:
-        task = asyncio.create_task(_resolve_video(request, url, user_agent, refresh=refresh))
+        task = asyncio.create_task(_resolve_video(request, url, user_agent, refresh=refresh, room_id=room_id))
         _resolve_tasks[key] = task
         def finished(done: asyncio.Task) -> None:
             _resolve_tasks.pop(key, None)
@@ -360,13 +370,18 @@ async def resolve_video(request: Request, url: str, user_agent: str = None, *, r
     return await asyncio.shield(task)
 
 
-async def _resolve_video(request: Request, url: str, user_agent: str = None, *, refresh: bool = False) -> dict:
+async def _resolve_video(request: Request, url: str, user_agent: str = None, *,
+                         refresh: bool = False, room_id: str = "") -> dict:
     """Resolve a URL to playable streams and cache the result.
 
     Shared by `/api/resolve` and `/api/dash-manifest`: the manifest cannot
     be built without resolved formats, and requiring the caller to have
     resolved first turns an expired cache entry or a restarted backend into
     a dead end for anything already in a room's queue.
+
+    `room_id` names the room the video is for. Most members never install
+    the extension, so the requester usually has no cookies; a member of that
+    room who is signed in to the video's site lends theirs instead.
     """
     user_email = get_user_from_request(request)
 
@@ -383,11 +398,7 @@ async def _resolve_video(request: Request, url: str, user_agent: str = None, *, 
 
     logger.info(f"Resolving URL: {url} (User: {user_email or 'anonymous'})")
 
-    # The cookie file is restored from the database when missing: after a
-    # restart there is none on disk, and resolving without the member's
-    # cookies here is what made age-restricted videos fail until a refresh.
-    cookie_path = await ensure_cookie_file(user_email) if user_email else None
-    has_cookies = bool(cookie_path)
+    cookie_owner = choose_cookie_source(url, user_email, manager.member_emails(room_id))
 
     os.makedirs(YTDLP_CACHE_DIR, exist_ok=True)
 
@@ -411,54 +422,58 @@ async def _resolve_video(request: Request, url: str, user_agent: str = None, *, 
         'extractor_args': dict(POT_PROVIDER_EXTRACTOR_ARGS),
     }
 
-    if has_cookies:
-        logger.info(f"Using cookies for user: {user_email}")
-        base_opts['cookiefile'] = cookie_path
+    # The cookie file exists only while the attempts below run; see
+    # services/user_cookies for why cookies are never kept on disk.
+    async with cookie_file(cookie_owner) as cookie_path:
+        has_cookies = bool(cookie_path)
+        if has_cookies:
+            logger.info(f"Using cookies of {cookie_owner} for {user_email or 'anonymous'}")
+            base_opts['cookiefile'] = cookie_path
 
-    # The player client is deliberately not pinned. Lists such as
-    # ['mweb', 'web'] or ['tv'] now return storyboard images and no media,
-    # because YouTube expects per-client tokens a fixed list does not carry.
-    # yt-dlp keeps its own client selection current, so the choice is left
-    # to it; the only variation worth trying is where the challenge script
-    # comes from.
-    # First attempt uses the Deno runtime in the image to solve the
-    # JavaScript challenge; the second lets yt-dlp fetch the challenge
-    # script from GitHub in case the local runtime cannot run it.
-    #
-    # The value must be the string 'ejs:github'. Passing {'ejs': 'github'}
-    # makes yt-dlp log "Ignoring unsupported remote component(s): ejs" and
-    # carry on without it.
-    attempts = [
-        ("local challenge runtime", dict(base_opts)),
-        ("remote challenge components", {**base_opts, 'remote_components': 'ejs:github'}),
-    ]
+        # The player client is deliberately not pinned. Lists such as
+        # ['mweb', 'web'] or ['tv'] now return storyboard images and no media,
+        # because YouTube expects per-client tokens a fixed list does not carry.
+        # yt-dlp keeps its own client selection current, so the choice is left
+        # to it; the only variation worth trying is where the challenge script
+        # comes from.
+        # First attempt uses the Deno runtime in the image to solve the
+        # JavaScript challenge; the second lets yt-dlp fetch the challenge
+        # script from GitHub in case the local runtime cannot run it.
+        #
+        # The value must be the string 'ejs:github'. Passing {'ejs': 'github'}
+        # makes yt-dlp log "Ignoring unsupported remote component(s): ejs" and
+        # carry on without it.
+        attempts = [
+            ("local challenge runtime", dict(base_opts)),
+            ("remote challenge components", {**base_opts, 'remote_components': 'ejs:github'}),
+        ]
 
-    last_error = None
-    for label, ydl_opts in attempts:
-        try:
-            info = await asyncio.to_thread(_extract_with_options, url, ydl_opts)
-            stream_info = _extract_stream_url(info)
+        last_error = None
+        for label, ydl_opts in attempts:
+            try:
+                info = await asyncio.to_thread(_extract_with_options, url, ydl_opts)
+                stream_info = _extract_stream_url(info)
 
-            if stream_info and stream_info.get('url'):
-                response = _build_resolve_response(url, info, stream_info)
-                # The stream URLs are bound to the session whose cookies
-                # fetched them; every later fetch of them must carry the
-                # same cookies, whoever asks. See services/stream_owner.
-                response[stream_owner.RESOLVED_BY_KEY] = user_email if has_cookies else None
-                stream_owner.remember(response)
-                # Cache it so /api/dash-manifest can build a manifest for
-                # this video without resolving it again. Without this the
-                # manifest endpoint 404s on a freshly pasted link.
-                try:
-                    await cache_format(url, response)
-                except Exception as exc:
-                    logger.warning(f"Could not cache resolved format: {exc}")
-                return response
+                if stream_info and stream_info.get('url'):
+                    response = _build_resolve_response(url, info, stream_info)
+                    # The stream URLs are bound to the session whose cookies
+                    # fetched them; every later fetch of them must carry the
+                    # same cookies, whoever asks. See services/stream_owner.
+                    response[stream_owner.RESOLVED_BY_KEY] = cookie_owner if has_cookies else None
+                    stream_owner.remember(response)
+                    # Cache it so /api/dash-manifest can build a manifest for
+                    # this video without resolving it again. Without this the
+                    # manifest endpoint 404s on a freshly pasted link.
+                    try:
+                        await cache_format(url, response)
+                    except Exception as exc:
+                        logger.warning(f"Could not cache resolved format: {exc}")
+                    return response
 
-            logger.info(f"{label}: no playable formats")
-        except Exception as e:
-            last_error = str(e)
-            logger.info(f"{label} failed: {last_error[:150]}")
+                logger.info(f"{label}: no playable formats")
+            except Exception as e:
+                last_error = str(e)
+                logger.info(f"{label} failed: {last_error[:150]}")
 
     if last_error and "Sign in to confirm your age" in last_error:
         raise HTTPException(
@@ -536,7 +551,7 @@ def rewrite_hls_manifest(content: str, base_url: str, proxy_base: str) -> str:
 
 
 @app.get("/api/dash-manifest")
-async def dash_manifest(request: Request, url: str):
+async def dash_manifest(request: Request, url: str, room: str = None):
     """Build a DASH manifest for an already-resolved video.
 
     Lets one media element play the adaptive video and audio streams
@@ -558,7 +573,8 @@ async def dash_manifest(request: Request, url: str):
         # reported "the video could not be loaded".
         logger.info(f"Manifest requested for an unresolved video, resolving: {url}")
         cached = await resolve_video(request, url,
-                                     request.headers.get("user-agent"))
+                                     request.headers.get("user-agent"),
+                                     room_id=sanitize_room_id(room))
 
     duration = cached.get("duration")
     if not duration:
@@ -1136,7 +1152,7 @@ async def publish_room_activity(
 async def websocket_endpoint(websocket: WebSocket, room_id: str):
     """WebSocket handler for room synchronization."""
     # H1: Sanitize room ID to prevent injection attacks
-    room_id = re.sub(r'[^a-zA-Z0-9_-]', '', room_id)
+    room_id = sanitize_room_id(room_id)
     if not room_id:
         await websocket.close(code=4000, reason="Invalid room ID")
         return
@@ -1146,7 +1162,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
         if REQUIRE_AUTHENTICATION:
             await websocket.close(code=4003, reason="Authentication required")
             return
-        user_email = "Guest"
+        user_email = GUEST_IDENTITY
 
     # Connection limits are checked atomically inside connect() under _state_lock
     connected = await manager.connect(
@@ -1317,7 +1333,8 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             elif msg_type == "queue_play":
                 next_v, queue, playing_index = await manager.play_from_queue(room_id, payload.get("index"))
                 if next_v:
-                    next_v = await refresh_video_url(next_v, user_email=user_email)
+                    next_v = await refresh_video_url(next_v, user_email=user_email,
+                                                     members=manager.member_emails(room_id))
                     await manager.broadcast({"type": "set_video", "payload": {"video_data": next_v}}, room_id)
                 await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": playing_index}}, room_id)
                 if next_v:
@@ -1344,7 +1361,8 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                             ended_video,
                         )
                     if next_v:
-                        next_v = await refresh_video_url(next_v, user_email=user_email)
+                        next_v = await refresh_video_url(next_v, user_email=user_email,
+                                                         members=manager.member_emails(room_id))
                     if manager.room_states.get(room_id, {}).get("video_data") is next_v:
                         await manager.broadcast({"type": "set_video", "payload": {"video_data": next_v}}, room_id)
                         sponsor_skipper.video_changed(room_id)

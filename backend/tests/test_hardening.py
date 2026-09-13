@@ -1,6 +1,6 @@
 """
-Tests for the remaining hardening measures: shared rate limiting,
-cookie file permissions, and the single-worker guard.
+Tests for the remaining hardening measures: shared rate limiting, the
+lifetime of the cookie file yt-dlp reads, and the single-worker guard.
 """
 import os
 import stat
@@ -14,8 +14,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from core import rate_limit
-from core.config import RATE_LIMIT_MAX_REQUESTS, COOKIE_FILE_MODE
-from core.security import get_user_cookie_path
+from core.config import RATE_LIMIT_MAX_REQUESTS
 
 
 VALID_COOKIE_FILE = "# Netscape HTTP Cookie File\n" + "\t".join([
@@ -69,19 +68,35 @@ class TestSharedRateLimiter:
             rate_limit.check_rate_limit("", scope="test")
 
 
-class TestCookieFilePermissions:
-    def test_uploaded_cookies_are_owner_only(self, client):
-        email = "perm@example.com"
-        response = client.post(f"/api/cookies?user={email}",
-                               json={"content": VALID_COOKIE_FILE})
-        assert response.status_code == 200
+class TestCookieFileLifetime:
+    """yt-dlp needs a file; it exists for one extraction and for nobody else."""
 
-        path = get_user_cookie_path(email)
-        assert os.path.exists(path)
-        mode = stat.S_IMODE(os.stat(path).st_mode)
-        assert mode == COOKIE_FILE_MODE
-        # Explicitly: nothing for group or other.
-        assert not mode & (stat.S_IRWXG | stat.S_IRWXO)
+    def test_the_resolver_sees_a_private_file_that_is_gone_afterwards(self, client, monkeypatch):
+        import main as main_module
+        from services import user_cookies
+        from tests.test_resolve_pipeline import FAKE_INFO
+
+        email = "perm@example.com"
+        user_cookies.store(email, VALID_COOKIE_FILE)
+        seen = {}
+
+        def fake_extract(url, opts):
+            path = opts["cookiefile"]
+            seen["path"] = path
+            seen["mode"] = stat.S_IMODE(os.stat(path).st_mode)
+            with open(path, encoding="utf-8") as handle:
+                seen["content"] = handle.read()
+            return FAKE_INFO
+
+        monkeypatch.setattr(main_module, "_extract_with_options", fake_extract)
+        assert client.get("/api/resolve", params={"url": "https://youtu.be/perm", "user": email}).status_code == 200
+
+        assert "secret" in seen["content"]
+        if os.name != "nt":
+            # Explicitly: nothing for group or other.
+            assert not seen["mode"] & (stat.S_IRWXG | stat.S_IRWXO)
+        assert not os.path.exists(seen["path"]), "the cookie file outlived the extraction"
+        assert not os.path.exists(os.path.dirname(seen["path"]))
 
 
 class TestSingleWorkerGuard:

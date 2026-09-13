@@ -3,13 +3,12 @@ SQLite database service for Watch Together.
 
 Handles persistent storage for:
 - Room state (video, queue, roles, permanent flag)
-- User cookies
 
 Includes automatic migration from legacy JSON/file storage.
 """
 import os
 import json
-import glob
+import shutil
 import sqlite3
 import logging
 import aiosqlite
@@ -22,7 +21,10 @@ logger = logging.getLogger(__name__)
 DB_DIR = "data"
 DB_FILE = os.path.join(DB_DIR, "watchtogether.db")
 LEGACY_ROOMS_FILE = os.path.join(DB_DIR, "rooms.json")
-LEGACY_COOKIES_DIR = os.path.join(DB_DIR, "cookies")
+# Earlier versions kept every member's cookies on disk and in the database.
+# Cookies are memory-only now, so whatever a previous version left behind is
+# removed at startup rather than carried along.
+PERSISTED_COOKIE_DIRS = (os.path.join(DB_DIR, "cookies"), os.path.join(DB_DIR, "cookies.bak"))
 
 # Ensure data directory exists
 if not os.path.exists(DB_DIR):
@@ -82,14 +84,10 @@ def init_database():
             updated_at REAL
         )
         """,
-        # Version 2: User cookies
+        # Version 2 once created user_cookies. Cookies are never persisted
+        # any more; version 9 drops the table wherever it exists.
         """
-        CREATE TABLE IF NOT EXISTS user_cookies (
-            user_email TEXT PRIMARY KEY,
-            content TEXT NOT NULL,
-            created_at REAL,
-            updated_at REAL
-        )
+        -- no-op
         """,
         # Version 3: Format cache
         """
@@ -133,6 +131,12 @@ def init_database():
             updated_at REAL
         )
         """,
+        # Version 9: Stored cookies are gone for good. They are live session
+        # credentials and now exist only in memory while the extension keeps
+        # refreshing them.
+        """
+        DROP TABLE IF EXISTS user_cookies
+        """,
     ]
     
     import time
@@ -160,7 +164,15 @@ def init_database():
 def _migrate_legacy_data():
     """Migrate data from legacy JSON/file storage to SQLite."""
     _migrate_legacy_rooms()
-    _migrate_legacy_cookies()
+    _purge_persisted_cookies()
+
+
+def _purge_persisted_cookies():
+    """Remove cookie files an earlier version wrote under the data directory."""
+    for directory in PERSISTED_COOKIE_DIRS:
+        if os.path.isdir(directory):
+            shutil.rmtree(directory, ignore_errors=True)
+            logger.warning(f"Removed persisted cookies at {directory}; cookies are held in memory only")
 
 
 def _migrate_legacy_rooms():
@@ -218,58 +230,6 @@ def _migrate_legacy_rooms():
     
     except Exception as e:
         logger.error(f"Error migrating legacy rooms: {e}")
-
-
-def _migrate_legacy_cookies():
-    """Migrate cookies from legacy filesystem to SQLite."""
-    if not os.path.exists(LEGACY_COOKIES_DIR):
-        return
-    
-    cookie_files = glob.glob(os.path.join(LEGACY_COOKIES_DIR, "*.txt"))
-    if not cookie_files:
-        return
-    
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        import time
-        now = time.time()
-        migrated = 0
-        
-        for cookie_file in cookie_files:
-            # Extract email from filename (filename is sanitized email + .txt)
-            filename = os.path.basename(cookie_file)
-            user_email = filename[:-4]  # Remove .txt
-            
-            # Check if already migrated
-            cursor.execute("SELECT user_email FROM user_cookies WHERE user_email = ?", (user_email,))
-            if cursor.fetchone():
-                continue
-            
-            with open(cookie_file, 'r') as f:
-                content = f.read()
-            
-            if content.strip():
-                cursor.execute("""
-                    INSERT INTO user_cookies (user_email, content, created_at, updated_at)
-                    VALUES (?, ?, ?, ?)
-                """, (user_email, content, now, now))
-                migrated += 1
-        
-        conn.commit()
-        conn.close()
-        
-        if migrated > 0:
-            logger.info(f"Migrated {migrated} cookie files from legacy filesystem")
-            # Backup the directory
-            backup_dir = LEGACY_COOKIES_DIR + ".bak"
-            if not os.path.exists(backup_dir):
-                os.rename(LEGACY_COOKIES_DIR, backup_dir)
-                logger.info(f"Legacy cookies directory backed up to {backup_dir}")
-    
-    except Exception as e:
-        logger.error(f"Error migrating legacy cookies: {e}")
 
 
 # ============================================================================
@@ -394,52 +354,6 @@ async def get_all_rooms() -> Dict[str, Dict[str, Any]]:
                 "activity_log": settings.get("activity_log", []),
             }
         return rooms
-
-
-# ============================================================================
-# Cookie Operations
-# ============================================================================
-
-async def get_user_cookies(user_email: str) -> Optional[str]:
-    """Get user cookies from database."""
-    async with get_async_db() as db:
-        cursor = await db.execute(
-            "SELECT content FROM user_cookies WHERE user_email = ?", (user_email,)
-        )
-        row = await cursor.fetchone()
-        return row["content"] if row else None
-
-
-async def save_user_cookies(user_email: str, content: str) -> None:
-    """Save user cookies to database."""
-    import time
-    now = time.time()
-    
-    async with get_async_db() as db:
-        await db.execute("""
-            INSERT INTO user_cookies (user_email, content, created_at, updated_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(user_email) DO UPDATE SET
-                content = excluded.content,
-                updated_at = excluded.updated_at
-        """, (user_email, content, now, now))
-        await db.commit()
-
-
-async def delete_user_cookies(user_email: str) -> None:
-    """Delete user cookies from database."""
-    async with get_async_db() as db:
-        await db.execute("DELETE FROM user_cookies WHERE user_email = ?", (user_email,))
-        await db.commit()
-
-
-async def user_has_cookies(user_email: str) -> bool:
-    """Check if user has cookies stored."""
-    async with get_async_db() as db:
-        cursor = await db.execute(
-            "SELECT 1 FROM user_cookies WHERE user_email = ?", (user_email,)
-        )
-        return await cursor.fetchone() is not None
 
 
 # ============================================================================

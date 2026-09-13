@@ -5,6 +5,7 @@
 const DEFAULT_DOMAINS = [
     '.youtube.com',
     '.twitch.tv',
+    '.kick.com',
     '.vimeo.com',
     '.dailymotion.com',
     '.crunchyroll.com'

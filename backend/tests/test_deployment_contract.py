@@ -360,7 +360,7 @@ class TestVisualLanguage:
 
 
 class TestExtensionNightlyRelease:
-    """Every main commit produces one rolling, installable Chrome package."""
+    """Every main commit produces one rolling, installable extension package."""
 
     WORKFLOW = REPO_ROOT / ".github" / "workflows" / "extension-nightly.yml"
 
@@ -377,11 +377,10 @@ class TestExtensionNightlyRelease:
         assert "git tag -f nightly" in text
 
     def test_chrome_package_is_manifest_v3_and_excludes_repo_files(self):
+        """The archive contents are the packager's business (test_extension_download)."""
         text = self.WORKFLOW.read_text()
         assert 'manifest["manifest_version"] == 3' in text
-        assert 'root / "manifest.json"' in text
-        assert 'root / "background.js"' in text
-        assert 'root / "manifest.v2.json"' not in text
+        assert "--browser chrome" in text
         assert "CLAUDE.md" not in text
 
     def test_release_has_a_zip_and_checksum(self):
@@ -516,7 +515,7 @@ class TestLiveStreamExpiryIsRecoverable:
         assert "const handleSourceExpired" in text
         handler = text.split("const handleSourceExpired", 1)[1]
         handler = handler.split("const getFinalVideoUrl", 1)[0]
-        assert "resolveUrl(original, { refresh: true })" in handler, (
+        assert "resolveUrl(original, { refresh: true, room: roomId })" in handler, (
             "the expiry handler must re-resolve the original URL — nothing "
             "else can mint a fresh signed stream URL"
         )
@@ -619,3 +618,161 @@ class TestLiveChatFrames:
         assert directives['frame-src'] == ['https:']
         assert 'https:' not in directives['script-src']
         assert directives['frame-ancestors'] == ["'self'"]
+
+
+class TestExtensionIsDownloadableFromTheInstance:
+    """Settings linked to `/extension/<browser>`, which nothing served."""
+
+    FRONTEND = REPO_ROOT / "frontend"
+
+    def test_no_dead_extension_links_remain(self):
+        for path in (self.FRONTEND / "app").rglob("*.tsx"):
+            text = path.read_text(encoding="utf-8")
+            assert 'href="/extension/' not in text, f"{path} still links to an unserved address"
+
+    def test_settings_link_to_the_download_endpoint(self):
+        constants = (self.FRONTEND / "lib" / "constants.ts").read_text(encoding="utf-8")
+        assert "EXTENSION_DOWNLOAD_PATH = '/api/extension/download'" in constants
+        api = (self.FRONTEND / "lib" / "api.ts").read_text(encoding="utf-8")
+        assert "${EXTENSION_DOWNLOAD_PATH}/${browser}" in api
+        room = (self.FRONTEND / "app" / "room" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+        assert "extensionDownloadUrl('chrome')" in room
+        assert "extensionDownloadUrl('firefox')" in room
+        # There is no Safari build to offer.
+        assert "extensionDownloadUrl('safari')" not in room
+
+    @pytest.mark.parametrize("compose", ["docker-compose.yml", "deploy/docker-compose.yml"])
+    def test_compose_mounts_the_source_and_points_the_backend_at_it(self, compose):
+        text = (REPO_ROOT / compose).read_text(encoding="utf-8")
+        assert "extension:/app/extension:ro" in text, f"{compose} does not mount the extension source"
+        assert "EXTENSION_SOURCE_DIR" in text and "/app/extension" in text
+
+    def test_the_deploy_bundle_includes_the_extension(self):
+        sync = (REPO_ROOT / "deploy" / "sync.sh").read_text(encoding="utf-8")
+        assert "run_rsync deploy backend frontend nginx extension" in sync
+
+    def test_the_nightly_release_uses_the_same_packager(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "extension-nightly.yml").read_text(encoding="utf-8")
+        assert "backend/services/extension_package.py" in workflow
+        assert "zipfile" not in workflow, "a second, inline packager can drift from the download"
+        assert "--browser firefox" in workflow
+
+
+class TestCookiesLiveOnlyWhileTheExtensionRefreshesThem:
+    """Cookies are memory-only; the server's copy must die soon after the browser does."""
+
+    BACKGROUND = EXTENSION / "background.js"
+
+    def test_the_memory_ttl_covers_missed_syncs_but_not_a_closed_browser(self):
+        import re
+        from core.config import COOKIE_MEMORY_TTL_SECONDS
+
+        match = re.search(r"const SYNC_INTERVAL_MINUTES = (\d+);", self.BACKGROUND.read_text(encoding="utf-8"))
+        assert match, "the extension no longer declares its sync interval"
+        interval = int(match.group(1)) * 60
+        assert COOKIE_MEMORY_TTL_SECONDS >= 2 * interval, "one delayed alarm would evict everyone's cookies"
+        assert COOKIE_MEMORY_TTL_SECONDS <= 6 * interval, "a closed browser's cookies would linger for hours"
+
+    def test_the_extension_syncs_when_the_member_opens_the_instance(self):
+        """Cookies must be on the server by the time the member is in a room."""
+        background = self.BACKGROUND.read_text(encoding="utf-8")
+        assert "syncCookiesForInstanceTab" in background
+        assert "chrome.tabs.onUpdated.addListener(syncCookiesForInstanceTab)" in background
+
+    def test_the_extension_syncs_at_browser_start(self):
+        background = self.BACKGROUND.read_text(encoding="utf-8")
+        startup = background.split("chrome.runtime.onStartup.addListener(", 1)[1].split("});", 1)[0]
+        assert "syncCookies(" in startup
+
+    def test_kick_is_a_default_domain_and_host_permission(self):
+        background = self.BACKGROUND.read_text(encoding="utf-8")
+        defaults = background.split("const DEFAULT_DOMAINS = [", 1)[1].split("];", 1)[0]
+        assert "'.kick.com'" in defaults
+        manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
+        assert "https://*.kick.com/*" in manifest["host_permissions"]
+
+    def test_the_settings_dialog_states_the_real_lifetime(self):
+        import re
+        from core.config import COOKIE_MEMORY_TTL_SECONDS
+
+        constants = (REPO_ROOT / "frontend" / "lib" / "constants.ts").read_text(encoding="utf-8")
+        match = re.search(r"COOKIE_MEMORY_TTL_MINUTES = (\d+);", constants)
+        assert match, "the frontend no longer declares the cookie lifetime it shows"
+        assert int(match.group(1)) * 60 == COOKIE_MEMORY_TTL_SECONDS
+
+    def test_no_compose_file_promises_cookie_files(self):
+        for path in (REPO_ROOT / "docker-compose.yml", REPO_ROOT / "deploy" / "docker-compose.yml"):
+            assert "cookie files" not in path.read_text(encoding="utf-8")
+
+
+class TestExtensionSurvivesWorkerSleep:
+    """Syncs stopped until a browser restart; three causes, three guards.
+
+    A request without a deadline could hold a sync open for as long as the
+    worker lived; a boolean guard made every later alarm skip; and when
+    Chrome skipped alarms (a sleeping laptop, an idle browser) nothing
+    caught up. Since the server now drops cookies it has not seen refreshed,
+    a silent stop leaves the member in a room with nothing to offer.
+    """
+
+    BACKGROUND = EXTENSION / "background.js"
+    HARNESS = REPO_ROOT / "frontend" / "e2e" / "extension-harness.ts"
+
+    def test_every_request_to_the_instance_has_a_deadline(self):
+        background = self.BACKGROUND.read_text(encoding="utf-8")
+        assert "AbortSignal.timeout(" in background
+        assert "await fetch(" not in background, "a request without a deadline can hold the sync open forever"
+        assert background.count("return fetch(") == 1, "only instanceFetch may call fetch"
+
+    def test_a_stuck_sync_is_superseded(self):
+        background = self.BACKGROUND.read_text(encoding="utf-8")
+        assert "syncInProgress" not in background, "a boolean guard sticks at true"
+        assert "SYNC_STUCK_AFTER_MS" in background
+        assert "startedAt - syncStartedAt < SYNC_STUCK_AFTER_MS" in background
+
+    def test_missed_alarms_are_caught_up_when_the_user_returns(self):
+        background = self.BACKGROUND.read_text(encoding="utf-8")
+        assert "chrome.windows.onFocusChanged.addListener" in background
+        assert "chrome.idle.onStateChanged.addListener" in background
+        assert "syncIfStale(" in background
+        for name in ("manifest.json", "manifest.v2.json"):
+            manifest = json.loads((EXTENSION / name).read_text(encoding="utf-8"))
+            assert "idle" in manifest["permissions"], f"{name} lacks the idle permission"
+
+    def test_the_e2e_harness_models_the_apis_the_worker_registers_on(self):
+        """A listener on an API the harness lacks throws at load and fails every extension test."""
+        harness = self.HARNESS.read_text(encoding="utf-8")
+        assert "windows: { WINDOW_ID_NONE: -1, onFocusChanged }" in harness
+        assert "idle: { onStateChanged: onIdleStateChanged }" in harness
+
+
+class TestContainersResolveOverHttps:
+    """Every container's external DNS goes to Cloudflare over HTTPS."""
+
+    @pytest.fixture(params=["docker-compose.yml", "deploy/docker-compose.yml"])
+    def compose(self, request):
+        return (REPO_ROOT / request.param).read_text(encoding="utf-8")
+
+    def test_a_doh_resolver_service_exists(self, compose):
+        assert "\n  dns:\n" in compose
+        assert "proxy-dns --address 0.0.0.0 --port 53" in compose
+        assert "--upstream https://1.1.1.1/dns-query" in compose
+        assert "--upstream https://1.0.0.1/dns-query" in compose
+        # cloudflared is unprivileged; port 53 needs this inside the namespace.
+        assert "net.ipv4.ip_unprivileged_port_start=0" in compose
+
+    def test_the_resolver_has_a_fixed_address_inside_the_subnet(self, compose):
+        assert "ipv4_address: ${WT_DNS_IP:-172.28.0.53}" in compose
+        assert "subnet: ${WT_SUBNET:-172.28.0.0/24}" in compose
+
+    def test_every_other_service_uses_it(self, compose):
+        import re
+        services_block = compose.split("\nservices:\n", 1)[1]
+        for top_level in ("\nnetworks:\n", "\nvolumes:\n"):
+            services_block = services_block.split(top_level, 1)[0]
+        names = re.findall(r"^  ([A-Za-z0-9_-]+):\n", services_block, re.M)
+        assert "dns" in names
+        others = [n for n in names if n != "dns"]
+        assert len(others) >= 4
+        assert services_block.count("dns: *doh_resolver") == len(others)
+        assert services_block.count("      - dns\n") == len(others)

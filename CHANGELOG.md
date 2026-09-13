@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Cookies are never stored
+
+- Cookies now reach the server only through the browser extension and live in
+  process memory until 30 minutes after the last sync, until the member
+  disconnects the extension, or until the process ends. The database table and
+  the per-user files are gone; a backend that held them removes them at
+  startup. yt-dlp reads a RAM-backed scratch file that exists for one
+  extraction. The web form for pasting cookies is removed, and no endpoint
+  returns a cookie value.
+- A member without the extension can still add videos: while a member who is
+  signed in to YouTube, Twitch or Kick is in the room, that member's session
+  resolves the link. Only single-video pages qualify — feeds, playlists,
+  channels and history never — and only for members connected to the room.
+- The room suggests installing the extension once to members without cookies,
+  and Settings downloads a build packaged by the instance for Chrome/Edge and
+  Firefox (the old links pointed nowhere). The nightly release uses the same
+  packager and now includes a Firefox build.
+- The extension syncs Kick cookies, gives every request a deadline,
+  supersedes a sync that never finished, and catches up when the browser
+  starts, when the instance is opened and when the user returns after a while.
+- Every container resolves DNS over HTTPS through a `cloudflared proxy-dns`
+  sidecar (`WT_SUBNET`, `WT_DNS_IP`).
+
 ### Performance and playback reliability
 
 - Reuse cached MP4 byte spans across different player range requests. Warm
