@@ -233,7 +233,8 @@ class TestQueuedVideosAreNotPlayedFromStaleUrls:
         text = self.ROOM_PAGE.read_text()
         set_video = text.split("case 'set_video':")[1].split("case '")[0]
         assert "resolveUrl(" not in set_video
-        assert "setVideoData(payload.video_data ?? null)" in set_video
+        assert "const nextVideo = payload.video_data;" in set_video
+        assert "setVideoData(nextVideo ?? null)" in set_video
         server = (REPO_ROOT / "backend" / "main.py").read_text()
         for message in ('queue_play', 'video_ended'):
             handler = server.split(f'elif msg_type == "{message}":')[1].split('elif msg_type ==')[0]
@@ -246,6 +247,30 @@ class TestQueuedVideosAreNotPlayedFromStaleUrls:
         assert "|| isRestoringVideo" in text, (
             "the re-resolve state must feed the resolving indicator"
         )
+
+
+class TestWatchProgressIsShownAndResumed:
+    """The queue shows how far each video was watched, and replay resumes there.
+
+    The lifecycle lives in test_watch_progress.py; these assertions keep the
+    client wired to the server-owned `progress` field.
+    """
+
+    ROOM_PAGE = REPO_ROOT / "frontend" / "app" / "room" / "[id]" / "page.tsx"
+    QUEUE_ITEM = REPO_ROOT / "frontend" / "components" / "sortable-queue-item.tsx"
+
+    def test_the_active_row_tracks_the_player_and_the_rest_the_server(self):
+        text = self.ROOM_PAGE.read_text()
+        assert "progress={playingIndex === index ? actualPlayerTime : (item.progress ?? 0)}" in text
+
+    def test_replaying_a_video_seeks_to_the_saved_progress(self):
+        text = self.ROOM_PAGE.read_text()
+        set_video = text.split("case 'set_video':")[1].split("case '")[0]
+        assert "nextVideo.progress" in set_video
+        assert "timestamp: resumeAt" in set_video
+
+    def test_the_row_renders_a_progress_bar(self):
+        assert 'role="progressbar"' in self.QUEUE_ITEM.read_text()
 
 
 class TestPlayerIsNotRemountedOnReResolve:

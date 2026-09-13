@@ -509,15 +509,24 @@ export default function RoomPage() {
                 break;
             case 'user_joined': if (payload.members) setMembers(payload.members); break;
             case 'user_left': if (payload.members) setMembers(payload.members); break;
-            case 'set_video':
+            case 'set_video': {
                 // The server refreshes queued entries before announcing them.
-                // Mount once, immediately; another resolve here delays every viewer.
-                setSyncState(prev => ({ ...prev, timestamp: 0, isPlaying: !!payload.video_data }));
-                setSponsorSegments({ videoUrl: payload.video_data?.original_url ?? null, segments: [] });
-                setVideoData(payload.video_data ?? null);
+                // Mount once, immediately; another resolve here delays every
+                // viewer. A replayed entry resumes where the room left it —
+                // the server carries that on the video as `progress` — while a
+                // live stream has no position to return to.
+                const nextVideo = payload.video_data;
+                const resumeAt = nextVideo && !nextVideo.is_live && typeof nextVideo.progress === 'number'
+                    ? nextVideo.progress
+                    : 0;
+                setSyncState(prev => ({ ...prev, timestamp: resumeAt, isPlaying: !!nextVideo }));
+                setActualPlayerTime(resumeAt);
+                setSponsorSegments({ videoUrl: nextVideo?.original_url ?? null, segments: [] });
+                setVideoData(nextVideo ?? null);
                 setIsRestoringVideo(false);
                 setLoadingQueueIndex(null);
                 break;
+            }
             case 'play':
                 if (playerRef.current) {
                     const serverTimestamp = typeof payload.timestamp === 'number' ? payload.timestamp : 0;
@@ -1265,6 +1274,9 @@ export default function RoomPage() {
                                                     index={index}
                                                     isActive={playingIndex === index}
                                                     isLoading={loadingQueueIndex === index}
+                                                    // The active row tracks the player live; the
+                                                    // rest show the server's last save.
+                                                    progress={playingIndex === index ? actualPlayerTime : (item.progress ?? 0)}
                                                     fontSize={fontSize}
                                                     onPlay={(i) => {
                                                         if (loadingQueueIndex !== i) {

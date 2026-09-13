@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import time
 import asyncio
@@ -161,6 +162,9 @@ class ConnectionManager:
             
         try:
             state = self.room_states[room_id]
+            # Snapshot the current position onto the playing entry before the
+            # copy, so a pause/seek/admin save also preserves where to resume.
+            self._record_current_progress(state)
             # Calculate current timestamp based on elapsed time if playing
             saved_timestamp = state.get("timestamp", 0)
             if state.get("is_playing") and state.get("video_data") and not state.get("startup_pending"):
@@ -202,6 +206,56 @@ class ConnectionManager:
         state.pop("last_sync_time", None)
         state.pop("sponsor_video", None)
         return state
+
+    # Where a saved position is worth returning to. Under the minimum there
+    # is nothing to resume; within the guard of the end the video is watched
+    # out, so replaying it should start over rather than land on the credits.
+    RESUME_MIN_SECONDS = 5.0
+    RESUME_END_GUARD_SECONDS = 15.0
+
+    @staticmethod
+    def _current_position(state: dict) -> float:
+        """Where the room is in the current video, in seconds, right now.
+
+        Mirrors the elapsed-time projection in get_sync_payload and
+        _save_room_state: a playing, non-live video has advanced by the wall
+        clock since the last sync anchor.
+        """
+        position = state.get("timestamp", 0) or 0
+        video = state.get("video_data") or {}
+        if (state.get("is_playing") and video and not state.get("startup_pending")
+                and not video.get("is_live")):
+            position += time.time() - state.get("last_sync_time", time.time())
+        if not isinstance(position, (int, float)):
+            return 0.0
+        return max(0.0, float(position))
+
+    @staticmethod
+    def _resume_position(video: dict) -> float:
+        """The position to start `video` at, or 0 to start it from the top."""
+        if not video or video.get("is_live"):
+            return 0.0
+        progress = video.get("progress")
+        if not isinstance(progress, (int, float)) or not math.isfinite(progress):
+            return 0.0
+        if progress < ConnectionManager.RESUME_MIN_SECONDS:
+            return 0.0
+        duration = video.get("duration")
+        if (isinstance(duration, (int, float)) and duration > 0
+                and progress > duration - ConnectionManager.RESUME_END_GUARD_SECONDS):
+            return 0.0
+        return float(progress)
+
+    def _record_current_progress(self, state: dict) -> None:
+        """Snapshot the playing video's position onto its own queue entry.
+
+        The queue entry and `video_data` are the same dict, so this updates
+        what the next `queue_update` shows and what a replay resumes from.
+        """
+        video = state.get("video_data")
+        if not video or video.get("is_live"):
+            return
+        video["progress"] = round(self._current_position(state), 1)
 
     async def connect(self, websocket: WebSocket, room_id: str, user_email: str,
                       max_per_room: int = 50, max_per_user: int = 10) -> bool:
@@ -535,13 +589,15 @@ class ConnectionManager:
         """Play a video now: it moves to the front of the queue and starts."""
         if room_id in self.room_states:
             state = self.room_states[room_id]
+            # Before the room moves on, keep where the outgoing video was.
+            self._record_current_progress(state)
             existing = self._take_existing(state["queue"], video_data)
             if existing is not None:
                 video_data = {**existing, **video_data, "pinned": existing.get("pinned", False)}
             state["queue"].insert(0, video_data)
             state["playing_index"] = 0
             state["video_data"] = video_data
-            state["timestamp"] = 0
+            state["timestamp"] = self._resume_position(video_data)
             state["is_playing"] = True
             state["startup_pending"] = True
             state["last_sync_time"] = time.time()
@@ -617,12 +673,18 @@ class ConnectionManager:
                             f"playing {current.get('original_url')!r}")
                 return current or None, queue, playing_index, False
 
+            # Where the outgoing video was when the room left it. A finished
+            # video starts over if it is kept (pinned) and replayed; a video
+            # the room skipped keeps its position for a later resume.
+            self._record_current_progress(state)
             self._resync_playing_index(state)
             playing_index = state["playing_index"]
 
             # Check if the finished video is pinned
             was_pinned = False
             if playing_index >= 0 and playing_index < len(queue):
+                if ended_url is not None:
+                    queue[playing_index]["progress"] = 0
                 was_pinned = queue[playing_index].get("pinned", False)
                 if not was_pinned:
                     # Remove the finished video from queue only if not pinned
@@ -643,7 +705,7 @@ class ConnectionManager:
             if queue and next_index >= 0:
                 next_v = queue[next_index]
                 state["video_data"] = next_v
-                state["timestamp"] = 0
+                state["timestamp"] = self._resume_position(next_v)
                 state["last_sync_time"] = time.time()
                 state["is_playing"] = True
                 state["startup_pending"] = True
@@ -678,9 +740,12 @@ class ConnectionManager:
             queue = state["queue"]
 
             if 0 <= index < len(queue):
+                # Switching to another entry: store where the current one was
+                # before the room's position is repointed.
+                self._record_current_progress(state)
                 target_v = queue[index]
                 state["video_data"] = target_v
-                state["timestamp"] = 0
+                state["timestamp"] = self._resume_position(target_v)
                 state["last_sync_time"] = time.time()
                 state["is_playing"] = True
                 state["startup_pending"] = True

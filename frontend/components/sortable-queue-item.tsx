@@ -14,10 +14,20 @@ interface ResolveResponse {
     extractor_key?: string;
     pinned?: boolean;
     added_by?: string;
+    progress?: number;
 }
 
 const LIVE_BADGE_CLASSES =
     'absolute top-1 left-1 px-1.5 py-0.5 bg-[color:var(--accent-primary)] text-[10px] font-semibold on-accent-light rounded';
+
+function formatTime(seconds: number): string {
+    if (!seconds || !isFinite(seconds)) return '0:00';
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    if (hrs > 0) return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
 
 interface SortableQueueItemProps {
     id: string;
@@ -25,6 +35,8 @@ interface SortableQueueItemProps {
     index: number;
     isActive: boolean;
     isLoading?: boolean;
+    /** Seconds watched so far; for the active row this is the live player time. */
+    progress?: number;
     onRemove: (index: number) => void;
     onPlay: (index: number) => void;
     onPin?: (index: number) => void;
@@ -37,6 +49,7 @@ export function SortableQueueItem({
     index,
     isActive,
     isLoading,
+    progress,
     onRemove,
     onPlay,
     onPin,
@@ -56,6 +69,14 @@ export function SortableQueueItem({
         transition,
         opacity: isDragging ? 0.4 : 1,
     };
+
+    // Watch progress is only meaningful for a video with a known length; a
+    // livestream has no position to return to.
+    const duration = !item.is_live && typeof item.duration === 'number' ? item.duration : 0;
+    const watched = duration > 0
+        ? Math.min(Math.max(0, progress ?? item.progress ?? 0), duration)
+        : 0;
+    const watchedPercent = duration > 0 ? (watched / duration) * 100 : 0;
 
     return (
         <div
@@ -136,6 +157,31 @@ export function SortableQueueItem({
                         <span title={`Added by ${item.added_by}`}> · {displayName(item.added_by)}</span>
                     )}
                 </p>
+                {duration > 0 && (
+                    <div className="mt-1 flex items-center gap-1.5">
+                        <div
+                            className="h-0.5 flex-1 rounded-full bg-white/10 overflow-hidden"
+                            role="progressbar"
+                            aria-label={`Watch progress for ${item.title}`}
+                            aria-valuemin={0}
+                            aria-valuemax={Math.round(duration)}
+                            aria-valuenow={Math.round(watched)}
+                            title={watched > 0
+                                ? `Resumes at ${formatTime(watched)} of ${formatTime(duration)}`
+                                : formatTime(duration)}
+                        >
+                            <div
+                                className="h-full rounded-full bg-[color:var(--accent-primary)] transition-[width] duration-500"
+                                style={{ width: `${watchedPercent}%` }}
+                            />
+                        </div>
+                        {watched > 0 && (
+                            <span className="text-[8px] font-mono text-neutral-500 shrink-0">
+                                {formatTime(watched)}
+                            </span>
+                        )}
+                    </div>
+                )}
             </div>
 
             {/* Actions */}
