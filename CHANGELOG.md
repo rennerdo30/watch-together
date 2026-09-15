@@ -125,6 +125,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The Seek Bar Was Nearly Impossible To Hit**: its hover and click area
+  was the 4px track itself. The zone is now four times taller; the track
+  stays thin and thickens under the pointer, and the hover preview sits
+  above the taller zone.
+
 - **New Resolve Fields Were Invisible For Cached Videos**: a resolved video
   is cached for up to two hours, so a deploy that adds a field the client
   renders (chapters, most recently) changed nothing for any video already in

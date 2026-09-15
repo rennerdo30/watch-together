@@ -68,3 +68,12 @@ test('the controls do not fade while the pointer rests on them', async ({ page }
   await page.waitForTimeout(HIDE_DELAY_MS + 800);
   await expect(bar).toHaveCSS('pointer-events', 'auto');
 });
+
+test('the seek bar is reachable: its hit area is far taller than the track it draws', async ({ page }) => {
+  await playingFixture(page);
+  await page.mouse.move(300, 120);
+  const box = await page.getByLabel('Seek').boundingBox();
+  if (!box) throw new Error('no seek bar');
+  // The track itself is 4px; a 4px hover target felt like "two pixels".
+  expect(box.height).toBeGreaterThanOrEqual(14);
+});
