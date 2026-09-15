@@ -125,6 +125,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Seeks Buffered For Seconds Because Auto Picked 4K For A Laptop-Sized
+  Player**: a fast connection was handed the 2160p AV1 rendition, whose
+  segments are 13–28 MB each and take seconds to arrive; after a seek the
+  buffer is empty, so nothing shows until a whole segment has landed. Auto
+  quality is now capped to the drawing surface (element height × device
+  pixel ratio) plus one rung of headroom for its better bitrate — a 4K
+  monitor with a large player still gets 4K, a laptop gets 1080p — and the
+  cap follows resizes and fullscreen. Bandwidth still gates the choice, and
+  manual picks are not restricted.
+
 - **Whole-File Media Grabs Starved Playback**: a download manager on one
   viewer's browser saved every googlevideo rendition the page touched, in
   full — bare GETs with no byte range, 17 of the 18 GB served in one window,

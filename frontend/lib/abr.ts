@@ -97,3 +97,21 @@ export function latencyAwareAbrFactory(shaka: ShakaAbrModule, onEstimate: (bps: 
     }
     return () => new LatencyAwareAbrManager();
 }
+
+
+/**
+ * The tallest rendition auto quality may pick for a drawing surface.
+ *
+ * `heights` are the ladder's rung heights (duplicates and zeros ignored);
+ * `surfacePx` is the element height in device pixels. The floor is the
+ * smallest rung that covers the surface — or the top rung when none does —
+ * and `levelsAbove` rungs beyond it stay allowed for their bitrate.
+ * Returns null for an empty ladder.
+ */
+export function autoQualityCap(heights: readonly number[], surfacePx: number, levelsAbove: number): number | null {
+    const rungs = Array.from(new Set(heights.filter((h) => Number.isFinite(h) && h > 0))).sort((a, b) => a - b);
+    if (rungs.length === 0) return null;
+    const covering = rungs.findIndex((h) => h >= surfacePx);
+    const floor = covering === -1 ? rungs.length - 1 : covering;
+    return rungs[Math.min(rungs.length - 1, floor + Math.max(0, levelsAbove))];
+}

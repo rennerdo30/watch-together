@@ -122,6 +122,18 @@ export const SHAKA_ABR_SLOW_HALF_LIFE = 4;
 export const SHAKA_SWITCH_INTERVAL_SECONDS = 4;
 
 /**
+ * How many ladder rungs above the drawing surface auto quality may go.
+ *
+ * The surface is the media element's height times the device pixel ratio.
+ * The smallest rung that covers it is the floor; this many rungs above are
+ * still allowed, because a higher rendition carries a better bitrate even
+ * when downscaled. Bandwidth still gates the choice. Without any cap a
+ * fast link was handed 4K AV1 for a laptop-sized player: 13–28 MB
+ * segments, and every seek stared at a spinner until one had arrived.
+ */
+export const ABR_LEVELS_ABOVE_SURFACE = 1;
+
+/**
  * A sample that completes faster than this, in milliseconds, is treated as
  * served from cache and excluded from bandwidth estimation. Latency
  * correction also requires at least this much measurable transfer time.
