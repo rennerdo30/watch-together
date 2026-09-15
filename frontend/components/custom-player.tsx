@@ -56,6 +56,15 @@ interface PlayerAPI {
 }
 
 
+// Idle time before the controls fade while playing.
+const CONTROLS_HIDE_DELAY_MS = 3000;
+// A click that arrives together with the pointer movement that woke the
+// faded controls is a reach for a control, not a request to pause: the
+// overlay is still pointer-events-none when the click lands, so it would
+// fall through to the video's click-to-pause. Clicks inside this window
+// after a wake-up only reveal the controls.
+const WAKE_CLICK_GRACE_MS = 500;
+
 const parseStoredVolume = (stored: string | null, fallback: number) => {
     if (stored === null) return fallback;
     const parsed = Number.parseFloat(stored);
@@ -129,6 +138,13 @@ export function CustomPlayer({
 
     // === UI STATE ===
     const [showControls, setShowControls] = useState(true);
+    // Whether the controls are currently faded, readable synchronously from
+    // event handlers (state lags a render behind the pointer).
+    const controlsHiddenRef = useRef(false);
+    // When a pointer movement last brought faded controls back.
+    const lastWakeAtRef = useRef(0);
+    // The pointer is over the control bar: never fade underneath it.
+    const pointerOverControlsRef = useRef(false);
     const [showStats, setShowStats] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
@@ -331,12 +347,26 @@ export function CustomPlayer({
     // === CONTROL VISIBILITY TIMEOUT ===
     useEffect(() => {
         let timeout: NodeJS.Timeout;
-        const resetTimeout = () => {
-            setShowControls(true);
+        const armHide = () => {
             clearTimeout(timeout);
-            if (isPlaying) {
-                timeout = setTimeout(() => setShowControls(false), 3000);
+            if (!isPlaying) return;
+            timeout = setTimeout(() => {
+                // A pointer resting on the bar is about to use it.
+                if (pointerOverControlsRef.current) {
+                    armHide();
+                    return;
+                }
+                controlsHiddenRef.current = true;
+                setShowControls(false);
+            }, CONTROLS_HIDE_DELAY_MS);
+        };
+        const resetTimeout = () => {
+            if (controlsHiddenRef.current) {
+                controlsHiddenRef.current = false;
+                lastWakeAtRef.current = Date.now();
             }
+            setShowControls(true);
+            armHide();
         };
         document.addEventListener('mousemove', resetTimeout);
         return () => {
@@ -344,6 +374,11 @@ export function CustomPlayer({
             clearTimeout(timeout);
         };
     }, [isPlaying]);
+    // Paused or open settings keep the controls up; treat that as not hidden
+    // so the next movement is not mistaken for a wake-up.
+    useEffect(() => {
+        if (!isPlaying || showSettings) controlsHiddenRef.current = false;
+    }, [isPlaying, showSettings]);
 
     // === HANDLERS ===
     const toggleFullscreen = useCallback(() => {
@@ -457,6 +492,8 @@ export function CustomPlayer({
                 data-stream-type={isMseMode ? 'mse' : 'hls'}
                 onClick={() => {
                     if (isLive) return;
+                    // The click that woke the faded controls only reveals them.
+                    if (Date.now() - lastWakeAtRef.current < WAKE_CLICK_GRACE_MS) return;
                     handlePlayToggle();
                 }}
             />
@@ -615,6 +652,7 @@ export function CustomPlayer({
                 qualities={qualities}
                 seekableForDVR={isLive ? seekableRange : undefined}
                 visible={showControls || !isPlaying || showSettings}
+                onPointerOverChange={(over) => { pointerOverControlsRef.current = over; }}
                 enhancementMode={enhancementMode}
                 onEnhancementModeChange={setEnhancementMode}
                 enhancementStatus={enhancementStatus.message}

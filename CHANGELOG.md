@@ -125,6 +125,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Phantom Controls Paused The Room**: the control bar fades after three
+  idle seconds, and a click on where a control had been fell through to the
+  video's click-to-pause — the pointer movement that brings the bar back and
+  the click arrive together, before the overlay is interactive again. A viewer
+  reaching for Settings (or quality, or anything after a buffering pause had
+  let the bar fade) paused everyone. A click that arrives with the wake-up
+  movement now only reveals the controls, and the bar no longer fades while
+  the pointer rests on it.
+
 - **DVR Live Streams Jumped Back To The Start Of Their Window**: on a live
   stream every player's position is relative to when *it* loaded the
   playlist, so no position is comparable across viewers — yet the room
