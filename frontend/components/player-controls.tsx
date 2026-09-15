@@ -49,6 +49,8 @@ interface PlayerControlsProps {
     storyboard?: Storyboard;
     /** Chapters: boundaries on the seek bar, the name under the pointer and beside the time. */
     chapters?: VideoChapter[];
+    /** The pointer entered or left the control bar; the owner holds the fade while it is over. */
+    onPointerOverChange?: (over: boolean) => void;
 }
 
 export function PlayerControls({
@@ -88,6 +90,7 @@ export function PlayerControls({
     sponsorSegments = [],
     storyboard,
     chapters = [],
+    onPointerOverChange,
 }: PlayerControlsProps) {
     const enhancementSelectId = useId();
     // Where on the seek bar the pointer is, as a fraction, or null when away.
@@ -124,7 +127,12 @@ export function PlayerControls({
             visible ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0 pointer-events-none",
             className
         )}>
-            <div className={cn("absolute bottom-0 left-0 right-0", visible && "pointer-events-auto")}>
+            <div
+                className={cn("absolute bottom-0 left-0 right-0", visible && "pointer-events-auto")}
+                data-testid="control-bar"
+                onPointerEnter={() => onPointerOverChange?.(true)}
+                onPointerLeave={() => onPointerOverChange?.(false)}
+            >
             {/* Gradient Background */}
             <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/50 to-transparent pointer-events-none" />
 
