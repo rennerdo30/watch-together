@@ -125,6 +125,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **New Resolve Fields Were Invisible For Cached Videos**: a resolved video
+  is cached for up to two hours, so a deploy that adds a field the client
+  renders (chapters, most recently) changed nothing for any video already in
+  the cache until its entry expired — the room's video showed no Chapters tab
+  though yt-dlp reports fourteen. Cached entries now carry a schema version
+  and are treated as misses when it differs from the running code's.
+
 - **Phantom Controls Paused The Room**: the control bar fades after three
   idle seconds, and a click on where a control had been fell through to the
   video's click-to-pause — the pointer movement that brings the bar back and

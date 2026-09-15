@@ -108,3 +108,49 @@ class TestLiveFormatCacheTTL:
         cached = await get_cached_format(LIVE_URL)
         assert cached is not None
         assert cached["stream_url"].endswith("alive.m3u8?token=fresh")
+
+
+class TestFormatCacheSchemaVersion:
+    """A deploy that adds a field must not stay invisible for two hours.
+
+    Chapters shipped, and the room's video kept resolving from a cache entry
+    written before the deploy — no `chapters` field, no Chapters tab — until
+    the entry's TTL ran out.
+    """
+
+    async def test_entries_from_another_schema_are_misses(self, isolated_data_dir):
+        from services.database import (
+            init_database, get_cached_format, get_async_db, FORMAT_CACHE_SCHEMA_KEY,
+        )
+        from core.config import FORMAT_CACHE_SCHEMA_VERSION
+
+        init_database()
+        now = time.time()
+        rows = {
+            "https://example.com/unstamped": {"stream_url": "https://cdn/a"},
+            "https://example.com/older": {
+                "stream_url": "https://cdn/b", FORMAT_CACHE_SCHEMA_KEY: FORMAT_CACHE_SCHEMA_VERSION - 1,
+            },
+        }
+        async with get_async_db() as db:
+            for url, data in rows.items():
+                await db.execute(
+                    "INSERT INTO format_cache (original_url, video_data, expires_at, created_at) VALUES (?, ?, ?, ?)",
+                    (url, json.dumps(data), now + 7000, now),
+                )
+            await db.commit()
+
+        for url in rows:
+            assert await get_cached_format(url) is None, f"{url} served from an older schema"
+
+    async def test_fresh_entries_carry_the_stamp_and_hit(self, isolated_data_dir):
+        from services.database import init_database, cache_format, get_cached_format, FORMAT_CACHE_SCHEMA_KEY
+        from core.config import FORMAT_CACHE_SCHEMA_VERSION
+
+        init_database()
+        url = "https://example.com/stamped"
+        await cache_format(url, {"stream_url": "https://cdn/c"})
+        cached = await get_cached_format(url)
+        assert cached is not None
+        assert cached[FORMAT_CACHE_SCHEMA_KEY] == FORMAT_CACHE_SCHEMA_VERSION
+        assert cached["stream_url"] == "https://cdn/c"
