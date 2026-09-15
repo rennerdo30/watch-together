@@ -141,7 +141,7 @@ export function PlayerControls({
                 {!isLive && (
                     <div
                         ref={progressRef}
-                        className="group/progress relative h-1 w-full mb-3 cursor-pointer"
+                        className="group/progress relative h-4 w-full mb-2 cursor-pointer"
                         onPointerMove={(e) => updateHover(e.clientX)}
                         onPointerLeave={() => setHoverFraction(null)}
                     >
@@ -153,7 +153,7 @@ export function PlayerControls({
                             return (
                                 <div
                                     data-testid="seek-preview"
-                                    className="absolute bottom-4 -translate-x-1/2 flex flex-col items-center gap-1 pointer-events-none"
+                                    className="absolute bottom-5 -translate-x-1/2 flex flex-col items-center gap-1 pointer-events-none"
                                     style={{ left: `${hoverFraction * 100}%` }}
                                 >
                                     {frame && (
@@ -184,7 +184,7 @@ export function PlayerControls({
                             );
                         })()}
                         {/* Track Background */}
-                        <div className="absolute inset-0 bg-white/20 rounded-full overflow-hidden">
+                        <div className="absolute left-0 right-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-white/20 overflow-hidden transition-[height] duration-150 group-hover/progress:h-1.5">
                             {/* Progress Fill */}
                             <div
                                 className="h-full bg-[color:var(--accent-primary)] rounded-full transition-all duration-100"
