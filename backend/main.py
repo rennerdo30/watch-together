@@ -47,7 +47,7 @@ from services.prefetcher import (
     get_or_create_session, notify_segment_for_url,
     start_initial_prefetch, prefetch_cleanup_task, prefetch_ahead, shutdown_prefetch,
 )
-from services.gvs_range import rewrite_range
+from services.gvs_range import rewrite_range, is_whole_file_grab
 from services.upstream import (
     UnsafeUpstreamError, pin_url, request_kwargs,
     open_upstream_stream, resolve_upstream,
@@ -678,6 +678,16 @@ async def proxy_stream(request: Request, url: str):
     user_email = get_user_from_request(request)
     if REQUIRE_AUTHENTICATION and not user_email:
         raise HTTPException(status_code=401, detail="User identity required")
+
+    # A bare GET for a whole large media file is never a player; refuse it
+    # before spending a DNS lookup or an upstream connection on it.
+    if is_whole_file_grab(url, request.headers.get("range")):
+        logger.warning(
+            f"Refused whole-file media download of {url[:80]} "
+            f"(user {user_email or 'anonymous'}, UA {request.headers.get('user-agent', '?')[:60]})")
+        raise HTTPException(
+            status_code=403,
+            detail="Whole-file media downloads are not served; players request byte ranges")
 
     # SSRF protection: validate URL before proxying
     await asyncio.to_thread(validate_proxy_url, url)

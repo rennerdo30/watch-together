@@ -20,7 +20,7 @@ import logging
 from typing import NamedTuple, Optional
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
-from core.config import GVS_HOST_SUFFIX, GVS_MAX_RANGE_BYTES
+from core.config import GVS_HOST_SUFFIX, GVS_MAX_RANGE_BYTES, GVS_UNRANGED_MAX_BYTES
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,29 @@ def _content_length(params: dict) -> Optional[int]:
     except (TypeError, ValueError):
         return None
     return length if length > 0 else None
+
+
+def is_whole_file_grab(url: str, range_header: Optional[str]) -> bool:
+    """A request for an entire large googlevideo media file, no range given.
+
+    Players never do this: a media element sends `Range: bytes=0-`, and
+    Shaka and hls.js ask for exact spans (or carry `range=` in the query).
+    A bare GET for a file this size is a download manager or a sniffer
+    extension saving every rendition the page touches — each one a full
+    transfer at link speed that starves the small segment fetches real
+    playback depends on.
+    """
+    if range_header:
+        return False
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if not host.endswith(GVS_HOST_SUFFIX) or "videoplayback" not in parsed.path:
+        return False
+    params = parse_qs(parsed.query)
+    if params.get("range"):
+        return False
+    length = _content_length(params)
+    return length is not None and length > GVS_UNRANGED_MAX_BYTES
 
 
 def rewrite_range(url: str, range_start: int, range_end: Optional[int]) -> Optional[MediaRange]:

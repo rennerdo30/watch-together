@@ -244,3 +244,37 @@ class TestProxyStillAnswersAWellFormed206:
         assert response.status_code == 200
         assert response.content == self.PAYLOAD
         assert seen[-1]["range_param"] is None
+
+
+class TestWholeFileGrabs:
+    """A download manager saved every rendition the page touched, in full.
+
+    Production, 2026-09-15: one Windows Chrome client issued 35 bare GETs
+    for googlevideo renditions — no Range header, no `range=` query — and
+    pulled 17 GB of the 18.4 GB served in the window, every quality of the
+    ladder including ones the player never used. Real playback is a stream
+    of small ranged fetches, and those stalled behind it.
+    """
+    BIG = "https://rr1---sn-4g5ednrl.googlevideo.com/videoplayback?itag=399&clen=1142920584&expire=1"
+    SMALL = "https://rr1---sn-4g5ednrl.googlevideo.com/videoplayback?itag=140&clen=4000000"
+
+    def test_a_bare_get_for_a_large_rendition_is_a_grab(self):
+        from services.gvs_range import is_whole_file_grab
+        assert is_whole_file_grab(self.BIG, None)
+        assert is_whole_file_grab(self.BIG, "")
+
+    def test_players_are_not_mistaken_for_grabs(self):
+        from services.gvs_range import is_whole_file_grab
+        # A media element opening a progressive file.
+        assert not is_whole_file_grab(self.BIG, "bytes=0-")
+        # Shaka / hls.js asking for a span.
+        assert not is_whole_file_grab(self.BIG, "bytes=1048576-2097151")
+        # The range already moved into the query (the proxy's own fast path).
+        assert not is_whole_file_grab(self.BIG + "&range=0-1048575", None)
+
+    def test_small_files_other_hosts_and_unknown_sizes_pass(self):
+        from services.gvs_range import is_whole_file_grab
+        assert not is_whole_file_grab(self.SMALL, None)
+        assert not is_whole_file_grab("https://cdn.example/video.mp4?clen=1142920584", None)
+        assert not is_whole_file_grab("https://rr1---sn-x.googlevideo.com/videoplayback?itag=399", None)
+        assert not is_whole_file_grab("https://rr1---sn-x.googlevideo.com/api/manifest/hls?clen=999999999", None)

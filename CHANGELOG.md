@@ -125,6 +125,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Whole-File Media Grabs Starved Playback**: a download manager on one
+  viewer's browser saved every googlevideo rendition the page touched, in
+  full — bare GETs with no byte range, 17 of the 18 GB served in one window,
+  every quality of the ladder including ones the player never used — and the
+  small ranged fetches real playback depends on stalled behind them. No
+  player ever requests a large media file without a range, so the proxy now
+  refuses such requests up front, before any upstream work.
+
 - **The Seek Bar Was Nearly Impossible To Hit**: its hover and click area
   was the 4px track itself. The zone is now four times taller; the track
   stays thin and thickens under the pointer, and the hover preview sits

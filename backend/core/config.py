@@ -39,6 +39,13 @@ GVS_HOST_SUFFIX = ".googlevideo.com"
 # Cap for a range request with no end. yt-dlp fetches in chunks of the same
 # size, and an uncapped request would pull the rest of the file.
 GVS_MAX_RANGE_BYTES = 10 * 1024 * 1024
+# A googlevideo media file requested with no byte range at all. No player
+# does this — media elements send `Range: bytes=0-`, Shaka and hls.js ask
+# for exact spans — but download managers and video-sniffer extensions do,
+# grabbing every rendition the page touches in full. One such client pulled
+# 17 of 18 GB served in a window, starving real segment fetches. Files above
+# this size are refused unless a range is given.
+GVS_UNRANGED_MAX_BYTES = 50 * 1024 * 1024
 
 # In-memory cache configuration for hot segments
 MEMORY_CACHE_SIZE_BYTES = 256 * 1024 * 1024  # 256 MB in-memory LRU cache
