@@ -395,12 +395,15 @@ async def save_user_settings(user_email: str, settings: Dict[str, Any]) -> None:
 # Format Cache Operations
 # ============================================================================
 
+# Stored inside each entry; compared against FORMAT_CACHE_SCHEMA_VERSION on read.
+FORMAT_CACHE_SCHEMA_KEY = "format_cache_schema"
+
 async def get_cached_format(original_url: str) -> Optional[Dict[str, Any]]:
     """Get cached format if available and not expired."""
     import time
     now = time.time()
     
-    from core.config import FORMAT_CACHE_LIVE_TTL_SECONDS
+    from core.config import FORMAT_CACHE_LIVE_TTL_SECONDS, FORMAT_CACHE_SCHEMA_VERSION
 
     async with get_async_db() as db:
         cursor = await db.execute(
@@ -424,6 +427,14 @@ async def get_cached_format(original_url: str) -> Optional[Dict[str, Any]]:
             data = json.loads(row["video_data"])
         except (json.JSONDecodeError, TypeError) as e:
             logger.error(f"Corrupt format cache entry for {original_url[:60]}: {e}")
+            return None
+
+        # Written under an older response shape: a miss, so the next resolve
+        # produces the fields this deployment's client renders.
+        if data.get(FORMAT_CACHE_SCHEMA_KEY) != FORMAT_CACHE_SCHEMA_VERSION:
+            await db.execute("DELETE FROM format_cache WHERE original_url = ?", (original_url,))
+            await db.commit()
+            logger.info(f"Format cache entry from an older schema discarded: {original_url[:60]}...")
             return None
 
         # The live TTL is enforced on read as well as write: an entry written
@@ -491,7 +502,10 @@ async def cache_format(original_url: str, video_data: Dict[str, Any], ttl_second
     their playlist URLs carry signed tokens that expire on the CDN's clock,
     and a long-lived cache entry keeps serving the dead URL to every viewer.
     """
-    from core.config import FORMAT_CACHE_TTL_SECONDS, FORMAT_CACHE_LIVE_TTL_SECONDS
+    from core.config import (
+        FORMAT_CACHE_TTL_SECONDS, FORMAT_CACHE_LIVE_TTL_SECONDS, FORMAT_CACHE_SCHEMA_VERSION,
+    )
+    video_data = {**video_data, FORMAT_CACHE_SCHEMA_KEY: FORMAT_CACHE_SCHEMA_VERSION}
     if ttl_seconds is None:
         ttl_seconds = (
             FORMAT_CACHE_LIVE_TTL_SECONDS

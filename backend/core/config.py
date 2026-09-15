@@ -58,6 +58,11 @@ FORMAT_CACHE_TTL_SECONDS = 7200  # 2 hours - YouTube URLs typically valid for 6 
 # minutes still deduplicates the resolve fan-out when a room full of members
 # receives the same set_video broadcast.
 FORMAT_CACHE_LIVE_TTL_SECONDS = 300
+# Bump whenever the shape of a resolved video changes (a new field the
+# client renders, a renamed one). Entries written under another version are
+# treated as misses: otherwise a deploy that adds a field stays invisible
+# for every already-cached video until its TTL runs out.
+FORMAT_CACHE_SCHEMA_VERSION = 2
 
 # PO token provider (bgutil) for YouTube.
 #
