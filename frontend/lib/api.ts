@@ -24,6 +24,7 @@ export interface AudioOption {
 }
 
 import type { Storyboard } from './storyboard';
+import type { VideoChapter } from './chapters';
 
 export interface ResolveResponse {
     original_url: string;
@@ -51,6 +52,8 @@ export interface ResolveResponse {
     added_by?: string;
     /** Preview thumbnails for the seek bar, when the site provides them. */
     storyboard?: Storyboard;
+    /** Chapters (YouTube: sections), sorted by start, when the video has any. */
+    chapters?: VideoChapter[];
     quality?: string;
     has_audio?: boolean;
     stream_type?: 'hls' | 'dash' | 'combined' | 'video_only' | 'default' | 'unknown';

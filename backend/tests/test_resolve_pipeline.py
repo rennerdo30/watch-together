@@ -723,3 +723,40 @@ class TestRoomMembersLendCookies:
                         break
                     ws2.receive_json()
         assert self.LENDER in seen.get("members", [])
+
+
+class TestChapters:
+    """YouTube sections travel with the resolved video."""
+
+    def test_chapters_are_normalised_and_sorted(self):
+        from services.resolver import extract_chapters
+        info = {"chapters": [
+            {"start_time": 120, "end_time": 300.5, "title": "  Main part "},
+            {"start_time": 0, "end_time": 120, "title": "Intro"},
+        ]}
+        assert extract_chapters(info) == [
+            {"start": 0.0, "end": 120.0, "title": "Intro"},
+            {"start": 120.0, "end": 300.5, "title": "Main part"},
+        ]
+
+    def test_malformed_chapters_are_skipped_not_fatal(self):
+        from services.resolver import extract_chapters
+        info = {"chapters": [
+            {"start_time": 0, "end_time": 10, "title": "kept"},
+            {"start_time": "x", "end_time": 10, "title": "bad start"},
+            {"start_time": 10, "end_time": 10, "title": "empty span"},
+            {"start_time": 20, "end_time": 30, "title": "   "},
+            {"start_time": -5, "end_time": 30, "title": "negative"},
+            "not a dict",
+            None,
+        ]}
+        assert extract_chapters(info) == [{"start": 0.0, "end": 10.0, "title": "kept"}]
+        assert extract_chapters({}) == []
+        assert extract_chapters({"chapters": None}) == []
+
+    def test_resolve_response_carries_chapters_only_when_present(self):
+        from services.resolver import _build_resolve_response
+        info = {"title": "T", "chapters": [{"start_time": 0, "end_time": 5, "title": "Only"}]}
+        response = _build_resolve_response("https://youtu.be/x", info, {"url": "https://cdn/v"})
+        assert response["chapters"] == [{"start": 0.0, "end": 5.0, "title": "Only"}]
+        assert "chapters" not in _build_resolve_response("https://youtu.be/x", {"title": "T"}, {"url": "u"})

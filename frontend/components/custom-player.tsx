@@ -9,6 +9,7 @@ import { useAudioNormalization, useHlsPlayer, useShakaPlayer, HlsQualityLevel, A
 import { startPlayback, type PlaybackStart } from '@/lib/playback';
 import type { SponsorSegment } from '@/lib/sponsorblock';
 import type { Storyboard } from '@/lib/storyboard';
+import type { VideoChapter } from '@/lib/chapters';
 import { useLocalStorageState, parseStoredBoolean } from '@/lib/hooks/useLocalStorageState';
 import { useVideoEnhancement } from './player/hooks/useVideoEnhancement';
 
@@ -42,6 +43,8 @@ interface CustomPlayerProps {
     sponsorSegments?: SponsorSegment[];
     /** Preview thumbnails for the seek bar, when the site provides them. */
     storyboard?: Storyboard;
+    /** Chapters of the video, marked on the seek bar and named beside the time. */
+    chapters?: VideoChapter[];
 }
 
 interface PlayerAPI {
@@ -97,6 +100,7 @@ export function CustomPlayer({
     availableQualities,
     sponsorSegments,
     storyboard,
+    chapters,
 }: CustomPlayerProps) {
     // === REFS ===
     const videoRef = useRef<HTMLVideoElement>(null);
@@ -632,6 +636,7 @@ export function CustomPlayer({
                 isLive={isLive}
                 sponsorSegments={sponsorSegments}
                 storyboard={storyboard}
+                chapters={chapters}
             />
         </div>
     );
