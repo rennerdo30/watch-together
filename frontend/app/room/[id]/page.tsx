@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { ResolveResponse, resolveUrl, getExtensionToken, regenerateExtensionToken, ExtensionToken, getUserSettings, updateUserSettings, getCookies, forgetCookies, extensionDownloadUrl, type CookieStatus, type UserSettings } from '@/lib/api';
 import { CustomPlayer } from '@/components/custom-player';
+import { chapterAt, formatChapterTime } from '@/lib/chapters';
 import { LiveChat } from '@/components/live-chat';
 import { RoomLog } from '@/components/room-log';
 import { ErrorBoundary } from '@/components/error-boundary';
@@ -121,7 +122,7 @@ export default function RoomPage() {
     const [showSettings, setShowSettings] = useState(false);
     const [activeTheme, setActiveTheme] = useState(DEFAULT_THEME);
     const [useProxy, setUseProxy] = useState(true);
-    const [sidebarTab, setSidebarTab] = useState<'queue' | 'users' | 'chat' | 'log'>('queue');
+    const [sidebarTab, setSidebarTab] = useState<'queue' | 'users' | 'chat' | 'log' | 'chapters'>('queue');
     const [activityLog, setActivityLog] = useState<RoomActivityEvent[]>([]);
     const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
     const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
@@ -751,6 +752,22 @@ export default function RoomPage() {
         setVideoData(fresh);
     }, [roomId]);
 
+    // Chapters (YouTube: sections) of the current video. Jumping to one is a
+    // room-wide seek, like dragging the seek bar: the player is moved here
+    // and the room told, since a programmatic move is otherwise treated as
+    // sync correction and never published.
+    const chapters = videoData?.chapters ?? [];
+    const hasChapters = chapters.length > 0;
+    const seekRoom = (time: number) => {
+        playerRef.current?.currentTime(time);
+        lastLocalSeekAtRef.current = Date.now();
+        sendMsg('seek', { timestamp: time });
+        setSyncState(prev => ({ ...prev, timestamp: time, lastSync: new Date().toLocaleTimeString() }));
+    };
+    useEffect(() => {
+        if (sidebarTab === 'chapters' && !hasChapters) setSidebarTab('queue');
+    }, [sidebarTab, hasChapters]);
+
     const getFinalVideoUrl = () => {
         if (!videoData) return "";
         const rawUrl = videoData.stream_url;
@@ -980,6 +997,7 @@ export default function RoomPage() {
                                     onSyncThresholdChange={setSyncThreshold}
                                     sponsorSegments={sponsorSegments.videoUrl === videoData.original_url ? sponsorSegments.segments : []}
                                     storyboard={videoData.storyboard}
+                                    chapters={videoData.chapters}
                                 />
                             </ErrorBoundary>
                         ) : isResolving ? null : (
@@ -1183,7 +1201,7 @@ export default function RoomPage() {
                     className="app-surface border-t lg:border-t-0 lg:border-l border-neutral-800 flex flex-col shrink-0 bg-neutral-900/30 h-[42dvh] w-full lg:h-auto lg:w-[var(--sidebar-width)]"
                 >
                     {/* Compact Tabs */}
-                    <div role="tablist" aria-label="Sidebar sections" className="grid grid-cols-4 p-1.5 gap-1 border-b border-neutral-800 shrink-0">
+                    <div role="tablist" aria-label="Sidebar sections" className={`grid ${hasChapters ? 'grid-cols-5' : 'grid-cols-4'} p-1.5 gap-1 border-b border-neutral-800 shrink-0`}>
                         <button
                             type="button"
                             role="tab"
@@ -1224,6 +1242,19 @@ export default function RoomPage() {
                         >
                             Chat
                         </button>
+                        {hasChapters && (
+                            <button
+                                type="button"
+                                role="tab"
+                                id="sidebar-tab-chapters"
+                                aria-controls="sidebar-panel"
+                                aria-selected={sidebarTab === 'chapters'}
+                                onClick={() => setSidebarTab('chapters')}
+                                className={`min-w-0 py-2 rounded-lg text-[11px] font-medium transition-all ${sidebarTab === 'chapters' ? 'bg-neutral-800 text-white' : 'text-neutral-400 hover:bg-white/5 hover:text-neutral-200'}`}
+                            >
+                                Chapters<span className="sr-only"> ({chapters.length})</span>
+                            </button>
+                        )}
                         <button
                             type="button"
                             role="tab"
@@ -1244,7 +1275,30 @@ export default function RoomPage() {
                         aria-labelledby={`sidebar-tab-${sidebarTab}`}
                         className="flex-1 overflow-hidden relative"
                     >
-                        {sidebarTab === 'log' ? (
+                        {sidebarTab === 'chapters' ? (
+                            <div data-testid="chapter-list" className="h-full overflow-y-auto p-2 space-y-0.5 custom-scrollbar">
+                                {chapters.map((chapter) => {
+                                    const active = chapterAt(chapters, syncState.timestamp)?.start === chapter.start;
+                                    return (
+                                        <button
+                                            type="button"
+                                            key={chapter.start}
+                                            onClick={() => seekRoom(chapter.start)}
+                                            aria-current={active ? 'true' : undefined}
+                                            className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors ${active
+                                                ? 'bg-neutral-800 text-white'
+                                                : 'text-neutral-300 hover:bg-white/5 hover:text-white'
+                                                }`}
+                                        >
+                                            <span className="w-12 shrink-0 tabular-nums text-xs text-neutral-400">
+                                                {formatChapterTime(chapter.start)}
+                                            </span>
+                                            <span className="min-w-0 truncate">{chapter.title}</span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        ) : sidebarTab === 'log' ? (
                             <RoomLog events={activityLog} />
                         ) : sidebarTab === 'chat' ? (
                             <LiveChat key={`${videoData?.original_url}:${videoData?.is_live}`} video={videoData} />

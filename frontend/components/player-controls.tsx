@@ -5,6 +5,7 @@ import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, Settings, Activity, 
 import { cn } from '@/lib/utils';
 import { parseUpscaleMode, type UpscaleMode } from '@/lib/upscaling/policy';
 import { sponsorCategoryColor, sponsorCategoryLabel, type SponsorSegment } from '@/lib/sponsorblock';
+import { chapterAt, type VideoChapter } from '@/lib/chapters';
 import { storyboardFrame, type Storyboard } from '@/lib/storyboard';
 
 
@@ -46,6 +47,8 @@ interface PlayerControlsProps {
     sponsorSegments?: SponsorSegment[];
     /** Preview thumbnails shown while hovering the seek bar. */
     storyboard?: Storyboard;
+    /** Chapters: boundaries on the seek bar, the name under the pointer and beside the time. */
+    chapters?: VideoChapter[];
 }
 
 export function PlayerControls({
@@ -84,6 +87,7 @@ export function PlayerControls({
     enhancementStatus,
     sponsorSegments = [],
     storyboard,
+    chapters = [],
 }: PlayerControlsProps) {
     const enhancementSelectId = useId();
     // Where on the seek bar the pointer is, as a fraction, or null when away.
@@ -112,6 +116,7 @@ export function PlayerControls({
     const displayDuration = seekableForDVR ? seekableForDVR.end - seekableForDVR.start : (duration || 0);
     const displayCurrentTime = seekableForDVR ? currentTime - seekableForDVR.start : currentTime;
     const progress = displayDuration > 0 ? (displayCurrentTime / displayDuration) * 100 : 0;
+    const currentChapter = chapterAt(chapters, currentTime);
 
     return (
         <div className={cn(
@@ -136,6 +141,7 @@ export function PlayerControls({
                         {hoverFraction !== null && displayDuration > 0 && (() => {
                             const hoverTime = (seekableForDVR?.start ?? 0) + hoverFraction * displayDuration;
                             const frame = storyboard ? storyboardFrame(storyboard, hoverTime) : null;
+                            const hoverChapter = chapterAt(chapters, hoverTime);
                             return (
                                 <div
                                     data-testid="seek-preview"
@@ -154,6 +160,14 @@ export function PlayerControls({
                                                 backgroundRepeat: 'no-repeat',
                                             }}
                                         />
+                                    )}
+                                    {hoverChapter && (
+                                        <span
+                                            data-testid="seek-preview-chapter"
+                                            className="max-w-[14rem] truncate px-1.5 py-0.5 rounded bg-black/80 text-[11px] text-white"
+                                        >
+                                            {hoverChapter.title}
+                                        </span>
                                     )}
                                     <span className="px-1.5 py-0.5 rounded bg-black/80 text-[11px] text-white tabular-nums">
                                         {formatTime(hoverTime - (seekableForDVR?.start ?? 0))}
@@ -184,6 +198,19 @@ export function PlayerControls({
                                             width: `${((end - start) / displayDuration) * 100}%`,
                                             backgroundColor: sponsorCategoryColor(segment.category),
                                         }}
+                                    />
+                                );
+                            })}
+                            {/* Chapter boundaries: a notch where each chapter after the first begins */}
+                            {displayDuration > 0 && chapters.map((chapter) => {
+                                if (chapter.start <= 0 || chapter.start >= displayDuration) return null;
+                                return (
+                                    <div
+                                        key={chapter.start}
+                                        data-chapter-marker
+                                        title={chapter.title}
+                                        className="absolute top-0 h-full w-0.5 bg-black/70 pointer-events-none"
+                                        style={{ left: `${(chapter.start / displayDuration) * 100}%` }}
                                     />
                                 );
                             })}
@@ -264,7 +291,18 @@ export function PlayerControls({
                             {isLive ? (
                                 <span className="text-red-400">LIVE</span>
                             ) : (
-                                <span>{formatTime(currentTime)} / {formatTime(duration || 0)}</span>
+                                <>
+                                    <span>{formatTime(currentTime)} / {formatTime(duration || 0)}</span>
+                                    {currentChapter && (
+                                        <span
+                                            data-testid="current-chapter"
+                                            title={currentChapter.title}
+                                            className="ml-2 inline-block max-w-[14rem] truncate align-bottom text-white/60"
+                                        >
+                                            · {currentChapter.title}
+                                        </span>
+                                    )}
+                                </>
                             )}
                         </div>
 

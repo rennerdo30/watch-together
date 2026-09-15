@@ -51,6 +51,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Chapters**: a video's chapters (YouTube's sections — set by the creator
+  or read from timestamps in the description) travel with the resolved video.
+  They are notched on the seek bar, named under the pointer while hovering
+  and beside the time while playing, and listed in a Chapters tab in the
+  sidebar. Picking one there is a room-wide seek: everyone jumps, not just
+  the viewer who clicked.
+
 - **Admin Panel** at `/admin`: live rooms with connected members and a
   force-close action, plus full cache inspection — the disk segment cache
   (usage against budget, newest entries, oldest age, disk free), the

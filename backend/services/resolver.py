@@ -134,6 +134,31 @@ def extract_storyboard(info: dict) -> Optional[dict]:
     return candidates[0][1]
 
 
+def extract_chapters(info: dict) -> list:
+    """The video's chapters, as yt-dlp reports them.
+
+    YouTube calls these sections: set by the creator, or parsed by yt-dlp
+    from timestamps in the description. Each is `start_time`, `end_time`
+    and `title`. Sorted by start; an entry without a usable time span or
+    a title is skipped rather than fatal.
+    """
+    chapters = []
+    for raw in info.get('chapters') or []:
+        if not isinstance(raw, dict):
+            continue
+        title = str(raw.get('title') or '').strip()
+        try:
+            start = float(raw.get('start_time'))
+            end = float(raw.get('end_time'))
+        except (TypeError, ValueError):
+            continue
+        if not title or start < 0 or end <= start:
+            continue
+        chapters.append({'start': round(start, 3), 'end': round(end, 3), 'title': title})
+    chapters.sort(key=lambda c: c['start'])
+    return chapters
+
+
 def _is_indexable(fmt: dict) -> bool:
     """Whether a SegmentBase manifest could describe this rendition."""
     extension = (fmt.get("ext") or "").lower()
@@ -307,6 +332,9 @@ def _build_resolve_response(url: str, info: dict, stream_info: dict) -> dict:
     storyboard = extract_storyboard(info)
     if storyboard:
         response["storyboard"] = storyboard
+    chapters = extract_chapters(info)
+    if chapters:
+        response["chapters"] = chapters
 
     if stream_info.get("type") == "dash":
         response["video_url"] = stream_info.get("video_url")
