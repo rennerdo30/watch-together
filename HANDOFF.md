@@ -22,7 +22,7 @@ change it in the same commit that makes it untrue. Newest state first.
 
 | Commit | What | Why it mattered |
 | --- | --- | --- |
-| (next) | Auto quality capped to the drawing surface + one rung of headroom (`ABR_LEVELS_ABOVE_SURFACE`), following resizes | A seek buffered ~5 s: auto had picked 2160p AV1 for a laptop-sized player, whose 13–28 MB segments take seconds each; nothing shows after a seek until one lands. |
+| `4413fc0` | Auto quality capped to the drawing surface + one rung of headroom (`ABR_LEVELS_ABOVE_SURFACE`), following resizes | A seek buffered ~5 s: auto had picked 2160p AV1 for a laptop-sized player, whose 13–28 MB segments take seconds each; nothing shows after a seek until one lands. |
 | `a43b7e7` | Proxy refuses bare (unranged) GETs for large googlevideo files | A download manager on one viewer's Chrome pulled every rendition in full — 17 of 18.4 GB served — and starved real segment fetches. See *Performance* below. |
 | `5d97eb5` | Seek bar hit area 4 px → 16 px, track thickens on hover | It was unhittable. |
 | `58be603` | Format cache entries carry a schema version | A deploy adding a resolve field (chapters) stayed invisible for cached videos for up to 2 h. Bump `FORMAT_CACHE_SCHEMA_VERSION` whenever the resolve response shape changes. |
