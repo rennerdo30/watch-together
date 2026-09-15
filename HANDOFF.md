@@ -6,10 +6,10 @@ change it in the same commit that makes it untrue. Newest state first.
 
 ## State as of 2026-09-15
 
-- **Production**: https://w2g.renner.dev runs `main` at `a43b7e7`. Deployed
+- **Production**: https://w2g.renner.dev runs `main` (see `git log -1`). Deployed
   with `./deploy/deploy.sh`; CI (backend, frontend lint/build, Playwright
   e2e, extension checks, CodeQL, container publish) green on that commit.
-- **Suites**: 588 backend tests (`cd backend && pytest`), 99 Playwright
+- **Suites**: 588 backend tests (`cd backend && pytest`), 101 Playwright
   tests (`cd frontend && npm run test:e2e`), lint 0 errors / 14 warnings.
 - **Admin panel** at `/admin`: rooms with members and a force-close, every
   cache tier with a clear action. Gated by `ADMIN_EMAILS` (set on the host
@@ -22,6 +22,7 @@ change it in the same commit that makes it untrue. Newest state first.
 
 | Commit | What | Why it mattered |
 | --- | --- | --- |
+| (next) | Auto quality capped to the drawing surface + one rung of headroom (`ABR_LEVELS_ABOVE_SURFACE`), following resizes | A seek buffered ~5 s: auto had picked 2160p AV1 for a laptop-sized player, whose 13–28 MB segments take seconds each; nothing shows after a seek until one lands. |
 | `a43b7e7` | Proxy refuses bare (unranged) GETs for large googlevideo files | A download manager on one viewer's Chrome pulled every rendition in full — 17 of 18.4 GB served — and starved real segment fetches. See *Performance* below. |
 | `5d97eb5` | Seek bar hit area 4 px → 16 px, track thickens on hover | It was unhittable. |
 | `58be603` | Format cache entries carry a schema version | A deploy adding a resolve field (chapters) stayed invisible for cached videos for up to 2 h. Bump `FORMAT_CACHE_SCHEMA_VERSION` whenever the resolve response shape changes. |
@@ -55,6 +56,11 @@ Measured on 2026-09-15 from the nginx media log (`./deploy/host-status.sh
   exact byte spans, so two viewers at different qualities or positions share
   little. Server-side read-ahead (`prefetch_ahead`, 3 MB aligned blocks) and
   `start_initial_prefetch` on set_video / queue_add exist and run.
+- **Seek latency = one segment of the active rendition.** After a seek the
+  buffer is empty and Shaka shows nothing until a full segment (plus audio)
+  has arrived. Segment size scales with the rendition: 4K AV1 ≈ 13–28 MB,
+  1080p ≈ 2–5 MB. Hence the surface cap above; `SHAKA_REBUFFER_GOAL_SECONDS`
+  (4 s) is the other lever, deliberately small already.
 - **Nothing logs durations**: resolve (yt-dlp), manifest build (index
   probes), and first-segment time are not measured anywhere, so
   "paste → playing" cannot be broken down from production data yet.

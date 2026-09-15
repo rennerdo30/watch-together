@@ -3,10 +3,11 @@
 import { useRef, useEffect, useCallback, useState } from 'react';
 
 import { startPlayback, type PlaybackStart } from '@/lib/playback';
-import { latencyAwareAbrFactory } from '@/lib/abr';
+import { latencyAwareAbrFactory, autoQualityCap } from '@/lib/abr';
 import { readOpeningEstimate, rememberBandwidth } from '@/lib/bandwidth-memory';
 import {
     ABR_CACHE_LOAD_THRESHOLD_MS,
+    ABR_LEVELS_ABOVE_SURFACE,
     SHAKA_BUFFER_GOAL_SECONDS,
     SHAKA_BUFFER_BEHIND_SECONDS,
     SHAKA_REBUFFER_GOAL_SECONDS,
@@ -189,6 +190,7 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
         let cancelled = false;
         let player: ShakaPlayerInstance | null = null;
         let onProgress: (() => void) | undefined;
+        let resizeObserver: ResizeObserver | null = null;
         let measuredBandwidth: number | null = null;
 
         const setLoading = (loading: boolean) => {
@@ -309,6 +311,9 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
                     // estimate above and throws away every measurement each
                     // time the guess changes, which it does constantly.
                     useNetworkInformation: false,
+                    // Auto quality is capped to the drawing surface plus a
+                    // rung of bitrate headroom; see applyQualityCap below.
+                    // Shaka's own restrictToElementSize allows no headroom.
                     switchInterval: SHAKA_SWITCH_INTERVAL_SECONDS,
                     cacheLoadThreshold: ABR_CACHE_LOAD_THRESHOLD_MS,
                     advanced: {
@@ -351,6 +356,19 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
                 await instance.load(manifestUrl, startAt > 0 ? startAt : undefined);
                 if (cancelled) return;
                 onTracksChanged();
+                // Cap auto quality to the surface plus headroom, and follow
+                // the surface as the player is resized or goes fullscreen.
+                // Manual picks are not restricted.
+                const applyQualityCap = () => {
+                    if (cancelled) return;
+                    const heights = instance.getVariantTracks().map((track) => track.height ?? 0);
+                    const surface = video.clientHeight * (window.devicePixelRatio || 1);
+                    const cap = autoQualityCap(heights, surface, ABR_LEVELS_ABOVE_SURFACE);
+                    if (cap !== null) instance.configure({ abr: { restrictions: { maxHeight: cap } } });
+                };
+                applyQualityCap();
+                resizeObserver = new ResizeObserver(applyQualityCap);
+                resizeObserver.observe(video);
                 setLoading(false);
 
                 if (shouldAutoPlay) {
@@ -376,6 +394,7 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
         return () => {
             cancelled = true;
             if (onProgress) video.removeEventListener('timeupdate', onProgress);
+            resizeObserver?.disconnect();
             const active = playerRef.current;
             playerRef.current = null;
             if (active) {
