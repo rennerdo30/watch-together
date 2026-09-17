@@ -9,7 +9,7 @@ change it in the same commit that makes it untrue. Newest state first.
 - **Production**: https://w2g.renner.dev runs `main` (see `git log -1`). Deployed
   with `./deploy/deploy.sh`; CI (backend, frontend lint/build, Playwright
   e2e, extension checks, CodeQL, container publish) green on that commit.
-- **Suites**: 664 backend tests (`cd backend && pytest`), 119 Playwright
+- **Suites**: 673 backend tests (`cd backend && pytest`), 120 Playwright
   tests (`cd frontend && npm run test:e2e`), lint 0 errors / 14 warnings.
 - **Admin panel** at `/admin`: rooms with members and a force-close, every
   cache tier with a clear action. Gated by `ADMIN_EMAILS` (set on the host

@@ -121,6 +121,12 @@ ACTIVE_STREAM_LIMIT = 64
 # again instead. The margin has to cover the probe, the opening bytes and
 # the first minutes of playback that follow.
 STREAM_URL_MIN_LIFETIME_SECONDS = 600
+# The same question for a request someone is waiting on, where the answer is
+# different: serve whatever is still signed. A site that issues short-lived
+# URLs plays perfectly well — the player asks for a fresh resolve when a
+# fetch is refused — so demanding the margin above would turn "early" into
+# "unplayable". Only a URL whose deadline has actually passed is replaced.
+STREAM_URL_SERVE_MIN_SECONDS = 0
 # How long a video that could not be prepared is left alone. The heartbeat
 # comes every 5 seconds, so without this a video nobody can warm is retried
 # nine times in the last PREWARM_NEXT_VIDEO_SECONDS of the one before it —
