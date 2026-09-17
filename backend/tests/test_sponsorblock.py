@@ -278,7 +278,10 @@ async def test_skipper_moves_the_room_past_each_segment_in_turn():
     seeks = [m["payload"] for m in manager.broadcasts if m["type"] == "seek"]
     assert [s["timestamp"] for s in seeks] == [25.0, 70.0]
     assert seeks[0]["skipped"] == {"category": "sponsor", "start": 10.0, "end": 25.0}
-    assert clock.slept == [10.0, 35.0]
+    # The wait for a segment more than PREWARM_SKIP_LEAD_SECONDS away is
+    # split: sleep until the lead, warm the destination, sleep the rest. The
+    # first segment is closer than the lead, so that one is a single sleep.
+    assert clock.slept == [10.0, 15.0, 20]
     assert manager.room_states["room"]["timestamp"] == 70.0
 
 

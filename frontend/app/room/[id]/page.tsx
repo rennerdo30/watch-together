@@ -8,7 +8,8 @@ import {
     Play, ListVideo, Settings, X, Palette, ShieldCheck, Home, Bug,
     Crown, Shield, User as UserIcon, ChevronDown, Lock, Copy, Check, Infinity, Sun, ExternalLink, Scissors, Puzzle
 } from 'lucide-react';
-import { ResolveResponse, resolveUrl, getExtensionToken, regenerateExtensionToken, ExtensionToken, getUserSettings, updateUserSettings, getCookies, forgetCookies, extensionDownloadUrl, type CookieStatus, type UserSettings } from '@/lib/api';
+import { prewarmVideo } from '@/lib/prewarm';
+import { ResolveResponse, dashManifestUrl, resolveUrl, getExtensionToken, regenerateExtensionToken, ExtensionToken, getUserSettings, updateUserSettings, getCookies, forgetCookies, extensionDownloadUrl, type CookieStatus, type UserSettings } from '@/lib/api';
 import { CustomPlayer } from '@/components/custom-player';
 import { chapterAt, formatChapterTime } from '@/lib/chapters';
 import { LiveChat } from '@/components/live-chat';
@@ -38,6 +39,7 @@ import {
     FONT_SIZE_DEFAULT,
     FONT_SIZE_MAX,
     FONT_SIZE_MIN,
+    PREWARM_NEXT_VIDEO_SECONDS,
     SIDEBAR_DEFAULT_WIDTH,
     SIDEBAR_MAX_WIDTH,
     SIDEBAR_MIN_WIDTH,
@@ -784,18 +786,38 @@ export default function RoomPage() {
     // Manifest describing the adaptive streams, for the MSE engine. The
     // backend builds it from the formats it already resolved, so it is
     // addressed by the original video URL rather than a stream URL.
+    // Which entry the room will play next, mirroring the server's own
+    // choice: a pinned video stays in the queue and is passed over, and the
+    // entry after the last one is the first.
+    const upcomingEntry = (): ResolveResponse | undefined => {
+        if (queue.length === 0) return undefined;
+        if (playingIndex >= 0 && playingIndex < queue.length && queue[playingIndex].pinned) {
+            return queue[playingIndex + 1];
+        }
+        const remaining = queue.filter((_entry, index) => index !== playingIndex);
+        if (remaining.length === 0) return undefined;
+        return remaining[playingIndex >= 0 && playingIndex < remaining.length ? playingIndex : 0];
+    };
+
+    // Ask for the next video while the current one finishes. The server
+    // prepares it on its own beat too; this covers what that beat cannot
+    // see, and costs one request that usually answers from a warm cache.
+    useEffect(() => {
+        const duration = videoData?.duration;
+        if (!duration || videoData?.is_live) return;
+        if (duration - actualPlayerTime > PREWARM_NEXT_VIDEO_SECONDS) return;
+        const upcoming = upcomingEntry();
+        if (!upcoming) return;
+        void prewarmVideo(upcoming.original_url, roomId, upcoming.stream_type);
+        // `actualPlayerTime` ticks with playback; prewarmVideo itself only
+        // acts once per video, so this stays a single request.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [actualPlayerTime, videoData, queue, playingIndex, roomId]);
+
     const getManifestUrl = () => {
         if (!videoData || videoData.stream_type !== 'dash') return undefined;
         if (!videoData.original_url) return undefined;
-        // Identity travels as a query parameter in development mode, the
-        // same way the other client calls carry it.
-        const mockUser = typeof window === 'undefined'
-            ? null
-            : new URLSearchParams(window.location.search).get('user');
-        const userSuffix = mockUser ? `&user=${encodeURIComponent(mockUser)}` : '';
-        // The room lets the backend borrow a member's cookies if it has to
-        // resolve the video again (after a restart, or an expired entry).
-        return `${BACKEND_ORIGIN}/api/dash-manifest?url=${encodeURIComponent(videoData.original_url)}&room=${encodeURIComponent(roomId)}${userSuffix}`;
+        return dashManifestUrl(videoData.original_url, roomId);
     };
 
     // Get DASH-specific URLs (proxied if needed)

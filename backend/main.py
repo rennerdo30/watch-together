@@ -30,7 +30,7 @@ from core.config import (
     CACHE_DIR, YTDLP_CACHE_DIR, GUEST_IDENTITY,
     MAX_CACHEABLE_FILE_BYTES, FORMAT_CACHE_TTL_SECONDS,
     METRICS_DEFAULT_SAMPLE_LIMIT, POT_PROVIDER_EXTRACTOR_ARGS,
-    MANIFEST_MAX_VIDEO_REPRESENTATIONS, MANIFEST_MAX_AUDIO_REPRESENTATIONS,
+    PREWARM_NEXT_VIDEO_SECONDS, DEFAULT_USER_AGENT,
 )
 from core.security import (
     get_user_from_request, get_user_from_websocket,
@@ -53,7 +53,8 @@ from services.upstream import (
     open_upstream_stream, resolve_upstream,
 )
 from services.user_cookies import choose_cookie_source, cookie_file, get_cookie_header
-from services.manifest import build_manifest_for_formats, ManifestError
+from services.manifest import build_manifest_for_formats, manifest_formats, probe_formats, ManifestError
+from services import prewarm
 from services.metrics import (
     proxy_metrics, OUTCOME_OK, OUTCOME_UPSTREAM_ERROR,
     OUTCOME_CLIENT_ABORTED, OUTCOME_TRUNCATED,
@@ -77,6 +78,25 @@ sponsor_skipper = SponsorSkipper(manager)
 # A skip moves the room; the history reporter closes the watched range there
 # rather than crediting the skipped stretch as watched.
 sponsor_skipper.on_skip = history_reporter.rearm
+
+
+def _warm_skip_destination(video_data: dict, seconds: float) -> None:
+    """Fetch the bytes on the far side of a scheduled skip.
+
+    A skip empties every viewer's buffer at a position none of them has
+    fetched, so without this the room stares at a spinner for exactly as
+    long as one segment takes to arrive from the CDN.
+    """
+    # Only warm once the proxy client exists; before the first request
+    # there is nothing to fetch with, and creating it here would make a
+    # speculative fetch the thing that opens the connection pool.
+    if _proxy_client is None:
+        return
+    prewarm.warm_position(_proxy_client, video_data, seconds,
+                          identity=video_data.get(stream_owner.RESOLVED_BY_KEY))
+
+
+sponsor_skipper.prewarm = _warm_skip_destination
 
 # Configure logging. LOG_LEVEL=DEBUG turns on the per-transfer proxy traces,
 # which record the byte range the origin actually received — the only way to
@@ -160,6 +180,51 @@ async def cleanup_task():
         await manager.cleanup_stale_rooms(ttl_seconds=300)
 
 
+async def _prepare_queued_video(video_data: dict) -> Optional[dict]:
+    """Probe a queued video's renditions so the advance hits warm caches.
+
+    Everything the first moments of a video wait on happens here instead:
+    the index probe of every rendition (which is what building the manifest
+    spends its time on) and, through the caller, the opening bytes. The
+    cached resolve is preferred over the queue entry because signed stream
+    URLs rotate, and probing an expired one warms nothing.
+    """
+    original_url = video_data.get("original_url")
+    source = (await get_cached_format(original_url)) if original_url else None
+    source = source or video_data
+    video_formats, audio_formats = manifest_formats(source)
+    if not video_formats or not audio_formats:
+        return None
+
+    stream_owner.remember(source)
+    identity = source.get(stream_owner.RESOLVED_BY_KEY)
+    headers = {"User-Agent": DEFAULT_USER_AGENT, "Referer": "https://www.youtube.com/"}
+    cookie_header = get_cookie_header(identity, video_formats[0]["url"]) if identity else None
+    if cookie_header:
+        headers["Cookie"] = cookie_header
+
+    probed = await probe_formats(await get_proxy_client(),
+                                 video_formats + audio_formats, headers)
+    logger.info(f"Prepared {probed}/{len(video_formats) + len(audio_formats)} "
+                f"representations of the next video: {original_url}")
+    return source
+
+
+def _warm_next_video_if_close(room_id: str, state: dict, position: float) -> None:
+    """Prepare the next queue entry as the current video runs out."""
+    if _proxy_client is None:
+        return
+    video = state.get("video_data") or {}
+    duration = video.get("duration")
+    if video.get("is_live") or not duration:
+        return
+    if float(duration) - position > PREWARM_NEXT_VIDEO_SECONDS:
+        return
+    upcoming = manager.peek_next_video(room_id)
+    if upcoming:
+        prewarm.warm_video(_proxy_client, upcoming, _prepare_queued_video)
+
+
 async def sync_heartbeat_task():
     """Background task for sync heartbeat - broadcasts authoritative time every 5 seconds."""
     consecutive_errors = 0
@@ -179,6 +244,9 @@ async def sync_heartbeat_task():
                             "is_playing": True
                         }
                     }, room_id)
+                    # The room is about to need the next video; the beat that
+                    # already knows where everyone is, is where that is seen.
+                    _warm_next_video_if_close(room_id, state, sync_payload.get("timestamp", 0))
             consecutive_errors = 0
         except Exception as e:
             consecutive_errors += 1
@@ -230,6 +298,7 @@ async def lifespan(app: FastAPI):
 
         if tasks:
             logger.info("All background tasks shut down cleanly")
+        await prewarm.shutdown()
         await shutdown_prefetch()
         await sponsor_skipper.client.aclose()
         await history_reporter.aclose()
@@ -582,33 +651,7 @@ async def dash_manifest(request: Request, url: str, room: str = None):
     if not duration:
         raise HTTPException(status_code=422, detail="Video duration is unknown")
 
-    video_formats = [
-        {
-            "id": quality.get("format_id") or f"v{position}",
-            "url": quality.get("video_url"),
-            "width": quality.get("width"),
-            "height": quality.get("height"),
-            "vcodec": quality.get("vcodec"),
-            "tbr": quality.get("tbr"),
-            "fps": quality.get("fps"),
-        }
-        for position, quality in enumerate(
-            cached.get("available_qualities", [])[:MANIFEST_MAX_VIDEO_REPRESENTATIONS]
-        )
-    ]
-    audio_formats = [
-        {
-            "id": option.get("format_id") or f"a{position}",
-            "url": option.get("audio_url"),
-            "acodec": option.get("acodec"),
-            "abr": option.get("abr"),
-            "asr": option.get("asr"),
-            "audio_channels": option.get("audio_channels"),
-        }
-        for position, option in enumerate(
-            cached.get("audio_options", [])[:MANIFEST_MAX_AUDIO_REPRESENTATIONS]
-        )
-    ]
+    video_formats, audio_formats = manifest_formats(cached)
 
     if not video_formats or not audio_formats:
         raise HTTPException(status_code=422, detail="Video has no adaptive streams")
@@ -811,6 +854,10 @@ async def proxy_stream(request: Request, url: str):
             is_audio = is_audio_url(url)
             if range_header:
                 prefetch_ahead(segment_client, url, range_end, fetch_identity)
+                # Which rendition the room is on is only visible here: the
+                # player chooses it and never says so. A skip is warmed on
+                # what is being fetched, not on what the resolve preferred.
+                prewarm.note_active_stream(url)
             mem_result = await memory_cache.get(segment_cache_key)
             if mem_result is None and range_header and re.fullmatch(r'bytes=\d+-\d*', range_header):
                 mem_result = await memory_cache.get_range(url, range_start, range_end, cache_identity)

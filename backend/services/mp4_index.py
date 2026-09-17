@@ -9,10 +9,11 @@ initialization segment ends and where the segment index (`sidx`) lives.
 Both facts sit in the first few kilobytes of the file, in the ISO-BMFF
 box headers, so a single small range request is enough to find them.
 """
+import bisect
 import struct
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,14 @@ _TO_EOF_MARKER = 0
 # Boxes that make up the initialization segment, in file order.
 _INIT_BOXES = (b"ftyp", b"moov")
 _INDEX_BOX = b"sidx"
+
+# `sidx` layout (ISO/IEC 14496-12): after the box header come a version byte
+# and three flag bytes, then reference_ID and timescale; the presentation
+# time and first offset are 32-bit in version 0 and 64-bit above it; then two
+# reserved bytes, the reference count, and that many 12-byte entries.
+_FULLBOX_HEADER = 12
+_REFERENCE_ENTRY = 12
+_SIZE_MASK = 0x7FFFFFFF
 
 
 @dataclass(frozen=True)
@@ -133,4 +142,94 @@ def parse_index(data: bytes) -> Optional[Mp4Index]:
         init_end=init_end - 1,
         index_start=index_start,
         index_end=index_end - 1,
+    )
+
+
+@dataclass(frozen=True)
+class SegmentTable:
+    """Where each subsegment of a fragmented MP4 starts, in bytes and seconds.
+
+    The `sidx` box the manifest needs for its byte ranges also describes
+    every subsegment's size and duration. Read once, that turns a playback
+    position into the byte offset serving it — which is what makes it
+    possible to warm the bytes a viewer is about to need after a jump,
+    rather than guessing from the file's average bitrate. A jump is exactly
+    where a guess is worst: bitrate varies, and being 5 % wrong on a 200 MB
+    rendition warms the wrong ten megabytes.
+    """
+
+    #: Byte offset of each subsegment, in file order.
+    offsets: Tuple[int, ...]
+    #: Presentation time each subsegment starts at, in seconds.
+    starts: Tuple[float, ...]
+    #: Total duration the index covers, in seconds.
+    duration: float
+
+    def offset_at(self, seconds: float) -> Optional[int]:
+        """Byte offset of the subsegment covering `seconds`.
+
+        A position past the end has no subsegment; a position before the
+        start belongs to the first one.
+        """
+        if not self.offsets or seconds < 0 or seconds >= self.duration:
+            return None
+        position = bisect.bisect_right(self.starts, seconds) - 1
+        return self.offsets[max(0, position)]
+
+
+def parse_segment_table(data: bytes, index: Mp4Index) -> Optional[SegmentTable]:
+    """Read the subsegment table out of an already-located `sidx`.
+
+    `data` is the same prefix `parse_index` read, so this costs no extra
+    request. Returns None when the box is truncated or malformed rather
+    than raising: a rendition whose index cannot be read still plays, it
+    just cannot be warmed ahead of a jump.
+    """
+    start = index.index_start
+    end = index.index_end + 1
+    if start + _FULLBOX_HEADER > len(data) or end > len(data):
+        return None
+
+    (version,) = struct.unpack_from(">B", data, start + 8)
+    cursor = start + _FULLBOX_HEADER
+    try:
+        (timescale,) = struct.unpack_from(">I", data, cursor + 4)
+        cursor += 8
+        # earliest_presentation_time and first_offset, both of which widen
+        # together above version 0.
+        if version == 0:
+            (_earliest, first_offset) = struct.unpack_from(">II", data, cursor)
+            cursor += 8
+        else:
+            (_earliest, first_offset) = struct.unpack_from(">QQ", data, cursor)
+            cursor += 16
+        (reference_count,) = struct.unpack_from(">H", data, cursor + 2)
+        cursor += 4
+    except struct.error:
+        return None
+
+    if not timescale or not reference_count:
+        return None
+    if cursor + reference_count * _REFERENCE_ENTRY > end:
+        logger.debug("sidx declares %d references but the box ends early", reference_count)
+        return None
+
+    offsets = []
+    starts = []
+    # The first subsegment begins where the index box ends, plus whatever
+    # the box itself declares.
+    offset = end + first_offset
+    ticks = 0
+    for _ in range(reference_count):
+        (raw_size, raw_duration) = struct.unpack_from(">II", data, cursor)
+        cursor += _REFERENCE_ENTRY
+        offsets.append(offset)
+        starts.append(ticks / timescale)
+        offset += raw_size & _SIZE_MASK
+        ticks += raw_duration
+
+    return SegmentTable(
+        offsets=tuple(offsets),
+        starts=tuple(starts),
+        duration=ticks / timescale,
     )

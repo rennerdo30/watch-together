@@ -4,6 +4,12 @@ import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import Hls from 'hls.js';
 
 import { startPlayback, type PlaybackStart } from '@/lib/playback';
+import {
+    HLS_BACK_BUFFER_SECONDS,
+    HLS_BUFFER_LENGTH_SECONDS,
+    HLS_BUFFER_SIZE_BYTES,
+    HLS_MAX_BUFFER_LENGTH_SECONDS,
+} from '@/lib/constants';
 
 export interface UseHlsPlayerOptions {
     videoRef: React.RefObject<HTMLVideoElement | null>;
@@ -229,10 +235,12 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
             const hls = new Hls({
                 enableWorker: true,
                 lowLatencyMode: isLive,
-                // Buffer configuration for reduced buffering
-                backBufferLength: 120,          // Keep 2 minutes of back buffer (was 90)
-                maxBufferLength: 60,            // Buffer up to 60 seconds ahead
-                maxMaxBufferLength: 120,        // Allow up to 2 minutes in good conditions
+                // How far ahead playback is carried without the network;
+                // see the constants for what bounds it.
+                backBufferLength: HLS_BACK_BUFFER_SECONDS,
+                maxBufferLength: HLS_BUFFER_LENGTH_SECONDS,
+                maxMaxBufferLength: HLS_MAX_BUFFER_LENGTH_SECONDS,
+                maxBufferSize: HLS_BUFFER_SIZE_BYTES,
                 liveSyncDurationCount: 4,       // Sync 4 segments behind live edge (was 3)
                 // Quality selection
                 startLevel: -1,                 // Auto-select initial quality

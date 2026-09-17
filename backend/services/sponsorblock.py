@@ -35,6 +35,7 @@ from core.config import (
     SPONSORBLOCK_HASH_PREFIX_LENGTH,
     SPONSORBLOCK_MIN_SEGMENT_SECONDS,
     SPONSORBLOCK_SKIP_TOLERANCE_SECONDS,
+    PREWARM_SKIP_LEAD_SECONDS as SPONSORBLOCK_PREWARM_LEAD_SECONDS,
     SPONSORBLOCK_TIMEOUT_SECONDS,
     SPONSORBLOCK_USER_AGENT,
 )
@@ -318,6 +319,11 @@ class SponsorSkipper:
         # like a member's seek does, and whatever tracks position (the
         # watch-history reporter) has to learn about it the same way.
         self.on_skip: Optional[Callable[[str], None]] = None
+        # Called with (video_data, seconds) shortly before a skip fires. A
+        # skip lands everyone in an empty buffer at a position nobody has
+        # fetched, and unlike a member's seek this one is on a schedule —
+        # so the bytes can be there first.
+        self.prewarm: Optional[Callable[[dict, float], None]] = None
 
     # ----- position helpers -------------------------------------------------
 
@@ -449,7 +455,17 @@ class SponsorSkipper:
                     return
                 wait = segment.start - position
                 if wait > 0:
-                    await self._sleep(wait)
+                    # Warm the destination before sleeping out the rest of
+                    # the wait. Earlier than this and the bytes can be
+                    # evicted before they are used; later and the fetch is
+                    # still in flight when the room jumps.
+                    lead = min(wait, SPONSORBLOCK_PREWARM_LEAD_SECONDS)
+                    if wait > lead:
+                        await self._sleep(wait - lead)
+                        if not self._still_waiting(room_id, segment):
+                            continue
+                    self._prewarm_destination(room_id, segment)
+                    await self._sleep(lead)
                     state = self._manager.room_states.get(room_id)
                     if not state or not state.get("is_playing") or state.get("startup_pending"):
                         return
@@ -457,8 +473,7 @@ class SponsorSkipper:
                     # re-arm cancels this task. Skipping then would overwrite
                     # the position they just chose, so only skip if the room
                     # really is at this segment now; otherwise start over.
-                    position = self._position(state)
-                    if not (segment.start - SPONSORBLOCK_SKIP_TOLERANCE_SECONDS <= position < segment.end):
+                    if not self._still_waiting(room_id, segment, at_segment=True):
                         continue
                 await self._skip(room_id, segment)
         except asyncio.CancelledError:
@@ -467,6 +482,34 @@ class SponsorSkipper:
             logger.exception("SponsorBlock skip failed for room %s", room_id)
         finally:
             self._release(self._tasks, room_id)
+
+    def _still_waiting(self, room_id: str, segment: Segment,
+                       at_segment: bool = False) -> bool:
+        """Is this room still heading for (or sitting in) this segment?
+
+        A pause, a seek or a new video during the wait means the skip that
+        was scheduled no longer describes the room.
+        """
+        state = self._manager.room_states.get(room_id)
+        if not state or not state.get("is_playing") or state.get("startup_pending"):
+            return False
+        position = self._position(state)
+        if at_segment:
+            return segment.start - SPONSORBLOCK_SKIP_TOLERANCE_SECONDS <= position < segment.end
+        return position < segment.end
+
+    def _prewarm_destination(self, room_id: str, segment: Segment) -> None:
+        """Ask for the bytes the room will need on the far side of the skip."""
+        if self.prewarm is None:
+            return
+        state = self._manager.room_states.get(room_id) or {}
+        video = state.get("video_data") or {}
+        if not video:
+            return
+        try:
+            self.prewarm(video, segment.end)
+        except Exception:  # Never let speculation break a skip.
+            logger.exception("SponsorBlock prewarm failed for room %s", room_id)
 
     async def _skip(self, room_id: str, segment: Segment) -> None:
         logger.info("SponsorBlock: room %s skips %s %.1fs-%.1fs",

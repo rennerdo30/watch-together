@@ -56,6 +56,38 @@ PREFETCH_VIDEO_COUNT = 3  # Number of video segments to prefetch
 PREFETCH_AUDIO_COUNT = 5  # Number of audio segments to prefetch (more critical)
 PREFETCH_SESSION_TTL = 300  # 5 minutes - cleanup inactive prefetch sessions
 
+# --- Warming what the room is about to need ---------------------------------
+# A jump lands in an empty buffer, so the player shows nothing until a whole
+# segment has arrived from the CDN. Both kinds of jump this room makes are
+# known in advance — a SponsorBlock skip is scheduled, and the next queue
+# entry is coming as the current video runs out — so the bytes can be in the
+# cache before anyone asks for them.
+
+# How long before a scheduled skip its destination is warmed. Long enough to
+# cover fetching a few megabytes from the CDN, short enough that the bytes
+# are still in the memory cache when the skip fires.
+PREWARM_SKIP_LEAD_SECONDS = 20
+# How much of the destination to warm, per stream. A video subsegment of a
+# high rendition runs to a few megabytes; audio is far smaller.
+PREWARM_VIDEO_BYTES = 4 * 1024 * 1024
+PREWARM_AUDIO_BYTES = 1 * 1024 * 1024
+# How close to the end of a video the next queue entry is prepared: its
+# manifest is built (which probes every rendition) and its opening bytes are
+# warmed, so the advance hits caches all the way down.
+PREWARM_NEXT_VIDEO_SECONDS = 45
+# Ceiling on warms in flight, so a busy instance cannot spend itself on
+# speculation. Demand requests never wait on these.
+PREWARM_MAX_TASKS = 6
+# How many renditions of each kind one warm may cover. A room usually has
+# everyone on the same rung, but a viewer with a small window and one in
+# fullscreen are legitimately on different ones.
+PREWARM_MAX_VIDEO_RENDITIONS = 2
+PREWARM_MAX_AUDIO_RENDITIONS = 1
+# How long a stream counts as "being played" after its last segment request,
+# and how many such streams are remembered at once.
+ACTIVE_STREAM_TTL_SECONDS = 120
+ACTIVE_STREAM_LIMIT = 64
+
 # Format cache configuration
 FORMAT_CACHE_TTL_SECONDS = 7200  # 2 hours - YouTube URLs typically valid for 6 hours
 # Live streams get a much shorter entry. A live playlist URL carries a signed

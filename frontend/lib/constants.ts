@@ -51,9 +51,34 @@ export const COPY_FEEDBACK_DURATION_MS = 2000;
  */
 export const BACKEND_ORIGIN = process.env.NEXT_PUBLIC_BACKEND_ORIGIN ?? '';
 
-/** Seconds of media Shaka buffers ahead of, and keeps behind, the playhead. */
-export const SHAKA_BUFFER_GOAL_SECONDS = 60;
+/**
+ * Seconds of media the player buffers ahead of, and keeps behind, the
+ * playhead.
+ *
+ * Buffering far ahead is what carries playback across a wobble on a
+ * long-haul link: every segment crosses viewer -> Cloudflare -> tunnel ->
+ * origin -> CDN, so a minute of cushion is a minute of not depending on
+ * that path. What bounds it is memory rather than bandwidth — the browser
+ * holds the buffered media, and an over-large buffer is evicted by the
+ * media source rather than helping — and the fact that anything buffered
+ * is discarded by a seek, a skip or a quality switch.
+ *
+ * The back buffer stays small on purpose: it only serves a short step
+ * backwards, and it competes with the forward buffer for the same memory.
+ */
+export const SHAKA_BUFFER_GOAL_SECONDS = 180;
 export const SHAKA_BUFFER_BEHIND_SECONDS = 30;
+
+/**
+ * hls.js buffers by seconds and by bytes, and reaches neither goal without
+ * the other: the default size ceiling is 60 MB, which a high rendition
+ * fills long before the length goal. Live streams are bounded by the
+ * playlist rather than by these.
+ */
+export const HLS_BUFFER_LENGTH_SECONDS = 180;
+export const HLS_MAX_BUFFER_LENGTH_SECONDS = 300;
+export const HLS_BUFFER_SIZE_BYTES = 200 * 1000 * 1000;
+export const HLS_BACK_BUFFER_SECONDS = 120;
 
 /**
  * How much must be buffered before playback starts or resumes.
@@ -129,10 +154,14 @@ export const SHAKA_SWITCH_INTERVAL_SECONDS = 4;
  * upward switch was invisible for that long, which reads as "auto is stuck
  * on low". Clearing beyond this margin makes a switch visible in seconds.
  * The margin is what protects the other direction — a downward switch on a
- * congested link still keeps more than `SHAKA_REBUFFER_GOAL_SECONDS` of
+ * congested link still keeps several times `SHAKA_REBUFFER_GOAL_SECONDS` of
  * already-downloaded media while the lower rendition refills.
+ *
+ * It is also what a switch costs: everything past the margin was fetched
+ * and is thrown away. That price rises with the buffer goal, so the margin
+ * is a good deal larger than the rebuffering goal.
  */
-export const SHAKA_SWITCH_SAFE_MARGIN_SECONDS = 10;
+export const SHAKA_SWITCH_SAFE_MARGIN_SECONDS = 20;
 
 /**
  * How many segments Shaka may fetch ahead of the one it needs next.
@@ -186,6 +215,15 @@ export const SHAKA_CACHE_LOAD_THRESHOLD_MS = 5;
  * change with every segment; the overlay only has to stay readable.
  */
 export const PLAYER_STATS_REFRESH_MS = 1000;
+
+/**
+ * How close to the end of a video its successor is prepared, in seconds.
+ *
+ * The server does this on its own beat; the client asks as well, because
+ * the server only sees rooms that are playing and only knows a duration it
+ * was told. Both are idempotent: the work lands in the same caches.
+ */
+export const PREWARM_NEXT_VIDEO_SECONDS = 45;
 
 /**
  * How rarely a player repeats an unchanged quality report to the server, in

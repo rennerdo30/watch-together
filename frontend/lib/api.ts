@@ -300,6 +300,24 @@ export interface AdminCacheReport {
     };
 }
 
+/**
+ * Where a video's generated DASH manifest lives.
+ *
+ * The room is named so the backend may borrow a member's cookies if it has
+ * to resolve the video again — after a restart, or for an entry whose
+ * signed URLs have expired.
+ */
+export function dashManifestUrl(originalUrl: string, roomId: string): string {
+    // Identity travels as a query parameter in development mode, the same
+    // way the other client calls carry it.
+    const mockUser = typeof window === 'undefined'
+        ? null
+        : new URLSearchParams(window.location.search).get('user');
+    const userSuffix = mockUser ? `&user=${encodeURIComponent(mockUser)}` : '';
+    return `${BACKEND_ORIGIN}/api/dash-manifest?url=${encodeURIComponent(originalUrl)}`
+        + `&room=${encodeURIComponent(roomId)}${userSuffix}`;
+}
+
 // Identity travels as a query parameter in development mode, the same way
 // the other client calls carry it.
 const devUserSuffix = (leading: '?' | '&'): string => {
