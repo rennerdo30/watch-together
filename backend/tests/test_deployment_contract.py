@@ -185,6 +185,42 @@ class TestPlayerToleratesHighLatency:
         assert "SHAKA_SEGMENT_RETRIES" in text
         assert "SHAKA_REQUEST_TIMEOUT_MS" in text
 
+    def test_both_engines_buffer_deep_enough_to_ride_out_the_path(self):
+        """A wobble on the tunnel must not reach the viewer.
+
+        Each engine has its own ceiling, and hls.js has two: it stops at
+        whichever of its length and size limits it meets first, so raising
+        one alone leaves the other in charge.
+        """
+        import re
+
+        text = self.PLAYER_CONSTANTS.read_text()
+        goals = {
+            name: int(re.search(rf"{name} = ([\d_]+)", text).group(1).replace("_", ""))
+            for name in ("SHAKA_BUFFER_GOAL_SECONDS", "HLS_BUFFER_LENGTH_SECONDS",
+                         "HLS_MAX_BUFFER_LENGTH_SECONDS")
+        }
+        assert goals["SHAKA_BUFFER_GOAL_SECONDS"] >= 120
+        assert goals["HLS_BUFFER_LENGTH_SECONDS"] >= 120
+        assert goals["HLS_MAX_BUFFER_LENGTH_SECONDS"] >= goals["HLS_BUFFER_LENGTH_SECONDS"]
+        size = re.search(r"HLS_BUFFER_SIZE_BYTES = ([\d_ *]+);", text)
+        assert size, "hls.js also stops at a byte ceiling; it has to be raised with the length"
+
+    def test_a_quality_switch_does_not_discard_the_whole_buffer(self):
+        """What a switch clears is what was already paid for.
+
+        The deeper the buffer, the more an upward switch throws away, so
+        the margin it keeps has to stay well above the resume threshold.
+        """
+        import re
+
+        text = self.PLAYER_CONSTANTS.read_text()
+        margin = int(re.search(r"SHAKA_SWITCH_SAFE_MARGIN_SECONDS = (\d+)", text).group(1))
+        resume = int(re.search(r"SHAKA_REBUFFER_GOAL_SECONDS = (\d+)", text).group(1))
+        goal = int(re.search(r"SHAKA_BUFFER_GOAL_SECONDS = (\d+)", text).group(1))
+        assert margin >= resume * 2, "a switch must not leave less than the resume threshold"
+        assert margin < goal, "a margin at the buffer goal would make switching a no-op"
+
 
 class TestPlaybackEngineIsNotKeyedOnRoomState:
     """The engine is built once per stream, not once per state change.

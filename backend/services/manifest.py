@@ -16,13 +16,13 @@ import asyncio
 import logging
 import time
 from xml.sax.saxutils import escape, quoteattr
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 from urllib.parse import quote
 
 import httpx
 
 from services.cache import stream_identity
-from services.mp4_index import Mp4Index, parse_index, index_span
+from services.mp4_index import Mp4Index, SegmentTable, parse_index, parse_segment_table, index_span
 from services.upstream import open_upstream_stream, UnsafeUpstreamError
 from core.config import (
     MANIFEST_PROBE_BYTES,
@@ -30,6 +30,8 @@ from core.config import (
     MANIFEST_INDEX_CACHE_TTL_SECONDS,
     MANIFEST_INDEX_CACHE_MAX_ENTRIES,
     MANIFEST_MIN_BANDWIDTH,
+    MANIFEST_MAX_VIDEO_REPRESENTATIONS,
+    MANIFEST_MAX_AUDIO_REPRESENTATIONS,
 )
 
 logger = logging.getLogger(__name__)
@@ -37,6 +39,10 @@ logger = logging.getLogger(__name__)
 # Cache of probed byte ranges. Keyed by the URL's cache-stable identity
 # so re-resolving the same video does not re-probe every representation.
 _index_cache: Dict[str, Tuple[Mp4Index, float]] = {}
+# The same probe also describes where each subsegment starts in time, which
+# is what lets a jump be warmed at the right byte offset. Kept beside the
+# index and dropped with it.
+_segment_tables: Dict[str, SegmentTable] = {}
 _index_lock = asyncio.Lock()
 # One probe in flight per representation: a room full of members asking for
 # the same manifest at once otherwise probes every rendition once each.
@@ -56,10 +62,12 @@ async def _prune_index_cache(now: float) -> None:
     ]
     for key in expired:
         del _index_cache[key]
+        _segment_tables.pop(key, None)
 
     while len(_index_cache) > MANIFEST_INDEX_CACHE_MAX_ENTRIES:
         oldest = min(_index_cache, key=lambda k: _index_cache[k][1])
         del _index_cache[oldest]
+        _segment_tables.pop(oldest, None)
 
 
 async def probe_index(
@@ -140,8 +148,14 @@ async def _probe_index_locked(
         logger.warning(f"No fragmented-MP4 index found in {url[:80]}")
         return None
 
+    table = parse_segment_table(data, index)
+    if table is None:
+        logger.debug("No subsegment table read from %s...", url[:60])
+
     async with _index_lock:
         _index_cache[key] = (index, now)
+        if table is not None:
+            _segment_tables[key] = table
         await _prune_index_cache(now)
 
     return index
@@ -150,6 +164,18 @@ async def _probe_index_locked(
 def clear_index_cache() -> None:
     """Forget every probed range (used by tests)."""
     _index_cache.clear()
+    _segment_tables.clear()
+
+
+def segment_table_for(url: str) -> Optional[SegmentTable]:
+    """Where each subsegment of this rendition starts, if it has been probed.
+
+    Returns None for a rendition nobody has built a manifest for yet, and
+    for one whose index could not be read. Both mean the same thing to a
+    caller: this stream cannot be warmed at a position, only from the
+    beginning.
+    """
+    return _segment_tables.get(stream_identity(url))
 
 
 def _duration_attr(seconds: float) -> str:
@@ -275,6 +301,62 @@ def build_mpd(
     lines.append('  </Period>')
     lines.append('</MPD>')
     return "\n".join(lines)
+
+
+def manifest_formats(cached: dict) -> Tuple[List[dict], List[dict]]:
+    """Turn a resolve response into the representations a manifest describes.
+
+    One reading of the resolve shape, used both when a player asks for the
+    manifest and when a queued video is prepared ahead of time — so the
+    ladder prepared is the ladder served.
+    """
+    video_formats = [
+        {
+            "id": quality.get("format_id") or f"v{position}",
+            "url": quality.get("video_url"),
+            "width": quality.get("width"),
+            "height": quality.get("height"),
+            "vcodec": quality.get("vcodec"),
+            "tbr": quality.get("tbr"),
+            "fps": quality.get("fps"),
+        }
+        for position, quality in enumerate(
+            (cached.get("available_qualities") or [])[:MANIFEST_MAX_VIDEO_REPRESENTATIONS]
+        )
+    ]
+    audio_formats = [
+        {
+            "id": option.get("format_id") or f"a{position}",
+            "url": option.get("audio_url"),
+            "acodec": option.get("acodec"),
+            "abr": option.get("abr"),
+            "asr": option.get("asr"),
+            "audio_channels": option.get("audio_channels"),
+        }
+        for position, option in enumerate(
+            (cached.get("audio_options") or [])[:MANIFEST_MAX_AUDIO_REPRESENTATIONS]
+        )
+    ]
+    return video_formats, audio_formats
+
+
+async def probe_formats(
+    client: httpx.AsyncClient,
+    formats: Sequence[dict],
+    headers: Optional[dict] = None,
+) -> int:
+    """Probe representations without rendering anything, and say how many held.
+
+    Building the manifest for a video the room has not reached yet is
+    pointless — the XML would be thrown away — but the probes behind it are
+    not: they are what the advance would otherwise wait on, and they fill
+    the subsegment tables a later skip is warmed from.
+    """
+    results = await asyncio.gather(*[
+        probe_index(client, fmt["url"], headers)
+        for fmt in formats if fmt.get("url")
+    ], return_exceptions=True)
+    return sum(1 for result in results if isinstance(result, Mp4Index))
 
 
 async def build_manifest_for_formats(

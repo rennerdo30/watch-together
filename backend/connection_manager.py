@@ -779,6 +779,34 @@ class ConnectionManager:
                 await self._save_room_state(room_id)
                 return None, queue, -1, True
 
+    def peek_next_video(self, room_id: str) -> Optional[dict]:
+        """Which queue entry would play next, without advancing anything.
+
+        Mirrors `next_video`'s choice, and lives beside it for that reason:
+        the entry prepared while the current video finishes has to be the
+        entry that then plays, or the preparation was spent on the wrong
+        video. Read-only — it changes no state and removes nothing.
+        """
+        state = self.room_states.get(room_id)
+        if not state:
+            return None
+        queue = state.get("queue") or []
+        if not queue:
+            return None
+        playing_index = state.get("playing_index", -1)
+
+        # A pinned video stays in the queue, so the room moves past it.
+        if 0 <= playing_index < len(queue) and queue[playing_index].get("pinned", False):
+            following = playing_index + 1
+            return queue[following] if following < len(queue) else None
+
+        # Otherwise the finished entry is removed and the next one takes its
+        # place; when it was the last, the queue starts over from the front.
+        remaining = [entry for index, entry in enumerate(queue) if index != playing_index]
+        if not remaining:
+            return None
+        return remaining[playing_index if 0 <= playing_index < len(remaining) else 0]
+
     async def toggle_pin(self, room_id: str, index: int):
         """Toggle the pinned status of a queue item."""
         if room_id in self.room_states:

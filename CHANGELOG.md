@@ -51,6 +51,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **The room prepares what it is about to need**: both of its jumps are
+  known before they happen, and both used to land in an empty buffer on
+  bytes nobody had fetched. A SponsorBlock skip now has its destination
+  warmed while the sponsor is still playing — at the exact byte offset,
+  read from the subsegment table in each rendition's index, and for the
+  renditions viewers are actually fetching rather than the one the resolve
+  called best. The next queue entry is prepared as the current video runs
+  out: every rendition probed (which is what building its manifest spends
+  its time on) and its opening bytes fetched, so the advance hits warm
+  caches. The server does this from the position it already broadcasts; the
+  player asks as well, which covers a room paused near the end of a video
+  or an entry whose duration the server was never told.
+
 - **Auto quality is now a choice, and it explains itself**: player settings
   gained an *Auto quality* mode — Balanced (the cap above, unchanged and
   still the default), Highest (follow the connection alone, ignoring the
@@ -95,6 +108,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   disables the panel entirely.
 
 ### Changed
+
+- The player buffers three minutes ahead instead of one (hls.js was also
+  raised past the 60 MB size ceiling that stopped it reaching any length
+  goal), so a wobble on the long path from the origin no longer reaches the
+  viewer. What a quality switch discards grows with that buffer, so the
+  margin a switch keeps was doubled to twenty seconds.
+
 
 - **Visual Language**: the palette moves from a violet accent on pure-neutral
   greys to a cool slate with one signal red — red already means "live" next to a
