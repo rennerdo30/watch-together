@@ -2335,6 +2335,15 @@ export default function RoomPage() {
                                         {/* Download Links */}
                                         <div className="space-y-2">
                                             <span className="ui-label">Install Extension</span>
+                                            {/* Chrome remembers an unpacked extension by the folder
+                                                it was loaded from and drops it when that folder
+                                                moves or is rewritten underneath it — which is why
+                                                one loaded straight from a checkout disappears. */}
+                                            <p className="text-[10px] leading-relaxed text-zinc-500">
+                                                Unzip it somewhere permanent before loading it — not Downloads,
+                                                a temporary folder, or a checkout of the source. A browser forgets
+                                                an extension whose folder moves, and you would have to add it again.
+                                            </p>
                                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                                 <a
                                                     href={extensionDownloadUrl('chrome')}
