@@ -133,6 +133,16 @@ def empty_playback_history():
 
 
 @pytest.fixture(autouse=True)
+def reset_prewarm_state():
+    """A video one test could not prepare must not stay backed off."""
+    from services import prewarm
+
+    prewarm.forget_failures()
+    yield
+    prewarm.forget_failures()
+
+
+@pytest.fixture(autouse=True)
 def reset_room_state():
     """Keep room state from leaking between tests."""
     from connection_manager import manager

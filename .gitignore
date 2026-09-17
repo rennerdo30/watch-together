@@ -50,3 +50,6 @@ deploy/target.env
 test-results/
 # Reproducibly built from pinned npm dependencies by predev/prebuild.
 frontend/public/upscaling/
+
+# Scratch worktrees for parallel agents; never part of the repository.
+.claude/worktrees/
