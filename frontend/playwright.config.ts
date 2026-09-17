@@ -58,6 +58,20 @@ export default defineConfig({
         ALLOWED_ORIGINS: '*',
         ADMIN_EMAILS: 'admin@example.com',
         SPONSORBLOCK_API_URL: SPONSORBLOCK_STUB_ORIGIN,
+        // The shared browser, configured as far as this server is concerned:
+        // a password and a media path, which is what gates the WebSocket
+        // message. neko itself is never started — the status and session
+        // endpoints are stubbed in the browser, and its embed with them.
+        BROWSER_ENABLED: 'true',
+        BROWSER_USER_PASSWORD: 'e2e-user',
+        BROWSER_ADMIN_PASSWORD: 'e2e-admin',
+        // A complete triple. A URL with no credentials makes the browser
+        // refuse to build any peer connection at all, which takes screen
+        // sharing down with it — see
+        // TestHalfConfiguredTurnDoesNotBreakEverything.
+        WEBRTC_TURN_URL: 'turn:relay.invalid:3478',
+        WEBRTC_TURN_USERNAME: 'e2e',
+        WEBRTC_TURN_CREDENTIAL: 'e2e',
       },
     },
     {

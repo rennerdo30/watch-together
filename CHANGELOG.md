@@ -34,6 +34,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (which already names the requester on every resolve, cookie lend and
   history ping) and in the admin-only endpoint. Nothing is written to disk.
 
+### A shared browser in the room
+
+- A room can put a **real browser running on the server** into its player:
+  everyone watches the same page and the room's admin types into it. It runs
+  as a [neko](https://github.com/m1k1o/neko) container
+  (`ghcr.io/m1k1o/neko/chromium:3.1.5`), takes the player area the way a
+  screen share does, and pauses what was playing — the queue keeps its place,
+  so closing the browser returns the room to it.
+- **Off by default, and it says why.** neko's picture is WebRTC media, and
+  cloudflared carries HTTP and WebSocket only, so this is the one feature in
+  the stack that cannot work on the tunnel alone. It needs either a UDP range
+  published on the host with the public address announced as an ICE candidate
+  (`BROWSER_UDP_PORTS` + `BROWSER_PUBLIC_IP`, published by the separate
+  `deploy/docker-compose.browser-udp.yml`) or a TURN relay
+  (`BROWSER_ICE_SERVERS`, alongside the `WEBRTC_TURN_*` values screen sharing
+  already uses). With neither, the room names the missing piece instead of
+  offering a button that opens a black rectangle.
+- **No password ever reaches a browser.** The backend logs into neko over the
+  internal network and hands each member the resulting session as a cookie
+  scoped to `/neko`; the room's admin gets neko's admin session (control) and
+  everyone else the user session. Minting is refused unless the room has the
+  browser open, so the endpoint is not a way to obtain a neko login.
+- One container serves the whole instance, so a second room is told which
+  room is using it, and a room releases it when its last member leaves — the
+  container keeps its tabs, so reopening returns to the same page.
+- The service only starts under `--profile browser`; nginx proxies `/neko/`
+  through a variable upstream so an absent container is a 502 on that path
+  rather than an nginx that refuses to start.
+
+### Fixed
+
+- `WEBRTC_TURN_URL` set without `WEBRTC_TURN_USERNAME` and
+  `WEBRTC_TURN_CREDENTIAL` disabled **screen sharing entirely**. A TURN entry
+  with blank credentials does not merely fail to relay: `new
+  RTCPeerConnection(...)` throws on it, so no peer connection was built at
+  all, including the direct ones that never needed a relay. `/api/webrtc/ice`
+  now drops a half-configured relay and logs why. Found while setting up the
+  shared browser, whose instructions are the first thing here that asks an
+  operator to fill those values in.
+
 ### Cookies are never stored
 
 - Cookies now reach the server only through the browser extension and live in

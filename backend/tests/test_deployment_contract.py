@@ -676,7 +676,11 @@ class TestLiveChatFrames:
         conf = (REPO_ROOT / 'nginx/nginx.conf').read_text()
         policy = conf.split('add_header Content-Security-Policy "')[1].split('" always')[0]
         directives = {parts[0]: parts[1:] for clause in policy.split(';') if (parts := clause.split())}
-        assert directives['frame-src'] == ['https:']
+        # `https:` carries the chat embeds. `'self'` carries the shared
+        # browser, which is served from this origin under /neko — and is not
+        # covered by `https:` on a plain-HTTP development stack, where the
+        # room page and the embed are both http.
+        assert sorted(directives['frame-src']) == ["'self'", 'https:']
         assert 'https:' not in directives['script-src']
         assert directives['frame-ancestors'] == ["'self'"]
 
@@ -862,3 +866,114 @@ class TestContainersResolveOverHttps:
         assert services_block.count("dns: *doh_resolver") == len(others)
         assert services_block.count("      - dns\n") == len(others)
 
+
+
+class TestTheSharedBrowserIsOptIn:
+    """A neko container, and the one feature the tunnel cannot carry alone.
+
+    cloudflared moves HTTP and WebSocket; neko's picture is WebRTC media. So
+    unless an operator has opened a UDP range or pointed it at a relay there
+    is nothing for a room to watch — and the deployment's whole premise is
+    that nothing is published on the host. Everything here exists to keep
+    that premise true by default and to stop the three places that have to
+    agree about the path prefix from drifting apart.
+    """
+
+    @pytest.fixture(params=["docker-compose.yml", "deploy/docker-compose.yml"])
+    def compose(self, request):
+        return (REPO_ROOT / request.param).read_text(encoding="utf-8")
+
+    @pytest.fixture
+    def neko_block(self, compose):
+        import re
+        match = re.search(r"\n  neko:\n((?:    .*\n|\n)+)", compose)
+        assert match, "no neko service in this compose file"
+        return match.group(1)
+
+    def test_the_image_is_pinned_to_a_version(self, neko_block):
+        """`latest` on this one would move a browser under a running room."""
+        assert "image: ghcr.io/m1k1o/neko/chromium:3.1.5" in neko_block
+
+    def test_it_does_not_start_unless_it_is_asked_for(self, neko_block):
+        assert "profiles: [ browser ]" in neko_block
+
+    def test_nothing_is_published_by_the_ordinary_compose_files(self, compose):
+        """Opening a port is a deliberate extra file on the command line
+        (deploy/docker-compose.browser-udp.yml), never a default."""
+        import re
+        match = re.search(r"\n  neko:\n((?:    .*\n|\n)+)", compose)
+        assert "ports:" not in match.group(1)
+
+    def test_the_udp_overlay_publishes_only_what_was_configured(self):
+        overlay = (REPO_ROOT / "deploy" / "docker-compose.browser-udp.yml").read_text()
+        # `:?` rather than `:-`: publishing a default range nobody asked for
+        # is exactly the surprise this file exists to avoid.
+        assert "${BROWSER_UDP_PORTS:?" in overlay
+        assert "/udp" in overlay
+
+    def test_both_ice_lists_are_given_to_neko(self, neko_block):
+        """The frontend list alone is the plausible mistake: it lets a
+        viewer find the relay, but leaves neko with no address to offer
+        from a host that publishes nothing."""
+        assert "NEKO_WEBRTC_ICESERVERS_FRONTEND" in neko_block
+        assert "NEKO_WEBRTC_ICESERVERS_BACKEND" in neko_block
+
+    def test_the_media_configuration_is_passed_through(self, neko_block):
+        assert "NEKO_WEBRTC_EPR" in neko_block
+        assert "NEKO_WEBRTC_NAT1TO1" in neko_block
+
+    def test_the_path_prefix_agrees_with_nginx_and_the_backend(self, neko_block):
+        from core.config import BROWSER_PATH_PREFIX
+        assert f"NEKO_SERVER_PATH_PREFIX: {BROWSER_PATH_PREFIX}" in neko_block \
+            or f"NEKO_SERVER_PATH_PREFIX={BROWSER_PATH_PREFIX}" in neko_block
+        conf = (REPO_ROOT / "nginx" / "nginx.conf").read_text()
+        assert f"location {BROWSER_PATH_PREFIX}/ {{" in conf
+
+    def test_chromium_gets_shared_memory(self, neko_block):
+        """The 64 MB container default crashes tabs with pictures in them."""
+        assert "shm_size: 2gb" in neko_block
+
+    def test_it_resolves_dns_the_way_every_other_service_does(self, neko_block):
+        assert "dns: *doh_resolver" in neko_block
+
+
+class TestTheSharedBrowserEmbedIsProxied:
+    CONF = REPO_ROOT / "nginx" / "nginx.conf"
+
+    @pytest.fixture
+    def neko_location(self):
+        conf = self.CONF.read_text()
+        return conf.split("location /neko/ {")[1].split("\n        location ")[0]
+
+    def test_the_upstream_is_a_variable_so_an_absent_container_is_not_fatal(
+            self, neko_location):
+        """With a literal name nginx resolves it once at startup and refuses
+        to start when the container is missing — which is the normal case,
+        since the service only runs under the `browser` profile. That would
+        take the whole site down for a feature nobody turned on.
+        """
+        assert "set $neko_upstream" in neko_location
+        assert "proxy_pass http://$neko_upstream;" in neko_location
+        assert "resolver 127.0.0.11" in neko_location
+
+    def test_the_socket_is_upgraded_and_long_lived(self, neko_location):
+        """/neko/api/ws carries the signalling and every keystroke."""
+        assert "proxy_set_header Upgrade $http_upgrade;" in neko_location
+        assert 'proxy_set_header Connection "upgrade";' in neko_location
+        assert "proxy_read_timeout 86400s;" in neko_location
+
+
+class TestTheSharedBrowserIsDocumented:
+    """An operator cannot guess either of the two media paths."""
+
+    def test_env_example_names_both_options(self):
+        text = (REPO_ROOT / "deploy" / "env.example").read_text()
+        assert "BROWSER_ENABLED" in text
+        assert "BROWSER_UDP_PORTS" in text and "BROWSER_PUBLIC_IP" in text
+        assert "BROWSER_ICE_SERVERS" in text
+
+    def test_the_deploy_readme_says_what_to_open(self):
+        text = (REPO_ROOT / "deploy" / "README.md").read_text()
+        assert "docker-compose.browser-udp.yml" in text
+        assert "--profile browser" in text
+        assert "no_media_path" in text
