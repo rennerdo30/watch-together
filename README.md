@@ -23,6 +23,7 @@ A real-time video synchronization platform for watching YouTube, Twitch, and 180
 - **YouTube Watch History (opt-in)**: While the extension is syncing your cookies, videos the room watches can be recorded in your own YouTube history with the position you stopped at, the way YouTube's player reports it. Off until you switch it on in the settings dialog
 - **Browser Extension**: Automatic cookie sync from your browser (Chrome/Firefox)
 - **Audio Normalization**: "Night mode" audio with configurable gain boost
+- **Mono Audio**: Fold both channels into one so nothing panned to one side is lost when listening with a single earbud or with hearing on one side. Per viewer, in player settings
 - **Client-side Video Enhancement (Beta)**: Opt-in local upscaling with automatic animation/live-action selection, WebGPU neural processing and a lightweight WebGL fallback. Open player settings → Video enhancement. [Compatibility and implementation details](frontend/lib/upscaling/README.md).
 - **Modern UI**: Light and dark colour schemes (following the OS by default), six accent themes plus a custom one, drag-and-drop queue management
 - **Cloudflare Integration**: Zero Trust authentication and tunnel support

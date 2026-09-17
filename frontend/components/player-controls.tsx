@@ -1,7 +1,7 @@
 'use client';
 
 import { useId, useRef, useState } from 'react';
-import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, Settings, Activity, PictureInPicture, Ear } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, Settings, Activity, PictureInPicture, Ear, Headphones } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { parseUpscaleMode, type UpscaleMode } from '@/lib/upscaling/policy';
 import { sponsorCategoryColor, sponsorCategoryLabel, type SponsorSegment } from '@/lib/sponsorblock';
@@ -37,6 +37,9 @@ interface PlayerControlsProps {
     onToggleNormalization?: () => void;
     normalizationGain?: number;
     onNormalizationGainChange?: (val: number) => void;
+    /** Every channel folded into one, so both speakers carry the same mix. */
+    monoAudio?: boolean;
+    onToggleMono?: () => void;
     isLive?: boolean;
     syncThreshold?: number;
     onSyncThresholdChange?: (val: number) => void;
@@ -81,6 +84,8 @@ export function PlayerControls({
     onToggleNormalization,
     normalizationGain,
     onNormalizationGainChange,
+    monoAudio,
+    onToggleMono,
     isLive,
     syncThreshold,
     onSyncThresholdChange,
@@ -440,6 +445,33 @@ export function PlayerControls({
                                 )}
                             </div>
                         )}
+                        {/* Mono audio */}
+                        {onToggleMono && (
+                            <div className="px-3 py-2 border-b border-white/5 mb-2">
+                                <button
+                                    type="button"
+                                    onClick={onToggleMono}
+                                    aria-pressed={Boolean(monoAudio)}
+                                    className="flex w-full items-center justify-between gap-2 text-xs text-white rounded-md focus-visible:outline-2 focus-visible:outline-[color:var(--accent-primary)]"
+                                >
+                                    <span className="flex items-center gap-1.5">
+                                        <Headphones aria-hidden="true" className="w-3.5 h-3.5" /> Mono audio
+                                    </span>
+                                    <span className={cn(
+                                        "text-[10px] rounded px-1.5 py-0.5",
+                                        monoAudio
+                                            ? "bg-[color:var(--accent-glow)] text-[color:var(--accent-primary)]"
+                                            : "bg-white/10 text-zinc-400"
+                                    )}>
+                                        {monoAudio ? 'On' : 'Off'}
+                                    </span>
+                                </button>
+                                <p className="mt-2 text-[10px] leading-relaxed text-zinc-400">
+                                    Both speakers play the same mix, so nothing is lost on one side. Affects only your audio.
+                                </p>
+                            </div>
+                        )}
+
                         {/* Normalization Gain */}
                         {normalizationActive && onNormalizationGainChange && typeof normalizationGain === 'number' && (
                             <div className="px-3 py-2 border-b border-white/5 mb-2">
