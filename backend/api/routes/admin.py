@@ -20,6 +20,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from core import config
 from core.security import get_user_from_request
 from connection_manager import manager
+from services import shared_browser
 from services.cache import memory_cache, disk_cache_report, clear_disk_cache
 from services.database import get_all_cached_formats, clear_format_cache
 from services.metrics import proxy_metrics
@@ -81,6 +82,17 @@ async def admin_overview(request: Request, response: Response):
 
     cookie_users = user_cookies.holders()
 
+    # Where an admin actually looks when the room says the shared browser is
+    # off. The switch is deployment configuration rather than a panel
+    # control, so this reports the state and names what is missing.
+    browser = {
+        "available": shared_browser.is_available(),
+        "reason": shared_browser.unavailable_reason(),
+        "transport": shared_browser.media_transport(),
+        "missing": shared_browser.setup_checklist(),
+        "rooms": sorted(manager.browser_sessions),
+    }
+
     logger.debug(f"Admin overview served to {user}")
     return {
         "requested_by": user,
@@ -91,6 +103,7 @@ async def admin_overview(request: Request, response: Response):
         },
         "rooms": rooms,
         "cookie_users": cookie_users,
+        "shared_browser": browser,
         # Every recent *change* of picture, including viewers who have since
         # left — `rooms[].playback` only knows who is connected right now.
         # The same lines are in the backend log; this is the browser's copy.

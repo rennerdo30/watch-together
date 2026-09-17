@@ -644,3 +644,71 @@ class TestHalfConfiguredTurnDoesNotBreakEverything:
         monkeypatch.setattr(config, "WEBRTC_TURN_CREDENTIAL", "")
 
         assert shared_browser.media_transport() == config.BROWSER_TRANSPORT_TURN
+
+
+class TestTheAdminPanelNamesWhatIsMissing:
+    """An admin told "the browser is switched off" goes looking for a switch.
+
+    There is none to find: this is deployment configuration, set in the
+    host's `.env` and applied by a deploy. The panel's job is therefore to
+    name the settings rather than to pretend it owns them — without that,
+    the honest refusal in the room is a dead end.
+    """
+
+    def test_an_unconfigured_instance_lists_every_missing_setting(self, monkeypatch):
+        monkeypatch.setattr(config, "BROWSER_ENABLED", False)
+        monkeypatch.setattr(config, "BROWSER_USER_PASSWORD", "")
+        monkeypatch.setattr(config, "BROWSER_ADMIN_PASSWORD", "")
+        monkeypatch.setattr(config, "BROWSER_PUBLIC_IP", "")
+        monkeypatch.setattr(config, "BROWSER_UDP_PORTS", "")
+        monkeypatch.setattr(config, "WEBRTC_TURN_URL", "")
+
+        missing = shared_browser.setup_checklist()
+
+        joined = " ".join(missing)
+        assert "BROWSER_ENABLED=true" in missing
+        assert any(item.startswith("BROWSER_USER_PASSWORD") for item in missing)
+        assert any(item.startswith("BROWSER_ADMIN_PASSWORD") for item in missing)
+        # Either media route answers; naming one would send an operator down
+        # a road their deployment may not allow.
+        assert "BROWSER_UDP_PORTS" in joined and "TURN" in joined
+
+    def test_a_working_instance_asks_for_nothing(self, monkeypatch):
+        monkeypatch.setattr(config, "BROWSER_ENABLED", True)
+        monkeypatch.setattr(config, "BROWSER_USER_PASSWORD", "u")
+        monkeypatch.setattr(config, "BROWSER_ADMIN_PASSWORD", "a")
+        monkeypatch.setattr(config, "BROWSER_PUBLIC_IP", "203.0.113.10")
+        monkeypatch.setattr(config, "BROWSER_UDP_PORTS", "59000-59100")
+
+        assert shared_browser.setup_checklist() == []
+        assert shared_browser.is_available() is True
+
+    def test_the_half_configured_case_asks_only_for_the_half_that_is_missing(self, monkeypatch):
+        """Switched on with passwords but no way out is the trap this
+        feature exists to be honest about."""
+        monkeypatch.setattr(config, "BROWSER_ENABLED", True)
+        monkeypatch.setattr(config, "BROWSER_USER_PASSWORD", "u")
+        monkeypatch.setattr(config, "BROWSER_ADMIN_PASSWORD", "a")
+        monkeypatch.setattr(config, "BROWSER_PUBLIC_IP", "")
+        monkeypatch.setattr(config, "BROWSER_UDP_PORTS", "")
+        monkeypatch.setattr(config, "WEBRTC_TURN_URL", "")
+
+        missing = shared_browser.setup_checklist()
+
+        assert len(missing) == 1
+        assert "BROWSER_UDP_PORTS" in missing[0]
+
+    def test_the_overview_carries_it_to_the_panel(self, client, monkeypatch):
+        """The panel is where an admin looks, so the answer has to be there."""
+        import core.config as config_module
+        import api.routes.admin as admin
+
+        monkeypatch.setattr(config_module, "ADMIN_EMAILS", {"admin@example.com"})
+        monkeypatch.setattr(admin.config, "ADMIN_EMAILS", {"admin@example.com"})
+        monkeypatch.setattr(config, "BROWSER_ENABLED", False)
+
+        body = client.get("/api/admin/overview", params={"user": "admin@example.com"}).json()
+
+        assert body["shared_browser"]["available"] is False
+        assert body["shared_browser"]["reason"] == config.BROWSER_UNAVAILABLE_DISABLED
+        assert "BROWSER_ENABLED=true" in body["shared_browser"]["missing"]

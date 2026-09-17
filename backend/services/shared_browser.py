@@ -64,6 +64,30 @@ def is_available() -> bool:
     return unavailable_reason() is None
 
 
+def setup_checklist() -> list:
+    """The settings still missing before a shared browser could work.
+
+    Operator-facing, and the answer to a real confusion: the room says the
+    browser is switched off, so an admin goes looking for a switch in the
+    admin panel and finds none. There is none to find — this is deployment
+    configuration, set in the host's `.env` and applied by a deploy — so the
+    panel's job is to name the keys rather than pretend to own them.
+    """
+    missing = []
+    if not config.BROWSER_ENABLED:
+        missing.append("BROWSER_ENABLED=true")
+    if not config.BROWSER_USER_PASSWORD:
+        missing.append("BROWSER_USER_PASSWORD=<a password>")
+    if not config.BROWSER_ADMIN_PASSWORD:
+        missing.append("BROWSER_ADMIN_PASSWORD=<a different password>")
+    if media_transport() is None:
+        # Either route works; naming both beats picking one for them.
+        missing.append(
+            "BROWSER_UDP_PORTS + BROWSER_PUBLIC_IP (a published UDP range) "
+            "or BROWSER_ICE_SERVERS / WEBRTC_TURN_URL (a relay)")
+    return missing
+
+
 def embed_path() -> str:
     """Where the room's iframe points, on this origin."""
     return f"{config.BROWSER_PATH_PREFIX}/?{config.BROWSER_EMBED_QUERY}"
