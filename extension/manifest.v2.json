@@ -3,6 +3,11 @@
   "name": "Watch Together Cookie Sync",
   "version": "1.3.0",
   "description": "Sync cookies from YouTube, Twitch, Kick and other sites to Watch Together while your browser is open",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "watch-together-cookie-sync@renner.dev"
+    }
+  },
   "permissions": [
     "cookies",
     "storage",

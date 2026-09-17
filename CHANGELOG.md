@@ -65,6 +65,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The Extension Kept Disappearing From Chrome**: it states its own
+  identity now — a `key` in the Chrome manifest and a `browser_specific_settings`
+  id for Firefox. Without one, a browser invents an identity: Chrome derives
+  it from the folder the unpacked extension was loaded from, Firefox issues
+  a fresh one to every temporary add-on. Moving the folder therefore made it
+  a different extension with nothing stored, so the pairing with the
+  instance was gone and had to be made again with no explanation. The
+  install panel also now says to unzip somewhere permanent, since a browser
+  forgets an unpacked extension whose folder moves or is rewritten
+  underneath it — loading one straight from a source checkout is the usual
+  way that happens.
+- `host-status.sh --cookies` reported on cookie *files*, which have not
+  existed since cookies became memory-only; it read a config value that no
+  longer exists, so the mode crashed rather than answering. It now reports
+  who is syncing right now, how long ago, and when their cookies drop.
+
 - `WEBRTC_TURN_URL` set without `WEBRTC_TURN_USERNAME` and
   `WEBRTC_TURN_CREDENTIAL` disabled **screen sharing entirely**. A TURN entry
   with blank credentials does not merely fail to relay: `new

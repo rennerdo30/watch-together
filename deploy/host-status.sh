@@ -14,7 +14,7 @@
 #                                                 # which clients resolve, optionally
 #                                                 # using that user's cookies
 #   ./deploy/host-status.sh --legacy-data         # what the pre-volume deploy left behind
-#   ./deploy/host-status.sh --cookies             # per-user cookie state (never values)
+#   ./deploy/host-status.sh --cookies             # who is syncing cookies now (never values)
 #   ./deploy/host-status.sh --manifest=<video-url> # inspect the generated DASH manifest
 #   ./deploy/host-status.sh --ranges=<video-url>   # re-fetch each declared range upstream
 #   ./deploy/host-status.sh --perf [--tail=N]      # media transfer summary: cache hit rate,
@@ -307,42 +307,38 @@ fi
 
 # Whether a video resolves at all depends on the requesting user having
 # usable cookies, since the server's address is bot-blocked by YouTube.
-# Values are never printed, only presence, size and age.
+#
+# Cookies live in the backend's memory and nowhere else — there are no files
+# to inspect, and this mode used to look for them in a directory that has
+# not existed since they stopped being written to disk. Values are never
+# printed, only presence and timing.
 if [ "$SHOW_COOKIES" = "1" ]; then
 	cd "$REMOTE" || exit 1
-	echo "-- cookie files in the data volume --"
+	echo "-- cookies held in memory --"
 	$COMPOSE exec -T backend python - <<'PYEOF'
-import os, time, glob
-from core.config import COOKIES_DIR
+import time
 
-paths = sorted(glob.glob(os.path.join(COOKIES_DIR, "*.txt")))
-if not paths:
-    print("(none) - no user has synced cookies, so YouTube sees an")
-    print("        anonymous datacenter address and refuses most videos")
-for path in paths:
-    stat = os.stat(path)
-    with open(path, "r", errors="replace") as handle:
-        lines = [l for l in handle if l.strip() and not l.startswith("#")]
-    hosts = sorted({l.split("\t")[0] for l in lines if "\t" in l})
-    age_hours = (time.time() - stat.st_mtime) / 3600
-    print("%-34s %6d cookies  %5.1fh old  mode %o" % (
-        os.path.basename(path), len(lines), age_hours, stat.st_mode & 0o777))
-    print("     domains: %s" % ", ".join(hosts[:8]))
-    # Expiry is the usual reason a working setup stops working.
-    now = time.time()
-    expired = 0
-    soonest = None
-    for l in lines:
-        parts = l.split("\t")
-        if len(parts) == 7 and parts[4].isdigit():
-            exp = int(parts[4])
-            if exp and exp < now:
-                expired += 1
-            elif exp:
-                soonest = exp if soonest is None else min(soonest, exp)
-    print("     expired: %d   next expiry: %s" % (
-        expired,
-        time.strftime("%Y-%m-%d", time.localtime(soonest)) if soonest else "n/a"))
+from services import user_cookies
+from core.config import COOKIE_MEMORY_TTL_SECONDS
+
+holders = user_cookies.holders()
+if not holders:
+    print("(none) - nobody's browser extension is syncing, so YouTube sees")
+    print("        an anonymous datacenter address and refuses most videos")
+    print()
+    print("cookies are dropped %d minutes after the last sync, when the" % (
+        COOKIE_MEMORY_TTL_SECONDS // 60))
+    print("extension disconnects, or when this process restarts - so an")
+    print("empty list right after a deploy is expected, not a fault")
+
+now = time.time()
+for email in holders:
+    state = user_cookies.status(email)
+    synced_ago = (now - state["synced_at"]) / 60
+    expires_in = (state["expires_at"] - now) / 60
+    print("%-34s %5d cookies  synced %4.1fm ago  drops in %4.1fm  via %s" % (
+        email, state["cookie_count"], synced_ago, expires_in,
+        state["browser"] or "unknown"))
 PYEOF
 	exit 0
 fi

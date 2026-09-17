@@ -3,6 +3,7 @@
   "name": "Watch Together Cookie Sync",
   "version": "1.3.0",
   "description": "Sync cookies from YouTube, Twitch, Kick and other sites to Watch Together while your browser is open",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA9KhfLQQYW0mPdmNgEjgLJwGJltnXMuAuPDa+fNEzMRj+wSzjLYcls70eedRmBtFzeLdcdBIwI5jUEJwVtVwQKyS2XMRBtHZe7EqjixTGRM7rJlOWFm2jn39NR47acmfQ/UgDVBu2VnxkkCxQijHJc+d1CgSIbE7+FNIQlAPRFFn+WYOTM9aOW2Fd5fvTKohHVID+iVEw6WTRmJJERr2Df94Z2oouy4h50CbzHj1YlapSkXDErjw5IKZmm0Iy6Gcvq56H+qAfo3C5qF3eVg8U14qL2W+tVia1sWJSwwYLcgds+c0e0SluwdK/1wwVT1ajXK7pFIqFk+1Fw7V7ietoFwIDAQAB",
   "permissions": [
     "cookies",
     "storage",

@@ -134,3 +134,41 @@ class TestDownloadEndpoint:
     def test_needs_no_identity(self, client):
         """The source is public; requiring identity would only block the install."""
         assert client.get("/api/extension/download/chrome").status_code == 200
+
+
+class TestTheExtensionKeepsItsIdentity:
+    """A browser recognises an install by its id, and what the install has
+    stored — the pairing with this instance — is filed under that id.
+
+    Without a stated identity a browser makes one up: Chrome derives it from
+    the folder an unpacked extension was loaded from, and Firefox issues a
+    fresh one to every temporary add-on. So moving the folder, or loading it
+    on another machine, silently became a different extension with nothing
+    stored, and the member had to pair again without being told why.
+    """
+
+    def test_the_chrome_build_states_its_own_key(self):
+        archive = extension_package.build_archive(EXTENSION, extension_package.BUILDS["chrome"])
+        manifest = read_manifest(archive)
+
+        key = manifest.get("key")
+        assert key, "without a key Chrome derives the id from the install path"
+        # A public key, not a passing string: base64 of a DER SubjectPublicKeyInfo.
+        import base64
+        decoded = base64.b64decode(key, validate=True)
+        assert len(decoded) > 200 and decoded[:2] == b"\x30\x82"
+
+    def test_the_firefox_build_states_its_own_id(self):
+        archive = extension_package.build_archive(EXTENSION, extension_package.BUILDS["firefox"])
+        manifest = read_manifest(archive)
+
+        gecko = manifest.get("browser_specific_settings", {}).get("gecko", {})
+        assert gecko.get("id"), "a temporary add-on without an id gets a new one each load"
+        assert "@" in gecko["id"]
+
+    def test_the_private_half_is_not_in_the_repository(self):
+        """The manifest carries the public half. The private key signs a CRX
+        and belongs nowhere near a repository that is published."""
+        root = pathlib.Path(extension_package.__file__).resolve().parents[2]
+        for pattern in ("*.pem", "extension/*.pem", "extension/**/*.pem"):
+            assert not list(root.glob(pattern)), f"a private key is checked in: {pattern}"
