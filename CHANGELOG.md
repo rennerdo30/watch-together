@@ -210,11 +210,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   minutes is resolved again first — once, through the existing coalesced
   resolve path, with the room's members lending the cookies. A video that
   still cannot be prepared is left alone for a quarter of an hour instead of
-  being retried nine times, its opening bytes are no longer fetched from the
-  same dead URLs, and a rendition nobody asked for that cannot be read is a
-  debug line rather than a warning per rendition. The same check guards the
-  manifest endpoint, where a cache entry that had outlived its URLs produced
-  a manifest describing nothing.
+  being retried nine times — per room, since whether a re-resolve can find
+  cookies is a fact about the room — its opening bytes are no longer fetched
+  from the same dead URLs, and a rendition nobody asked for that cannot be
+  read is a debug line rather than a warning per rendition (the one-line
+  summary stays visible: fresh URLs and nothing readable is a different
+  fault). The same check guards the manifest endpoint, where a cache entry
+  that had outlived its URLs produced a manifest describing nothing; there
+  an entry is only replaced once it has actually expired, because a source
+  that signs short-lived URLs still plays.
 
 - **Auto Quality Could Stick Low And Never Recover**: three ways, all
   invisible. A player whose element had not been laid out yet measured a

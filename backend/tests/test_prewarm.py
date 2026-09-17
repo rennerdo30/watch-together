@@ -336,7 +336,8 @@ class TestTheNextVideoIsPreparedAsTheCurrentOneEnds:
         prepared = []
         monkeypatch.setattr(main, "_proxy_client", object())
         monkeypatch.setattr(main.prewarm, "warm_video",
-                            lambda client, video, prepare=None: prepared.append(video))
+                            lambda client, video, prepare=None, room_id="": prepared.append(
+                                (video, room_id)))
         main.manager.room_states["prewarm-room"] = {
             "queue": [{"original_url": "https://youtu.be/now"},
                       {"original_url": "https://youtu.be/next"}],
@@ -356,7 +357,8 @@ class TestTheNextVideoIsPreparedAsTheCurrentOneEnds:
         main, prepared = room
         state = main.manager.room_states["prewarm-room"]
         main._warm_next_video_if_close("prewarm-room", state, 600 - PREWARM_NEXT_VIDEO_SECONDS + 1)
-        assert [entry["original_url"] for entry in prepared] == ["https://youtu.be/next"]
+        assert [(entry["original_url"], room) for entry, room in prepared] == [
+            ("https://youtu.be/next", "prewarm-room")]
 
     def test_a_live_stream_has_no_next_video_to_prepare(self, room):
         main, prepared = room
@@ -631,6 +633,111 @@ class TestOneDoomedAttemptIsEnough:
             prewarm.warm_video(object(), good, prepare)
             await prewarm.drain()
         assert len(fetched) == 2
+
+    async def test_a_room_that_cannot_prepare_does_not_silence_the_others(
+            self, monkeypatch):
+        """Whether a video can be prepared is a fact about the room: the
+        re-resolve borrows the cookies of a member connected *there*. A room
+        with nobody signed in must not blacklist the video for every room."""
+        fetched = []
+        monkeypatch.setattr(prewarm, "start_initial_prefetch",
+                            lambda video, audio, client: fetched.append(video))
+        video = _resolve(time.time() + 21600)
+
+        async def cannot_prepare(video_data):
+            return None
+
+        async def can_prepare(video_data):
+            return video
+
+        prewarm.warm_video(object(), video, cannot_prepare, room_id="no-cookies-here")
+        await prewarm.drain()
+        prewarm.warm_video(object(), video, can_prepare, room_id="a-member-is-signed-in")
+        await prewarm.drain()
+
+        assert fetched == [video["video_url"]]
+
+    async def test_a_ladder_that_answers_nothing_backs_off_and_says_so(
+            self, monkeypatch, caplog):
+        """Fresh URLs and not one readable rendition is the other failure —
+        a cookie or PO-token problem, not an expiry. Backing off is still
+        right (the bytes come from the addresses that just refused every
+        probe), but unlike the individual probes this must stay visible:
+        it is the only line that reports warming broken for a live resolve.
+        """
+        import main
+
+        async def nothing_readable(client, formats, headers=None):
+            return 0
+
+        async def fake_client():
+            return object()
+
+        monkeypatch.setattr(main, "probe_formats", nothing_readable)
+        monkeypatch.setattr(main, "get_proxy_client", fake_client)
+        fresh = _resolve(time.time() + 21600)
+
+        with caplog.at_level(logging.DEBUG, logger="main"):
+            prepared = await main._prepare_queued_video(fresh, "room")
+
+        assert prepared is None, "bytes from URLs that answered no probe are not worth fetching"
+        summary = [record for record in caplog.records
+                   if "Prepared none of the" in record.getMessage()]
+        assert summary and summary[0].levelno == logging.INFO
+
+
+class TestAVideoWithNoLadderIsStillWarmed:
+    """A direct file has nothing to probe, which is not the same as nothing
+    to warm: its opening bytes *are* the whole preparation. Treating "no
+    adaptive ladder" as a failure lost the warm for every direct MP4 and
+    HLS entry, and backed the video off for a quarter of an hour on top."""
+
+    @pytest.fixture
+    def room(self, monkeypatch):
+        import main
+
+        fetched: list = []
+        monkeypatch.setattr(main, "_proxy_client", object())
+        monkeypatch.setattr(prewarm, "start_initial_prefetch",
+                            lambda video, audio, client: fetched.append((video, audio)))
+
+        async def fake_client():
+            return object()
+
+        monkeypatch.setattr(main, "get_proxy_client", fake_client)
+        direct = {
+            "original_url": NEXT_URL, "title": "direct", "duration": 300,
+            "stream_type": "direct",
+            "stream_url": "https://cdn.test/best.mp4",
+            "video_url": "https://cdn.test/best.mp4",
+        }
+        main.manager.room_states["prewarm-room"] = {
+            "queue": [{"original_url": CURRENT_URL}, direct],
+            "playing_index": 0,
+            "video_data": {"original_url": CURRENT_URL, "duration": 600},
+        }
+        yield main, fetched
+        main.manager.room_states.pop("prewarm-room", None)
+
+    async def test_its_opening_bytes_are_fetched(self, room):
+        main, fetched = room
+        state = main.manager.room_states["prewarm-room"]
+
+        main._warm_next_video_if_close("prewarm-room", state, 580)
+        await prewarm.drain()
+
+        assert fetched == [("https://cdn.test/best.mp4", None)]
+
+    async def test_it_is_not_backed_off_as_a_failure(self, room):
+        main, fetched = room
+        state = main.manager.room_states["prewarm-room"]
+
+        for beat in range(3):
+            main._warm_next_video_if_close("prewarm-room", state, 580 + beat * 5)
+            await prewarm.drain()
+
+        assert prewarm._failed_videos == {}
+        assert len(fetched) == 3, "a healthy video stays warmable on the next beat"
 
 
 class TestSpeculationIsQuiet:

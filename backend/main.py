@@ -32,7 +32,7 @@ from core.config import (
     MAX_CACHEABLE_FILE_BYTES, FORMAT_CACHE_TTL_SECONDS,
     METRICS_DEFAULT_SAMPLE_LIMIT, POT_PROVIDER_EXTRACTOR_ARGS,
     PREWARM_NEXT_VIDEO_SECONDS, STREAM_URL_MIN_LIFETIME_SECONDS,
-    DEFAULT_USER_AGENT,
+    STREAM_URL_SERVE_MIN_SECONDS, DEFAULT_USER_AGENT,
     SHARE_SIGNAL_KINDS, SHARE_SIGNAL_MAX_BYTES,
     SHARE_TITLE_MAX_LENGTH, SHARE_QUALITY_MAX_LENGTH,
 )
@@ -185,7 +185,8 @@ async def cleanup_task():
         await manager.cleanup_stale_rooms(ttl_seconds=300)
 
 
-async def _playable_source(url: str, known: Optional[dict], room_id: str,
+async def _playable_source(url: str, known: Optional[dict], room_id: str, *,
+                           min_lifetime: float,
                            user_email: Optional[str] = None,
                            user_agent: str = DEFAULT_USER_AGENT) -> Optional[dict]:
     """A resolve of `url` whose signed URLs the CDN will still serve.
@@ -196,24 +197,36 @@ async def _playable_source(url: str, known: Optional[dict], room_id: str,
     afterwards, cookies or no cookies. Resolving again is the only way to
     get URLs that work, and it is a yt-dlp run, so it happens when the
     deadline says it must and not on a timer.
+
+    `min_lifetime` is how much life the caller needs the URLs to have. It
+    differs by caller on purpose: warming fetches ahead of time and wants a
+    margin, while a request someone is waiting on wants whatever is still
+    signed — a source that issues short-lived URLs plays perfectly well,
+    and refusing it would make it unplayable rather than early.
+
+    A resolve that fails with its own reason (age-restricted, no playable
+    formats) raises: on demand that reason belongs to the caller, and
+    speculation discards it either way.
     """
-    if known and stream_expiry.is_fresh(known, STREAM_URL_MIN_LIFETIME_SECONDS):
+    if known and stream_expiry.is_fresh(known, min_lifetime):
         return known
     remaining = stream_expiry.seconds_remaining(known or {})
     logger.info("Stream URLs of %s have %.0fs left; resolving it again", url, remaining or 0)
     try:
         fresh = await resolve_url(url, user_agent, refresh=True,
                                   room_id=room_id, user_email=user_email)
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.info("Could not re-resolve %s: %s", url, str(exc)[:150])
         return None
-    if not stream_expiry.is_fresh(fresh, STREAM_URL_MIN_LIFETIME_SECONDS):
-        logger.info("Re-resolving %s produced URLs that expire immediately", url)
+    if not stream_expiry.is_fresh(fresh, min_lifetime):
+        logger.info("Re-resolving %s produced URLs that are already spent", url)
         return None
     return fresh
 
 
-async def _prepare_queued_video(video_data: dict, room_id: str = "") -> Optional[dict]:
+async def _prepare_queued_video(video_data: dict, room_id: str) -> Optional[dict]:
     """Probe a queued video's renditions so the advance hits warm caches.
 
     Everything the first moments of a video wait on happens here instead:
@@ -227,19 +240,26 @@ async def _prepare_queued_video(video_data: dict, room_id: str = "") -> Optional
     warm that might miss but a refusal per rendition, every heartbeat, for
     as long as the room takes to finish the video before it.
 
-    Returns the resolve it probed, or None when this video cannot be
-    prepared — which stops the caller warming bytes from the same dead URLs.
+    Returns the source to warm — which is the queue entry itself when there
+    is nothing to probe — or None when these URLs do not answer, which stops
+    the caller fetching bytes from the same dead addresses.
     """
     original_url = video_data.get("original_url")
     if not original_url:
         return None
     known = (await get_cached_format(original_url)) or video_data
-    source = await _playable_source(original_url, known, room_id)
+    source = await _playable_source(original_url, known, room_id,
+                                    min_lifetime=STREAM_URL_MIN_LIFETIME_SECONDS)
     if source is None:
         return None
     video_formats, audio_formats = manifest_formats(source)
     if not video_formats or not audio_formats:
-        return None
+        # A direct file or an HLS playlist has no ladder and no index to
+        # probe. There is nothing to prepare, but its opening bytes are
+        # still worth warming — that is the whole prewarm for such a video —
+        # so this is a source, not a failure.
+        logger.debug("No adaptive ladder to prepare for %s", original_url)
+        return source
 
     stream_owner.remember(source)
     identity = source.get(stream_owner.RESOLVED_BY_KEY)
@@ -252,12 +272,14 @@ async def _prepare_queued_video(video_data: dict, room_id: str = "") -> Optional
     probed = await probe_formats(await get_proxy_client(),
                                  video_formats + audio_formats, headers)
     if not probed:
-        # Nobody asked for any of this, so it is a debug line rather than
-        # the room's problem — but the advance will now pay for the probes.
-        logger.debug("Prepared none of the %d representations of %s", wanted, original_url)
+        # The individual refusals are debug, being speculative; this line is
+        # not. The URLs are signed for now and still nothing could be read,
+        # which is the shape of a cookie or PO-token problem — the only
+        # production signal that warming is broken for a live resolve.
+        logger.info("Prepared none of the %d representations of %s", wanted, original_url)
         return None
-    logger.info(f"Prepared {probed}/{wanted} "
-                f"representations of the next video: {original_url}")
+    logger.info("Prepared %d/%d representations of the next video: %s",
+                probed, wanted, original_url)
     return source
 
 
@@ -274,9 +296,11 @@ def _warm_next_video_if_close(room_id: str, state: dict, position: float) -> Non
     upcoming = manager.peek_next_video(room_id)
     if upcoming:
         # The room is what makes a re-resolve possible for a video nobody
-        # requested: its connected members are who can lend the cookies.
+        # requested: its connected members are who can lend the cookies. It
+        # also scopes the backoff, for the same reason.
         prewarm.warm_video(_proxy_client, upcoming,
-                           partial(_prepare_queued_video, room_id=room_id))
+                           partial(_prepare_queued_video, room_id=room_id),
+                           room_id=room_id)
 
 
 async def sync_heartbeat_task():
@@ -713,9 +737,14 @@ async def dash_manifest(request: Request, url: str, room: str = None):
                                      room_id=sanitize_room_id(room))
     else:
         # A cache entry can outlive the signature on the URLs it holds; every
-        # probe of those answers 403 and the manifest comes back empty.
-        cached = await _playable_source(url, cached, sanitize_room_id(room), user_email,
-                                        request.headers.get("user-agent") or DEFAULT_USER_AGENT)
+        # probe of those answers 403 and the manifest comes back empty. Only
+        # an expired entry is replaced here: a player is waiting, and a
+        # source that signs short-lived URLs still plays.
+        cached = await _playable_source(
+            url, cached, sanitize_room_id(room),
+            min_lifetime=STREAM_URL_SERVE_MIN_SECONDS,
+            user_email=user_email,
+            user_agent=request.headers.get("user-agent") or DEFAULT_USER_AGENT)
         if cached is None:
             raise HTTPException(status_code=422,
                                 detail="Video stream URLs could not be refreshed")
