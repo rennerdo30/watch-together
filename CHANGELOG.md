@@ -198,6 +198,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   decides when the extractor set it, and the raw `is_live` flag answers for
   the extractors that set that instead.
 
+- **Preparing The Next Queue Entry Warmed Nothing At All**: in production
+  every probe of it was refused — 126 `403`s, `Prepared 0/14
+  representations` nine times over, for a single advance. A queue entry
+  keeps the resolve it was added with, and the URLs in it state the moment
+  the CDN stops serving them; past that they answer `403` to everyone,
+  cookies or no cookies. Warming re-probed those dead URLs on every
+  heartbeat for the last 45 seconds of the video before them. A resolve is
+  now checked against the deadline in its own URLs before anything is
+  fetched, and a queued video whose URLs will not outlive the next ten
+  minutes is resolved again first — once, through the existing coalesced
+  resolve path, with the room's members lending the cookies. A video that
+  still cannot be prepared is left alone for a quarter of an hour instead of
+  being retried nine times, its opening bytes are no longer fetched from the
+  same dead URLs, and a rendition nobody asked for that cannot be read is a
+  debug line rather than a warning per rendition. The same check guards the
+  manifest endpoint, where a cache entry that had outlived its URLs produced
+  a manifest describing nothing.
+
 - **Auto Quality Could Stick Low And Never Recover**: three ways, all
   invisible. A player whose element had not been laid out yet measured a
   drawing surface of zero pixels, which was treated as a very small player

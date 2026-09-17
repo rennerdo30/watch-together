@@ -263,6 +263,36 @@ class TestManifestResolvesOnDemand:
 
         assert len(captured_options) == attempts_after_resolve
 
+    async def test_a_cached_video_whose_urls_expired_is_resolved_again(
+            self, client, captured_options, stub_manifest):
+        """A cache entry outlives the signature on the URLs it holds.
+
+        Every URL states an `expire`; past it the CDN answers 403 to every
+        probe, and the manifest that comes back describes nothing. Serving
+        the entry as it stands makes the cache the reason playback fails.
+        """
+        import time
+        from services.database import cache_format
+
+        url = "https://youtu.be/expired-urls"
+        dead = int(time.time()) - 3600
+        signed = f"https://cdn.example.com/v.mp4?expire={dead}&itag=137&clen=1000"
+        await cache_format(url, {
+            "original_url": url, "duration": 120, "stream_type": "dash",
+            "stream_url": signed, "video_url": signed,
+            "audio_url": f"https://cdn.example.com/a.m4a?expire={dead}&itag=140&clen=500",
+            "available_qualities": [{"video_url": signed, "format_id": "137"}],
+            "audio_options": [{"audio_url": f"https://cdn.example.com/a.m4a?expire={dead}"
+                                            "&itag=140&clen=500", "format_id": "140"}],
+        })
+        before = len(captured_options)
+
+        response = client.get("/api/dash-manifest",
+                              params={"url": url, "user": "a@example.com"})
+
+        assert response.status_code == 200
+        assert len(captured_options) > before, "the dead URLs were used as they stood"
+
     async def test_an_unresolvable_video_still_reports_the_real_reason(
             self, client, monkeypatch, stub_manifest):
         """A 404 saying "call /api/resolve first" is not actionable."""

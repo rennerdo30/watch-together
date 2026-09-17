@@ -74,14 +74,21 @@ async def probe_index(
     client: httpx.AsyncClient,
     url: str,
     headers: Optional[dict] = None,
+    speculative: bool = False,
 ) -> Optional[Mp4Index]:
-    """Find the init and index byte ranges for one representation."""
+    """Find the init and index byte ranges for one representation.
+
+    `speculative` says nobody is waiting for this: the probe is warming a
+    video the room has not reached. A rendition that cannot be read is then
+    a fact for a debug line, not a warning — a warning per rendition of a
+    fetch nobody asked for buries the failures that did affect someone.
+    """
     key = stream_identity(url)
     probe_lock = _probe_locks.setdefault(key, asyncio.Lock())
     _probe_users[key] = _probe_users.get(key, 0) + 1
     try:
         async with probe_lock:
-            return await _probe_index_locked(client, url, headers, key)
+            return await _probe_index_locked(client, url, headers, key, speculative)
     finally:
         _probe_users[key] -= 1
         if _probe_users[key] == 0:
@@ -94,8 +101,10 @@ async def _probe_index_locked(
     url: str,
     headers: Optional[dict],
     key: str,
+    speculative: bool = False,
 ) -> Optional[Mp4Index]:
     now = time.time()
+    report = logger.debug if speculative else logger.warning
 
     async with _index_lock:
         cached = _index_cache.get(key)
@@ -114,11 +123,11 @@ async def _probe_index_locked(
         except UnsafeUpstreamError:
             raise
         except Exception as exc:
-            logger.warning(f"Could not probe {url[:80]}: {exc}")
+            report(f"Could not probe {url[:80]}: {exc}")
             return None
 
         if response.status_code not in (200, 206):
-            logger.warning(f"Probe of {url[:80]} returned {response.status_code}")
+            report(f"Probe of {url[:80]} returned {response.status_code}")
             return None
         return body
 
@@ -140,12 +149,12 @@ async def _probe_index_locked(
             data = await read_prefix(needed)
             index = parse_index(data) if data is not None else None
         elif needed and needed > MANIFEST_MAX_INDEX_BYTES:
-            logger.warning(
+            report(
                 f"Segment index of {needed} bytes exceeds the {MANIFEST_MAX_INDEX_BYTES} "
                 f"byte ceiling for {url[:60]}...")
 
     if index is None:
-        logger.warning(f"No fragmented-MP4 index found in {url[:80]}")
+        report(f"No fragmented-MP4 index found in {url[:80]}")
         return None
 
     table = parse_segment_table(data, index)
@@ -351,9 +360,12 @@ async def probe_formats(
     pointless — the XML would be thrown away — but the probes behind it are
     not: they are what the advance would otherwise wait on, and they fill
     the subsegment tables a later skip is warmed from.
+
+    Nobody is waiting on any of it, so every probe here is speculative and
+    reports what it could not read at debug level.
     """
     results = await asyncio.gather(*[
-        probe_index(client, fmt["url"], headers)
+        probe_index(client, fmt["url"], headers, speculative=True)
         for fmt in formats if fmt.get("url")
     ], return_exceptions=True)
     return sum(1 for result in results if isinstance(result, Mp4Index))
