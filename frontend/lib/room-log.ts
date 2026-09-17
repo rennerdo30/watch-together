@@ -139,6 +139,8 @@ export function describeRoomActivity(event: RoomActivityEvent): ActivityDescript
     case 'playback_seeked':
       return { actor, text: `${who} seeked to ${formatPlaybackTime(event.timestamp)}`, detail };
     case 'video_skipped': return { actor, text: `${who} skipped a video`, detail };
+    case 'share_started': return { actor, text: `${who} started sharing their screen`, detail };
+    case 'share_ended': return { actor, text: `${who} stopped sharing`, detail };
     case 'video_finished': return { text: 'Video finished', detail };
     case 'playback_stopped': return { text: 'Playback stopped — queue finished' };
     case 'role_changed':

@@ -9,7 +9,7 @@ change it in the same commit that makes it untrue. Newest state first.
 - **Production**: https://w2g.renner.dev runs `main` (see `git log -1`). Deployed
   with `./deploy/deploy.sh`; CI (backend, frontend lint/build, Playwright
   e2e, extension checks, CodeQL, container publish) green on that commit.
-- **Suites**: 625 backend tests (`cd backend && pytest`), 116 Playwright
+- **Suites**: 647 backend tests (`cd backend && pytest`), 119 Playwright
   tests (`cd frontend && npm run test:e2e`), lint 0 errors / 14 warnings.
 - **Admin panel** at `/admin`: rooms with members and a force-close, every
   cache tier with a clear action. Gated by `ADMIN_EMAILS` (set on the host
@@ -22,6 +22,7 @@ change it in the same commit that makes it untrue. Newest state first.
 
 | Commit | What | Why it mattered |
 | --- | --- | --- |
+| _this change_ | Screen sharing: a member's gameplay on the room's player, peer to peer, signalling over the room socket | The first thing a room can watch that this server does not fetch. Media never touches the origin, so it works behind the tunnel with no open port — and is bounded to a few viewers, since the sharer sends one copy each. |
 | `a1a0a16` | Prewarming: a skip's destination warmed at the right byte offset (new subsegment table from the `sidx`), the next queue entry probed and warmed near the end of the current video, from both server and client; player buffers 3 min | Every jump the room makes is scheduled, and each landed in an empty buffer on bytes nobody had fetched. |
 | `2f1ce07` | Auto quality: a viewer-chosen mode (Balanced/Highest/Data saver), a stats overlay that names the cap, the surface and the measured estimate, three sticky-low fixes, and per-viewer telemetry in the admin panel | A viewer on 1 Gbit was always on a low rendition and nothing could say why. An unmeasured surface (never-laid-out element) capped auto at the ladder's second rung and the cap outlived everything but a CSS resize; a pixel-ratio change never re-capped; the remembered bandwidth was the *last* sample, so one dip ratcheted down every later session. |
 | `5bb0246` | Mono audio: per-viewer downmix in player settings, one graph (`useAudioProcessing`) for levelling and mono | Anything panned hard to one side was lost to a viewer on one earbud or with hearing on one side. The graph used to exist only while levelling was on. |
@@ -35,6 +36,22 @@ change it in the same commit that makes it untrue. Newest state first.
 | `1f8b632` | Memory-only cookies, room-scoped cookie lending, in-app extension download | |
 
 Earlier history: `CHANGELOG.md` (kept per change) and `git log`.
+
+## Screen sharing: what the tests cannot prove
+
+`frontend/e2e/screen-share.spec.ts` stubs only the screen picker; the
+handshake, the peer connection and the stream arriving on the viewer's
+element are real. It deliberately stops short of asserting that frames
+flow, because a sandboxed runner blocks UDP between two browsers on the
+same host: candidates are gathered on both sides and every connectivity
+check fails. If you strengthen that test, do it on a machine where local
+peer-to-peer works, and expect `--disable-features=WebRtcHideLocalIpsWithMdns`
+(already set in the spec) to be necessary but not sufficient.
+
+Peer-to-peer also means the sharer's uplink carries one copy per viewer,
+and that viewers see each other's IP addresses. `WEBRTC_TURN_URL` /
+`WEBRTC_TURN_USERNAME` / `WEBRTC_TURN_CREDENTIAL` add a relay without code
+changes (it hides addresses and rescues strict NATs, at a bandwidth cost).
 
 ## Performance: findings and open ideas
 

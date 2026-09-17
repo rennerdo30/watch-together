@@ -56,6 +56,33 @@ PREFETCH_VIDEO_COUNT = 3  # Number of video segments to prefetch
 PREFETCH_AUDIO_COUNT = 5  # Number of audio segments to prefetch (more critical)
 PREFETCH_SESSION_TTL = 300  # 5 minutes - cleanup inactive prefetch sessions
 
+# --- Sharing a screen with the room ----------------------------------------
+# A member's own screen reaches the others browser to browser; this server
+# only relays the handshake. What may pass through it is fixed and bounded,
+# because it is the one message type carrying one member's payload to
+# another.
+SHARE_SIGNAL_KINDS = ("offer", "answer", "ice")
+# An SDP offer for a screen share runs to a few kilobytes; candidates are
+# far smaller. Well above what is needed, far below what is worth relaying.
+SHARE_SIGNAL_MAX_BYTES = 32 * 1024
+SHARE_TITLE_MAX_LENGTH = 80
+SHARE_QUALITY_MAX_LENGTH = 20
+
+# Servers that help two browsers find a path to each other. STUN only tells
+# a browser how it looks from outside, which is enough for most home
+# connections and costs nothing; a TURN relay carries the media when no
+# direct path exists, and is configured per deployment rather than assumed.
+WEBRTC_STUN_URLS = tuple(
+    url.strip() for url in os.getenv(
+        "WEBRTC_STUN_URLS",
+        "stun:stun.cloudflare.com:3478,stun:stun.l.google.com:19302",
+    ).split(",") if url.strip()
+)
+WEBRTC_TURN_URL = os.getenv("WEBRTC_TURN_URL", "").strip()
+WEBRTC_TURN_USERNAME = os.getenv("WEBRTC_TURN_USERNAME", "").strip()
+WEBRTC_TURN_CREDENTIAL = os.getenv("WEBRTC_TURN_CREDENTIAL", "").strip()
+
+
 # --- Warming what the room is about to need ---------------------------------
 # A jump lands in an empty buffer, so the player shows nothing until a whole
 # segment has arrived from the CDN. Both kinds of jump this room makes are

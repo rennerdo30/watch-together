@@ -6,9 +6,14 @@ import {
     Loader2, Users, Link as LinkIcon,
     Plus, SkipForward,
     Play, ListVideo, Settings, X, Palette, ShieldCheck, Home, Bug,
-    Crown, Shield, User as UserIcon, ChevronDown, Lock, Copy, Check, Infinity, Sun, ExternalLink, Scissors, Puzzle
+    Crown, Shield, User as UserIcon, ChevronDown, Lock, Copy, Check, Infinity, Sun, ExternalLink, Scissors, Puzzle,
+    MonitorUp, MonitorStop
 } from 'lucide-react';
 import { prewarmVideo } from '@/lib/prewarm';
+import { captureScreen, shareUnsupportedReason, stopStream } from '@/lib/webrtc/screen-capture';
+import { fetchIceServers, type IncomingSignal, type LiveShare, type SignalKind } from '@/lib/webrtc/signalling';
+import { usePeerPublisher } from '@/lib/webrtc/usePeerPublisher';
+import { usePeerViewer } from '@/lib/webrtc/usePeerViewer';
 import { ResolveResponse, dashManifestUrl, resolveUrl, getExtensionToken, regenerateExtensionToken, ExtensionToken, getUserSettings, updateUserSettings, getCookies, forgetCookies, extensionDownloadUrl, type CookieStatus, type UserSettings } from '@/lib/api';
 import { CustomPlayer } from '@/components/custom-player';
 import { chapterAt, formatChapterTime } from '@/lib/chapters';
@@ -39,8 +44,11 @@ import {
     FONT_SIZE_DEFAULT,
     FONT_SIZE_MAX,
     FONT_SIZE_MIN,
+    DEFAULT_SHARE_QUALITY,
     PREWARM_NEXT_VIDEO_SECONDS,
+    SHARE_QUALITY_PRESETS,
     SIDEBAR_DEFAULT_WIDTH,
+    type ShareQuality,
     SIDEBAR_MAX_WIDTH,
     SIDEBAR_MIN_WIDTH,
 } from '@/lib/constants';
@@ -434,6 +442,66 @@ export default function RoomPage() {
     // Note: We no longer need a local ticker for syncState.timestamp
     // The badge now uses actualPlayerTime which is updated via onTimeUpdate
 
+    // === SHARING A SCREEN WITH THE ROOM ===
+    // The media never touches this server: these browsers talk to each
+    // other and the room socket carries only the handshake.
+    const [liveShare, setLiveShare] = useState<LiveShare | null>(null);
+    const [myConnectionId, setMyConnectionId] = useState('');
+    // The socket handler is installed once and keeps the render it was
+    // created in, so anything it compares against has to be a ref rather
+    // than state — the same reason `videoDataRef` exists.
+    const myConnectionIdRef = useRef('');
+    const [localShareStream, setLocalShareStream] = useState<MediaStream | null>(null);
+    const [shareDialogOpen, setShareDialogOpen] = useState(false);
+    const [shareQuality, setShareQuality] = useState<ShareQuality>(DEFAULT_SHARE_QUALITY);
+    const [shareError, setShareError] = useState<string | null>(null);
+    const [iceServers, setIceServers] = useState<RTCIceServer[]>([]);
+    const amSharing = !!liveShare && liveShare.connection_id === myConnectionId;
+
+    useEffect(() => {
+        void fetchIceServers(BACKEND_ORIGIN).then(setIceServers);
+    }, []);
+
+    // `sendMsg` is defined further down; reaching it through a ref keeps
+    // these callbacks stable and free of declaration order.
+    const sendMsgRef = useRef<(type: string, payload?: unknown) => void>(() => { });
+    const sendSignal = useCallback((to: string, kind: SignalKind, data: unknown) => {
+        sendMsgRef.current('share_signal', { to, kind, data });
+    }, []);
+
+    const publisher = usePeerPublisher({
+        stream: localShareStream, quality: shareQuality, iceServers, sendSignal,
+    });
+    const viewer = usePeerViewer({ iceServers, sendSignal });
+
+    const stopSharing = useCallback((tellTheRoom = true) => {
+        setLocalShareStream((current) => { stopStream(current); return null; });
+        if (tellTheRoom) sendMsgRef.current('share_stop', {});
+    }, []);
+
+    const startSharing = useCallback(async () => {
+        setShareError(null);
+        const unsupported = shareUnsupportedReason();
+        if (unsupported) { setShareError(unsupported); return; }
+        try {
+            const stream = await captureScreen(shareQuality);
+            // Chrome's own "Stop sharing" bar ends the capture without
+            // telling this page anything else; the track ending is how it
+            // finds out.
+            stream.getVideoTracks()[0]?.addEventListener('ended', () => stopSharing());
+            setLocalShareStream(stream);
+            setShareDialogOpen(false);
+            sendMsgRef.current('share_start', {
+                title: SHARE_QUALITY_PRESETS[shareQuality].label,
+                quality: shareQuality,
+            });
+        } catch (error) {
+            // Cancelling the picker is an ordinary answer, not a failure.
+            if ((error as DOMException)?.name === 'NotAllowedError') { setShareDialogOpen(false); return; }
+            setShareError('Could not start the capture. Another app may be holding the screen.');
+        }
+    }, [shareQuality, stopSharing]);
+
     const handleWsMessage = (msg: WsMessage) => {
         const type = msg.type;
         const payload = msg.payload ?? {};
@@ -441,6 +509,14 @@ export default function RoomPage() {
 
         switch (type) {
             case 'sync':
+                // Who this browser is, for peers to address, and whatever
+                // is already being shared when it arrives.
+                if (payload.your_connection_id) {
+                    myConnectionIdRef.current = payload.your_connection_id as string;
+                    setMyConnectionId(payload.your_connection_id as string);
+                }
+                setLiveShare((payload.live_share as LiveShare | null) ?? null);
+                if (payload.live_share) sendMsg('share_ready', {});
                 // On sync (initial load or reconnect), set video data and re-resolve for fresh DASH URLs
                 if (payload.video_data) {
                     const syncVideoData = payload.video_data;
@@ -616,6 +692,41 @@ export default function RoomPage() {
                     toast.error(payload.message);
                 }
                 break;
+            case 'share_started': {
+                const share = payload as unknown as LiveShare;
+                setLiveShare(share);
+                // Everyone but the sharer asks to be sent the stream. The
+                // sharer's own player shows the capture directly.
+                if (share.connection_id !== myConnectionIdRef.current) {
+                    viewer.reset();
+                    sendMsg('share_ready', {});
+                }
+                break;
+            }
+
+            case 'share_ended':
+                setLiveShare(null);
+                viewer.reset();
+                // If this browser was the one sharing, the capture stops
+                // with it — an admin can end someone else's share.
+                stopSharing(false);
+                break;
+
+            case 'share_ready':
+                // A viewer is loaded and waiting; offer it the stream.
+                publisher.offerTo(payload.from as string);
+                break;
+
+            case 'share_signal': {
+                // Routed by who sent it: an answer or a candidate from
+                // someone this browser is sending to belongs to that
+                // connection, and anything else is the sharer talking to
+                // this viewer.
+                const signal = payload as unknown as IncomingSignal;
+                if (!publisher.accept(signal)) viewer.accept(signal);
+                break;
+            }
+
             case 'pong':
                 // Calculate round-trip latency
                 if (payload.client_time) {
@@ -697,6 +808,11 @@ export default function RoomPage() {
             wsRef.current.send(JSON.stringify({ type, payload }));
         }
     };
+    useEffect(() => { sendMsgRef.current = sendMsg; });
+
+    // Leaving the room, or closing the tab, releases the capture: the
+    // browser's own sharing indicator would otherwise outlive the share.
+    useEffect(() => () => { stopStream(localShareStream); }, [localShareStream]);
 
     // Whose session a resolve ran with, when it was not the viewer's own.
     const lentBy = (data: ResolveResponse) =>
@@ -951,7 +1067,37 @@ export default function RoomPage() {
                                 <span className="ui-label text-neutral-200">Resolving...</span>
                             </div>
                         )}
-                        {videoData ? (
+                        {liveShare && (
+                            <div className="absolute top-3 left-3 z-20 flex items-center gap-2 rounded-full bg-black/70 px-3 py-1.5 text-[11px] text-white backdrop-blur">
+                                <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />
+                                {amSharing ? 'You are sharing your screen' : `${liveShare.email} is sharing their screen`}
+                                {!amSharing && viewer.status === 'connecting' && (
+                                    <span className="text-neutral-400">· connecting…</span>
+                                )}
+                            </div>
+                        )}
+                        {liveShare && !amSharing && viewer.status === 'failed' && (
+                            <div role="alert" className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/80 px-6 text-center">
+                                <p className="text-sm font-semibold text-white">Could not reach {liveShare.email}</p>
+                                <p className="max-w-sm text-xs text-neutral-400">
+                                    Your network and theirs could not find a path to each other.
+                                    A different network — or leaving a VPN — usually fixes it.
+                                </p>
+                            </div>
+                        )}
+                        {liveShare ? (
+                            <ErrorBoundary>
+                                <CustomPlayer
+                                    key={`share-${liveShare.connection_id}`}
+                                    url=""
+                                    isLive
+                                    shareStream={amSharing ? localShareStream : viewer.stream}
+                                    playerRef={playerRef}
+                                    syncThreshold={syncThreshold}
+                                    onSyncThresholdChange={setSyncThreshold}
+                                />
+                            </ErrorBoundary>
+                        ) : videoData ? (
                             <ErrorBoundary>
                                 <CustomPlayer
                                     // Keyed by the video's identity, not by its
@@ -1204,7 +1350,90 @@ export default function RoomPage() {
                             {queueing ? <Loader2 aria-hidden="true" className="animate-spin w-3 h-3" /> : <Plus aria-hidden="true" className="w-3 h-3" />}
                             Queue
                         </button>
+                        {amSharing ? (
+                            <button
+                                type="button"
+                                onClick={() => stopSharing()}
+                                className="px-4 h-9 bg-red-500/15 hover:bg-red-500/25 text-red-300 font-medium rounded-lg text-sm border border-red-500/30 flex items-center gap-1.5 transition-colors"
+                            >
+                                <MonitorStop aria-hidden="true" className="w-3.5 h-3.5" />
+                                Stop sharing
+                            </button>
+                        ) : (
+                            <button
+                                type="button"
+                                onClick={() => { setShareError(null); setShareDialogOpen(true); }}
+                                disabled={!!liveShare}
+                                title={liveShare ? `${liveShare.email} is already sharing` : 'Share your screen with the room'}
+                                className={`px-4 h-9 bg-neutral-800/50 hover:bg-neutral-800 text-neutral-100 font-medium rounded-lg text-sm border ${activeTheme.border} disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors`}
+                            >
+                                <MonitorUp aria-hidden="true" className="w-3.5 h-3.5" />
+                                Share screen
+                            </button>
+                        )}
                     </form>
+
+                    {/* What sharing a screen means, said before the picker opens */}
+                    {shareDialogOpen && (
+                        <div
+                            role="dialog"
+                            aria-modal="true"
+                            aria-label="Share your screen"
+                            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+                            onClick={() => setShareDialogOpen(false)}
+                        >
+                            <div
+                                onClick={(event) => event.stopPropagation()}
+                                className="w-full max-w-md rounded-xl border border-neutral-800 bg-neutral-900 p-5 shadow-2xl"
+                            >
+                                <h2 className="text-sm font-semibold text-white">Share your screen</h2>
+                                <p className="mt-2 text-xs leading-relaxed text-neutral-400">
+                                    Your browser will ask which window to share, and whether to
+                                    include its sound. The room watches it live while it runs; the
+                                    video playing now pauses and comes back afterwards.
+                                </p>
+                                <label htmlFor="share-quality" className="mt-4 block text-xs text-white">
+                                    Quality
+                                </label>
+                                <select
+                                    id="share-quality"
+                                    value={shareQuality}
+                                    onChange={(event) => setShareQuality(event.target.value as ShareQuality)}
+                                    className="mt-1.5 w-full rounded-md border border-neutral-700 bg-neutral-800 px-2 py-2 text-xs text-white"
+                                >
+                                    {Object.entries(SHARE_QUALITY_PRESETS).map(([value, preset]) => (
+                                        <option key={value} value={value}>{preset.label}</option>
+                                    ))}
+                                </select>
+                                <p className="mt-2 text-[11px] leading-relaxed text-neutral-500">
+                                    About {(SHARE_QUALITY_PRESETS[shareQuality].maxBitrateBps / 1_000_000).toFixed(0)} Mbit/s
+                                    of your upload per viewer, since each one receives their own copy.
+                                </p>
+                                <p className="mt-3 text-[11px] leading-relaxed text-amber-200/90">
+                                    Viewers connect directly to you, so they can see your IP address.
+                                </p>
+                                {shareError && (
+                                    <p role="alert" className="mt-3 text-[11px] text-red-300">{shareError}</p>
+                                )}
+                                <div className="mt-5 flex justify-end gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => setShareDialogOpen(false)}
+                                        className="px-3 h-9 rounded-lg text-sm text-neutral-300 hover:bg-white/5"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => void startSharing()}
+                                        className={`px-4 h-9 ${activeTheme.text} font-medium rounded-lg text-sm ${activeTheme.accent} hover:brightness-110`}
+                                    >
+                                        Choose what to share
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 {/* Resize Handle (pointer-only affordance, desktop layout) */}

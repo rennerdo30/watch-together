@@ -552,7 +552,11 @@ export function PlayerControls({
                             </div>
                         )}
 
-                        {/* Quality Options */}
+                        {/* Quality Options. A source with no ladder — a
+                            member's screen, a single-rendition stream —
+                            offers nothing to choose between. */}
+                        {qualities.length > 0 && (
+                        <>
                         <button
                             type="button"
                             onClick={() => onQualityChange(-1)}
@@ -593,6 +597,8 @@ export function PlayerControls({
                                 <span className="text-[10px] text-zinc-500">{(q.bitrate / 1000).toFixed(0)}k</span>
                             </button>
                         ))}
+                        </>
+                        )}
                     </div>
                 </div>
             )}

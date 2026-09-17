@@ -31,6 +31,8 @@ from core.config import (
     MAX_CACHEABLE_FILE_BYTES, FORMAT_CACHE_TTL_SECONDS,
     METRICS_DEFAULT_SAMPLE_LIMIT, POT_PROVIDER_EXTRACTOR_ARGS,
     PREWARM_NEXT_VIDEO_SECONDS, DEFAULT_USER_AGENT,
+    SHARE_SIGNAL_KINDS, SHARE_SIGNAL_MAX_BYTES,
+    SHARE_TITLE_MAX_LENGTH, SHARE_QUALITY_MAX_LENGTH,
 )
 from core.security import (
     get_user_from_request, get_user_from_websocket,
@@ -1535,6 +1537,69 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     await websocket.send_json({
                         "type": "error",
                         "payload": {"message": "Only the room admin can change SponsorBlock settings"},
+                    })
+
+            elif msg_type == "share_start":
+                # One member puts their own screen on the room's player.
+                # Whatever was playing stops where it is; its position is
+                # already recorded on its queue entry, so ending the share
+                # returns the room to it.
+                share = manager.start_share(
+                    room_id, websocket,
+                    title=str(payload.get("title") or "")[:SHARE_TITLE_MAX_LENGTH],
+                    quality=str(payload.get("quality") or "")[:SHARE_QUALITY_MAX_LENGTH],
+                )
+                if share is None:
+                    await websocket.send_json({
+                        "type": "error",
+                        "payload": {"message": "Someone else is already sharing in this room"},
+                    })
+                else:
+                    await manager.update_state(room_id, {"is_playing": False})
+                    await manager.broadcast({"type": "share_started", "payload": share}, room_id)
+                    await publish_room_activity(
+                        room_id, "share_started", actor=user_email,
+                        video={"title": share["title"]} if share["title"] else None)
+
+            elif msg_type == "share_stop":
+                share = manager.stop_share(room_id, websocket)
+                if share:
+                    await manager.broadcast({
+                        "type": "share_ended",
+                        "payload": {"reason": "stopped", "email": share["email"]},
+                    }, room_id)
+                    await publish_room_activity(room_id, "share_ended", actor=user_email)
+
+            elif msg_type == "share_ready":
+                # A viewer announcing itself to the sharer, which answers
+                # with an offer. Readiness beats guessing from the peer
+                # list: a browser that has not finished loading cannot
+                # negotiate, and a stale connection never will.
+                share = manager.share_of(room_id)
+                if share:
+                    await manager.send_to_connection(room_id, share["connection_id"], {
+                        "type": "share_ready",
+                        "payload": {"from": getattr(websocket, "connection_id", ""),
+                                    "email": user_email},
+                    })
+
+            elif msg_type == "share_signal":
+                # The handshake itself: offers, answers and ICE candidates,
+                # relayed verbatim between two browsers in this room. This
+                # is the only message that carries one member's payload to
+                # another, so what may be relayed is fixed and bounded.
+                kind = payload.get("kind")
+                target = payload.get("to")
+                data = payload.get("data")
+                if kind not in SHARE_SIGNAL_KINDS or not isinstance(target, str):
+                    logger.info(f"Refused share signal {kind!r} from {user_email} in {room_id}")
+                elif len(json.dumps(data)) > SHARE_SIGNAL_MAX_BYTES:
+                    logger.info(f"Refused oversized share signal from {user_email} in {room_id}")
+                else:
+                    await manager.send_to_connection(room_id, target, {
+                        "type": "share_signal",
+                        "payload": {"kind": kind, "data": data,
+                                    "from": getattr(websocket, "connection_id", "")},
                     })
 
             elif msg_type == "playback_quality":
