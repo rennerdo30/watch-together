@@ -22,7 +22,7 @@ change it in the same commit that makes it untrue. Newest state first.
 
 | Commit | What | Why it mattered |
 | --- | --- | --- |
-| _this change_ | Mono audio: per-viewer downmix in player settings, one graph (`useAudioProcessing`) for levelling and mono | Anything panned hard to one side was lost to a viewer on one earbud or with hearing on one side. The graph used to exist only while levelling was on. |
+| `5bb0246` | Mono audio: per-viewer downmix in player settings, one graph (`useAudioProcessing`) for levelling and mono | Anything panned hard to one side was lost to a viewer on one earbud or with hearing on one side. The graph used to exist only while levelling was on. |
 | `4413fc0` | Auto quality capped to the drawing surface + one rung of headroom (`ABR_LEVELS_ABOVE_SURFACE`), following resizes | A seek buffered ~5 s: auto had picked 2160p AV1 for a laptop-sized player, whose 13–28 MB segments take seconds each; nothing shows after a seek until one lands. |
 | `a43b7e7` | Proxy refuses bare (unranged) GETs for large googlevideo files | A download manager on one viewer's Chrome pulled every rendition in full — 17 of 18.4 GB served — and starved real segment fetches. See *Performance* below. |
 | `5d97eb5` | Seek bar hit area 4 px → 16 px, track thickens on hover | It was unhittable. |
