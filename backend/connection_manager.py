@@ -5,11 +5,13 @@ import time
 import asyncio
 import logging
 import uuid
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 from fastapi import WebSocket
-from core.config import GUEST_IDENTITY
+from core.config import (
+    GUEST_IDENTITY, BROWSER_BUSY_OTHER_ROOM, BROWSER_BUSY_LIVE_SHARE,
+)
 from services.database import save_room, get_all_rooms, delete_room
 from services.sponsorblock import SETTINGS_KEY as SPONSORBLOCK_KEY, normalize_settings
 
@@ -56,6 +58,14 @@ class ConnectionManager:
         # that carries its signalling. A restart leaves no peers, so a
         # remembered share would only describe something that is gone.
         self.live_shares: Dict[str, dict] = {}
+        # room_id -> the shared browser session that room has open.
+        #
+        # There is one neko container for the whole instance, so this holds at
+        # most one entry: a second room asking is told which room has it. Kept
+        # out of `room_states` for the same reason a share is — it describes a
+        # container this process is talking to, and a restart leaves nothing
+        # for a remembered session to point at.
+        self.browser_sessions: Dict[str, dict] = {}
 
     def member_emails(self, room_id: str) -> List[str]:
         """Identities connected to a room right now, in join order, without duplicates or guests.
@@ -146,6 +156,9 @@ class ConnectionManager:
         connection_id = getattr(websocket, "connection_id", None)
         if not connection_id:
             return None
+        if self.browser_sessions.get(room_id):
+            # The shared browser is on the player. Two sources, one surface.
+            return None
         current = self.live_shares.get(room_id)
         if current and current["connection_id"] != connection_id:
             if any(getattr(ws, "connection_id", None) == current["connection_id"]
@@ -174,6 +187,68 @@ class ConnectionManager:
         if not (is_owner or is_admin):
             return None
         return self.live_shares.pop(room_id, None)
+
+    # --- the shared browser ------------------------------------------------
+    #
+    # The room's player shows one thing. A screen share and the shared browser
+    # both want to be that thing, so each refuses while the other holds the
+    # slot — and the browser additionally refuses while another room has it,
+    # because there is one container behind every room.
+
+    def browser_of(self, room_id: str) -> Optional[dict]:
+        """The shared browser session this room has open, if any."""
+        return self.browser_sessions.get(room_id)
+
+    def browser_holder(self) -> Optional[str]:
+        """The room currently holding the instance's one browser, if any."""
+        for room_id in self.browser_sessions:
+            return room_id
+        return None
+
+    def open_browser(self, room_id: str, websocket: WebSocket,
+                     title: str) -> Tuple[Optional[dict], Optional[str]]:
+        """Claim the browser for this room, or say why that is not possible.
+
+        Returns the session, or a `(None, reason)`-shaped refusal expressed as
+        a plain string code so the caller can word it for whoever asked.
+        """
+        holder = self.browser_holder()
+        if holder is not None and holder != room_id:
+            return None, BROWSER_BUSY_OTHER_ROOM
+        if self.live_shares.get(room_id):
+            return None, BROWSER_BUSY_LIVE_SHARE
+
+        existing = self.browser_sessions.get(room_id)
+        if existing:
+            # Already open: opening again is how a member who joined late
+            # gets it onto their own player, and must not disturb the room.
+            return existing, None
+
+        session = {
+            "room_id": room_id,
+            "opened_by": getattr(websocket, "user_email", GUEST_IDENTITY),
+            "title": title,
+            "opened_at": time.time(),
+        }
+        self.browser_sessions[room_id] = session
+        return session, None
+
+    def close_browser(self, room_id: str, websocket: WebSocket) -> Optional[dict]:
+        """Close the room's browser. Whoever opened it may, and so may the admin.
+
+        Unlike a screen share this does not end when its opener leaves: the
+        session belongs to the room, not to the person who pressed the button,
+        and the others are still looking at it.
+        """
+        session = self.browser_sessions.get(room_id)
+        if not session:
+            return None
+        email = getattr(websocket, "user_email", None)
+        is_opener = session["opened_by"] == email
+        is_admin = self.room_states.get(room_id, {}).get("roles", {}).get(email) == "admin"
+        if not (is_opener or is_admin):
+            return None
+        return self.browser_sessions.pop(room_id, None)
 
     def _get_room_lock(self, room_id: str) -> asyncio.Lock:
         """Get or create a lock for a specific room."""
@@ -343,6 +418,8 @@ class ConnectionManager:
         state["peers"] = self.peers(room_id)
         # What is being shared right now, if anything.
         state["live_share"] = self.live_shares.get(room_id)
+        # …and whether the room has the shared browser open.
+        state["shared_browser"] = self.browser_sessions.get(room_id)
 
         # Don't send internal tracking info to clients
         state.pop("last_sync_time", None)
@@ -517,6 +594,12 @@ class ConnectionManager:
 
             if not self.active_connections[room_id]:
                 del self.active_connections[room_id]
+                # Nobody is watching it any more, so the instance's one
+                # browser goes back to whoever wants it next. Nothing is lost
+                # by this: closing the session only takes the picture off this
+                # room's player — the container keeps its tabs, so reopening
+                # comes back to the same page.
+                self.browser_sessions.pop(room_id, None)
                 # Mark room as empty with timestamp for TTL-based cleanup
                 # Room state is kept for 5 minutes to allow quick reconnects
                 if room_id in self.room_states:
@@ -547,6 +630,9 @@ class ConnectionManager:
                     if rid in self._room_locks:
                         del self._room_locks[rid]
                     self.live_shares.pop(rid, None)
+                    # A room nobody came back to must not keep holding the
+                    # instance's one browser away from every other room.
+                    self.browser_sessions.pop(rid, None)
                     await delete_room(rid)
                     logger.info(f"Cleaned up stale room: {rid}")
 
@@ -579,6 +665,7 @@ class ConnectionManager:
                 pass
         self.active_connections.pop(room_id, None)
         self.live_shares.pop(room_id, None)
+        self.browser_sessions.pop(room_id, None)
         async with self._state_lock:
             self.room_states.pop(room_id, None)
             self._room_locks.pop(room_id, None)
