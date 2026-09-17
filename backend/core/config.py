@@ -114,6 +114,20 @@ PREWARM_MAX_AUDIO_RENDITIONS = 1
 # and how many such streams are remembered at once.
 ACTIVE_STREAM_TTL_SECONDS = 120
 ACTIVE_STREAM_LIMIT = 64
+# How much life a resolve's signed URLs must have left before anything is
+# fetched with them. A URL past its `expire` is answered 403 by the CDN
+# whatever cookies it carries, so probing one is not a fetch that might fail
+# but a guaranteed refusal per rendition; below this the video is resolved
+# again instead. The margin has to cover the probe, the opening bytes and
+# the first minutes of playback that follow.
+STREAM_URL_MIN_LIFETIME_SECONDS = 600
+# How long a video that could not be prepared is left alone. The heartbeat
+# comes every 5 seconds, so without this a video nobody can warm is retried
+# nine times in the last PREWARM_NEXT_VIDEO_SECONDS of the one before it —
+# and each retry would be a yt-dlp run or a full ladder of doomed probes.
+PREWARM_RETRY_AFTER_SECONDS = 900
+# How many such videos are remembered at once.
+PREWARM_FAILURE_LIMIT = 32
 
 # Format cache configuration
 FORMAT_CACHE_TTL_SECONDS = 7200  # 2 hours - YouTube URLs typically valid for 6 hours

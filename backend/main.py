@@ -13,6 +13,7 @@ import asyncio
 import time
 import json
 import logging
+from functools import partial
 from typing import Optional
 from urllib.parse import urljoin, quote
 import re
@@ -30,7 +31,8 @@ from core.config import (
     CACHE_DIR, YTDLP_CACHE_DIR, GUEST_IDENTITY,
     MAX_CACHEABLE_FILE_BYTES, FORMAT_CACHE_TTL_SECONDS,
     METRICS_DEFAULT_SAMPLE_LIMIT, POT_PROVIDER_EXTRACTOR_ARGS,
-    PREWARM_NEXT_VIDEO_SECONDS, DEFAULT_USER_AGENT,
+    PREWARM_NEXT_VIDEO_SECONDS, STREAM_URL_MIN_LIFETIME_SECONDS,
+    DEFAULT_USER_AGENT,
     SHARE_SIGNAL_KINDS, SHARE_SIGNAL_MAX_BYTES,
     SHARE_TITLE_MAX_LENGTH, SHARE_QUALITY_MAX_LENGTH,
 )
@@ -74,6 +76,7 @@ from connection_manager import manager
 from services.sponsorblock import SponsorSkipper
 from services.watch_history import reporter as history_reporter
 from services import stream_owner
+from services import stream_expiry
 
 # Room-wide SponsorBlock skipping; armed from the WebSocket handler below.
 sponsor_skipper = SponsorSkipper(manager)
@@ -182,18 +185,58 @@ async def cleanup_task():
         await manager.cleanup_stale_rooms(ttl_seconds=300)
 
 
-async def _prepare_queued_video(video_data: dict) -> Optional[dict]:
+async def _playable_source(url: str, known: Optional[dict], room_id: str,
+                           user_email: Optional[str] = None,
+                           user_agent: str = DEFAULT_USER_AGENT) -> Optional[dict]:
+    """A resolve of `url` whose signed URLs the CDN will still serve.
+
+    `known` is the best copy the caller already has — a cache entry, or a
+    queue entry a room has been sitting on. Either can outlive its URLs:
+    they carry an `expire` timestamp and answer 403 to everything
+    afterwards, cookies or no cookies. Resolving again is the only way to
+    get URLs that work, and it is a yt-dlp run, so it happens when the
+    deadline says it must and not on a timer.
+    """
+    if known and stream_expiry.is_fresh(known, STREAM_URL_MIN_LIFETIME_SECONDS):
+        return known
+    remaining = stream_expiry.seconds_remaining(known or {})
+    logger.info("Stream URLs of %s have %.0fs left; resolving it again", url, remaining or 0)
+    try:
+        fresh = await resolve_url(url, user_agent, refresh=True,
+                                  room_id=room_id, user_email=user_email)
+    except Exception as exc:
+        logger.info("Could not re-resolve %s: %s", url, str(exc)[:150])
+        return None
+    if not stream_expiry.is_fresh(fresh, STREAM_URL_MIN_LIFETIME_SECONDS):
+        logger.info("Re-resolving %s produced URLs that expire immediately", url)
+        return None
+    return fresh
+
+
+async def _prepare_queued_video(video_data: dict, room_id: str = "") -> Optional[dict]:
     """Probe a queued video's renditions so the advance hits warm caches.
 
     Everything the first moments of a video wait on happens here instead:
     the index probe of every rendition (which is what building the manifest
-    spends its time on) and, through the caller, the opening bytes. The
-    cached resolve is preferred over the queue entry because signed stream
-    URLs rotate, and probing an expired one warms nothing.
+    spends its time on) and, through the caller, the opening bytes.
+
+    What is probed is a resolve whose URLs are still signed for now. The
+    cached one is preferred over the queue entry, and when neither survives
+    the video is resolved again before anything is fetched: a queue entry
+    keeps the URLs it was added with, and probing a dead signature is not a
+    warm that might miss but a refusal per rendition, every heartbeat, for
+    as long as the room takes to finish the video before it.
+
+    Returns the resolve it probed, or None when this video cannot be
+    prepared — which stops the caller warming bytes from the same dead URLs.
     """
     original_url = video_data.get("original_url")
-    source = (await get_cached_format(original_url)) if original_url else None
-    source = source or video_data
+    if not original_url:
+        return None
+    known = (await get_cached_format(original_url)) or video_data
+    source = await _playable_source(original_url, known, room_id)
+    if source is None:
+        return None
     video_formats, audio_formats = manifest_formats(source)
     if not video_formats or not audio_formats:
         return None
@@ -205,9 +248,15 @@ async def _prepare_queued_video(video_data: dict) -> Optional[dict]:
     if cookie_header:
         headers["Cookie"] = cookie_header
 
+    wanted = len(video_formats) + len(audio_formats)
     probed = await probe_formats(await get_proxy_client(),
                                  video_formats + audio_formats, headers)
-    logger.info(f"Prepared {probed}/{len(video_formats) + len(audio_formats)} "
+    if not probed:
+        # Nobody asked for any of this, so it is a debug line rather than
+        # the room's problem — but the advance will now pay for the probes.
+        logger.debug("Prepared none of the %d representations of %s", wanted, original_url)
+        return None
+    logger.info(f"Prepared {probed}/{wanted} "
                 f"representations of the next video: {original_url}")
     return source
 
@@ -224,7 +273,10 @@ def _warm_next_video_if_close(room_id: str, state: dict, position: float) -> Non
         return
     upcoming = manager.peek_next_video(room_id)
     if upcoming:
-        prewarm.warm_video(_proxy_client, upcoming, _prepare_queued_video)
+        # The room is what makes a re-resolve possible for a video nobody
+        # requested: its connected members are who can lend the cookies.
+        prewarm.warm_video(_proxy_client, upcoming,
+                           partial(_prepare_queued_video, room_id=room_id))
 
 
 async def sync_heartbeat_task():
@@ -429,11 +481,24 @@ _resolve_tasks: dict[tuple, asyncio.Task] = {}
 
 async def resolve_video(request: Request, url: str, user_agent: str = None, *,
                         refresh: bool = False, room_id: str = "") -> dict:
-    """Share expensive extraction among concurrent requests by the same user."""
-    key = (url, get_user_from_request(request), user_agent, refresh, room_id)
+    """Resolve for whoever is asking over HTTP."""
+    return await resolve_url(url, user_agent, refresh=refresh, room_id=room_id,
+                             user_email=get_user_from_request(request))
+
+
+async def resolve_url(url: str, user_agent: str = None, *, refresh: bool = False,
+                      room_id: str = "", user_email: Optional[str] = None) -> dict:
+    """Share expensive extraction among concurrent requests by the same user.
+
+    Takes the identity rather than the request, because not every resolve
+    has one: the heartbeat re-resolves a queued video whose signed URLs the
+    CDN no longer serves, on nobody's behalf, and the room's own members
+    lend the cookies for it.
+    """
+    key = (url, user_email, user_agent, refresh, room_id)
     task = _resolve_tasks.get(key)
     if task is None:
-        task = asyncio.create_task(_resolve_video(request, url, user_agent, refresh=refresh, room_id=room_id))
+        task = asyncio.create_task(_resolve_video(user_email, url, user_agent, refresh=refresh, room_id=room_id))
         _resolve_tasks[key] = task
         def finished(done: asyncio.Task) -> None:
             _resolve_tasks.pop(key, None)
@@ -443,7 +508,7 @@ async def resolve_video(request: Request, url: str, user_agent: str = None, *,
     return await asyncio.shield(task)
 
 
-async def _resolve_video(request: Request, url: str, user_agent: str = None, *,
+async def _resolve_video(user_email: Optional[str], url: str, user_agent: str = None, *,
                          refresh: bool = False, room_id: str = "") -> dict:
     """Resolve a URL to playable streams and cache the result.
 
@@ -456,8 +521,6 @@ async def _resolve_video(request: Request, url: str, user_agent: str = None, *,
     the extension, so the requester usually has no cookies; a member of that
     room who is signed in to the video's site lends theirs instead.
     """
-    user_email = get_user_from_request(request)
-
     # Serve a fresh resolution from the cache before extracting. Extraction
     # costs seconds of yt-dlp work per call, and the room multiplies calls:
     # the sender resolves once to paste, then the set_video broadcast makes
@@ -648,6 +711,14 @@ async def dash_manifest(request: Request, url: str, room: str = None):
         cached = await resolve_video(request, url,
                                      request.headers.get("user-agent"),
                                      room_id=sanitize_room_id(room))
+    else:
+        # A cache entry can outlive the signature on the URLs it holds; every
+        # probe of those answers 403 and the manifest comes back empty.
+        cached = await _playable_source(url, cached, sanitize_room_id(room), user_email,
+                                        request.headers.get("user-agent") or DEFAULT_USER_AGENT)
+        if cached is None:
+            raise HTTPException(status_code=422,
+                                detail="Video stream URLs could not be refreshed")
 
     duration = cached.get("duration")
     if not duration:

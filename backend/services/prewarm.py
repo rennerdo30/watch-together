@@ -31,9 +31,11 @@ from core.config import (
     ACTIVE_STREAM_LIMIT,
     ACTIVE_STREAM_TTL_SECONDS,
     PREWARM_AUDIO_BYTES,
+    PREWARM_FAILURE_LIMIT,
     PREWARM_MAX_AUDIO_RENDITIONS,
     PREWARM_MAX_TASKS,
     PREWARM_MAX_VIDEO_RENDITIONS,
+    PREWARM_RETRY_AFTER_SECONDS,
     PREWARM_VIDEO_BYTES,
 )
 from services import manifest as manifest_service
@@ -43,7 +45,8 @@ from services.prefetcher import prefetch_bytes, start_initial_prefetch
 logger = logging.getLogger(__name__)
 
 #: Probes a queued video's renditions and returns the resolve it used, which
-#: may be a fresher one than the queue entry carries.
+#: may be a fresher one than the queue entry carries — or None when the video
+#: cannot be prepared at all, which ends the warm.
 PrepareVideo = Callable[[dict], Awaitable[Optional[dict]]]
 
 # One task per thing being warmed; a second request for the same thing joins
@@ -57,6 +60,14 @@ _tasks: Dict[str, asyncio.Task] = {}
 # another. What every viewer does pass through here is their segment
 # requests, and that is the answer: warm what is being played.
 _active_streams: "OrderedDict[str, float]" = OrderedDict()
+
+# When preparing a video last came to nothing, per video. The heartbeat that
+# asks is five seconds apart and the window it asks in is
+# PREWARM_NEXT_VIDEO_SECONDS long, so a video that cannot be prepared —
+# stream URLs the CDN no longer serves, an extraction that fails — would
+# otherwise be attempted nine times per advance, each attempt a yt-dlp run
+# or a full ladder of refusals. One attempt, then silence.
+_failed_videos: "OrderedDict[str, float]" = OrderedDict()
 
 
 def _spawn(key: str, coroutine: Awaitable[None]) -> None:
@@ -148,21 +159,38 @@ def warm_position(client: httpx.AsyncClient, video_data: dict, seconds: float,
            _warm_position(client, urls, seconds, identity))
 
 
+def _recently_failed(key: str) -> bool:
+    last = _failed_videos.get(key)
+    return last is not None and time.monotonic() - last <= PREWARM_RETRY_AFTER_SECONDS
+
+
+def _note_failure(key: str) -> None:
+    _failed_videos[key] = time.monotonic()
+    _failed_videos.move_to_end(key)
+    while len(_failed_videos) > PREWARM_FAILURE_LIMIT:
+        _failed_videos.popitem(last=False)
+
+
 async def _warm_video(client: httpx.AsyncClient, video_data: dict,
-                      prepare: Optional[PrepareVideo]) -> None:
+                      prepare: Optional[PrepareVideo], key: str) -> None:
     # The indexes first: probing every rendition is what the advance would
     # otherwise wait on, and it is what fills the subsegment tables, so a
     # skip inside the next video can be warmed as well. `prepare` hands back
-    # the resolve it probed, which may be fresher than the queue entry —
-    # signed stream URLs rotate, and warming an expired one warms nothing.
+    # the resolve it probed — which may be a fresher one than the queue entry
+    # carries — or nothing at all, meaning this video cannot be warmed right
+    # now. Fetching its opening bytes anyway would spend the same doomed
+    # requests one layer down, so the warm ends here and the video is left
+    # alone until the backoff runs out.
     source = video_data
     if prepare is not None:
         try:
-            prepared = await prepare(video_data)
-            if prepared:
-                source = prepared
+            source = await prepare(video_data)
         except Exception as exc:  # Speculation must never raise into a room.
             logger.debug("Prewarm preparation failed: %s", exc)
+            source = None
+        if not source:
+            _note_failure(key)
+            return
     if stream_urls(source):
         start_initial_prefetch(source.get("video_url"), source.get("audio_url"), client)
         logger.info("Prewarmed the next video: %s", str(source.get("title") or "")[:60])
@@ -174,7 +202,10 @@ def warm_video(client: httpx.AsyncClient, video_data: dict,
     key = video_data.get("original_url") if isinstance(video_data, dict) else None
     if not key:
         return
-    _spawn(f"video:{key[:160]}", _warm_video(client, video_data, prepare))
+    if _recently_failed(key):
+        logger.debug("Not preparing %s again yet: the last attempt came to nothing", key)
+        return
+    _spawn(f"video:{key[:160]}", _warm_video(client, video_data, prepare, key))
 
 
 async def drain() -> None:
@@ -189,6 +220,11 @@ async def drain() -> None:
 def forget_active_streams() -> None:
     """Drop what is known about who is playing what (tests)."""
     _active_streams.clear()
+
+
+def forget_failures() -> None:
+    """Drop the backoff on videos that could not be prepared (tests)."""
+    _failed_videos.clear()
 
 
 async def shutdown() -> None:

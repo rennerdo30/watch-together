@@ -9,9 +9,11 @@ subsegment table that turns a playback position into a byte offset, the
 prediction of which queue entry plays next, and the two moments that trigger
 a warm.
 """
+import logging
 import os
 import struct
 import sys
+import time
 
 import pytest
 
@@ -22,6 +24,8 @@ from connection_manager import ConnectionManager
 from core.config import PREWARM_NEXT_VIDEO_SECONDS
 from services import manifest as manifest_service
 from services import prewarm
+from services import stream_expiry
+from services import stream_owner
 from services.mp4_index import Mp4Index, parse_index, parse_segment_table
 
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
@@ -367,6 +371,326 @@ class TestTheNextVideoIsPreparedAsTheCurrentOneEnds:
         state["queue"] = [{"original_url": "https://youtu.be/now"}]
         main._warm_next_video_if_close("prewarm-room", state, 599)
         assert prepared == []
+
+
+class TestWhenASignedUrlDies:
+    """A CDN URL states its own deadline, so it can be read before fetching."""
+
+    def test_the_expiry_is_read_from_the_query(self):
+        deadline = time.time() + 3600
+        url = f"https://rr1.googlevideo.com/videoplayback?expire={int(deadline)}&itag=137"
+        assert stream_expiry.expires_at(url) == pytest.approx(int(deadline))
+
+    def test_the_expiry_is_read_from_the_path_form_too(self):
+        deadline = int(time.time()) + 3600
+        url = f"https://rr1.googlevideo.com/videoplayback/expire/{deadline}/itag/137/file.mp4"
+        assert stream_expiry.expires_at(url) == deadline
+
+    def test_a_url_that_states_no_deadline_has_none(self):
+        assert stream_expiry.expires_at("https://cdn.test/best.mp4") is None
+        assert stream_expiry.expires_at("") is None
+
+    def test_a_lifetime_is_not_mistaken_for_a_timestamp(self):
+        """`expires=3600` is seconds of life, not 1970. Reading it as an
+        absolute time would declare every such URL dead and re-resolve
+        everything on every heartbeat."""
+        assert stream_expiry.expires_at("https://cdn.test/a.mp4?expires=3600") is None
+
+    def test_a_resolve_is_as_fresh_as_its_shortest_lived_rendition(self):
+        now = time.time()
+        video = {
+            "video_url": _signed(now + 7200, "137"),
+            "available_qualities": [{"video_url": _signed(now + 7200, "137")},
+                                    {"video_url": _signed(now + 30, "136")}],
+            "audio_options": [{"audio_url": _signed(now + 7200, "140")}],
+        }
+        assert stream_expiry.seconds_remaining(video) == pytest.approx(30, abs=5)
+        assert not stream_expiry.is_fresh(video, 600)
+        assert stream_expiry.is_fresh(video, 10)
+
+    def test_a_resolve_that_signs_nothing_is_never_stale(self):
+        video = {"video_url": "https://cdn.test/best.mp4"}
+        assert stream_expiry.seconds_remaining(video) is None
+        assert stream_expiry.is_fresh(video, 600)
+
+
+def _signed(deadline: float, itag: str) -> str:
+    """A googlevideo URL that stops being served at `deadline`."""
+    return (f"https://rr1.googlevideo.com/videoplayback?expire={int(deadline)}"
+            f"&itag={itag}&clen=41541&lmt=1&mime=video%2Fmp4")
+
+
+def _resolve(deadline: float, title: str = "next") -> dict:
+    """A resolved video whose renditions die at `deadline`."""
+    return {
+        "original_url": NEXT_URL,
+        "title": title,
+        "duration": 300,
+        "stream_type": "dash",
+        "video_url": _signed(deadline, "137"),
+        "audio_url": _signed(deadline, "140"),
+        "available_qualities": [{"video_url": _signed(deadline, "137"), "format_id": "137"},
+                                {"video_url": _signed(deadline, "136"), "format_id": "136"}],
+        "audio_options": [{"audio_url": _signed(deadline, "140"), "format_id": "140"}],
+    }
+
+
+NEXT_URL = "https://youtu.be/next"
+CURRENT_URL = "https://youtu.be/now"
+
+
+class TestAQueuedVideoIsNotWarmedAgainstDeadUrls:
+    """Production: every probe of the next entry refused, nine times over.
+
+    A queue entry keeps the resolve it was added with, and a room can sit on
+    it for hours. Past the `expire` in those URLs the CDN answers 403 to
+    everything — which is what `Prepared 0/14 representations` and 126
+    `Probe of ... returned 403` were: fourteen renditions, refused on each
+    of the nine heartbeats in the last 45 seconds of the video before it.
+    """
+
+    @pytest.fixture
+    def prepared(self, monkeypatch):
+        """The prepare path with the network and yt-dlp replaced.
+
+        Records what was probed and every re-resolve asked for.
+        """
+        import main
+
+        probed: list = []
+        resolves: list = []
+        fresh = _resolve(time.time() + 21600, "re-resolved")
+
+        async def fake_probe(client, formats, headers=None):
+            probed.extend(fmt["url"] for fmt in formats)
+            return len(formats)
+
+        async def fake_resolve(url, user_agent=None, *, refresh=False,
+                               room_id="", user_email=None):
+            resolves.append((url, refresh, room_id))
+            return fresh
+
+        async def fake_client():
+            return object()
+
+        monkeypatch.setattr(main, "probe_formats", fake_probe)
+        monkeypatch.setattr(main, "get_proxy_client", fake_client)
+        # raising=False so this suite also runs against the code that had no
+        # re-resolve at all, and fails on the behaviour rather than the name.
+        monkeypatch.setattr(main, "resolve_url", fake_resolve, raising=False)
+        return main, probed, resolves, fresh
+
+    async def test_expired_urls_are_re_resolved_instead_of_probed(
+            self, prepared, monkeypatch):
+        """The whole path a heartbeat takes, from the room to the probes."""
+        main, probed, resolves, fresh = prepared
+        stale = _resolve(time.time() - 3600)
+        monkeypatch.setattr(main, "_proxy_client", object())
+        monkeypatch.setattr(prewarm, "start_initial_prefetch",
+                            lambda video, audio, client: None)
+        main.manager.room_states["prewarm-room"] = {
+            "queue": [{"original_url": CURRENT_URL}, stale],
+            "playing_index": 0,
+            "video_data": {"original_url": CURRENT_URL, "duration": 600},
+        }
+        try:
+            main._warm_next_video_if_close("prewarm-room", main.manager.room_states["prewarm-room"], 580)
+            await prewarm.drain()
+        finally:
+            main.manager.room_states.pop("prewarm-room", None)
+
+        # Not one request went to a URL the CDN stopped serving an hour ago.
+        assert probed, "the freshly resolved renditions are what gets probed"
+        assert set(probed) <= set(stream_owner.stream_urls(fresh))
+        assert not set(probed) & set(stream_owner.stream_urls(stale))
+        assert [(url, refresh) for url, refresh, _room in resolves] == [(NEXT_URL, True)]
+        assert resolves[0][2] == "prewarm-room", "the room's members lend the cookies"
+
+    async def test_urls_about_to_expire_are_refreshed_before_they_die(self, prepared):
+        """A URL with a minute left survives the probe and dies during
+        playback, which is the same 403 a few minutes later."""
+        main, _probed, resolves, _fresh = prepared
+        await main._prepare_queued_video(_resolve(time.time() + 60), room_id="room")
+        assert len(resolves) == 1
+
+    async def test_a_resolve_that_is_still_signed_is_probed_as_it_is(self, prepared):
+        main, probed, resolves, _fresh = prepared
+        good = _resolve(time.time() + 21600)
+
+        source = await main._prepare_queued_video(good, room_id="room")
+
+        assert resolves == [], "re-resolving a working video costs a yt-dlp run for nothing"
+        assert set(probed) == ({quality["video_url"] for quality in good["available_qualities"]}
+                               | {option["audio_url"] for option in good["audio_options"]})
+        assert source is good
+
+    async def test_a_site_that_does_not_sign_its_urls_is_probed(self, prepared):
+        """Only a stated deadline may trigger a re-resolve; a direct file has
+        none and must still be prepared."""
+        main, probed, resolves, _fresh = prepared
+        plain = {
+            "original_url": NEXT_URL, "duration": 300,
+            "available_qualities": [{"video_url": "https://cdn.test/best.mp4"}],
+            "audio_options": [{"audio_url": "https://cdn.test/audio.m4a"}],
+        }
+        await main._prepare_queued_video(plain, room_id="room")
+        assert resolves == []
+        assert probed == ["https://cdn.test/best.mp4", "https://cdn.test/audio.m4a"]
+
+    async def test_the_cached_resolve_still_wins_over_the_queue_entry(self, prepared):
+        main, probed, resolves, _fresh = prepared
+        from services.database import cache_format
+
+        cached = _resolve(time.time() + 21600, "cached")
+        await cache_format(NEXT_URL, cached)
+        try:
+            source = await main._prepare_queued_video(_resolve(time.time() - 3600),
+                                                      room_id="room")
+            assert source["title"] == "cached"
+            assert resolves == []
+            assert set(probed) <= set(stream_owner.stream_urls(cached))
+        finally:
+            from services.database import clear_format_cache
+            await clear_format_cache()
+
+
+class TestOneDoomedAttemptIsEnough:
+    """Speculation must either work or cost nothing — not repeat every beat."""
+
+    @pytest.fixture
+    def room(self, monkeypatch):
+        import main
+
+        attempts: list = []
+        probed: list = []
+
+        async def fake_probe(client, formats, headers=None):
+            probed.append(len(formats))
+            return 0  # Everything refused, as an expired signature is.
+
+        async def unresolvable(url, user_agent=None, *, refresh=False,
+                               room_id="", user_email=None):
+            attempts.append(url)
+            raise RuntimeError("yt-dlp: video unavailable")
+
+        async def fake_client():
+            return object()
+
+        monkeypatch.setattr(main, "_proxy_client", object())
+        monkeypatch.setattr(main, "probe_formats", fake_probe)
+        monkeypatch.setattr(main, "get_proxy_client", fake_client)
+        monkeypatch.setattr(main, "resolve_url", unresolvable, raising=False)
+        main.manager.room_states["prewarm-room"] = {
+            "queue": [{"original_url": CURRENT_URL}, _resolve(time.time() - 3600)],
+            "playing_index": 0,
+            "video_data": {"original_url": CURRENT_URL, "duration": 600},
+        }
+        yield main, attempts, probed
+        main.manager.room_states.pop("prewarm-room", None)
+
+    async def test_nine_heartbeats_cost_one_attempt(self, room):
+        """The last PREWARM_NEXT_VIDEO_SECONDS of a video are nine beats. In
+        production each of them re-probed the whole ladder: 9 x 14 = 126
+        refusals, and with a re-resolve in the path it would be nine yt-dlp
+        runs instead."""
+        main, attempts, probed = room
+        state = main.manager.room_states["prewarm-room"]
+
+        for beat in range(9):
+            main._warm_next_video_if_close("prewarm-room", state, 560 + beat * 5)
+            await prewarm.drain()
+
+        assert probed == [], "nothing is probed once the source is known to be dead"
+        assert len(attempts) == 1, "one re-resolve per video, not one per heartbeat"
+
+    async def test_the_opening_bytes_of_a_dead_video_are_not_fetched_either(
+            self, monkeypatch):
+        """Preparation failing means these URLs do not answer; asking for
+        bytes from them repeats the same refusal one layer down."""
+        fetched = []
+        monkeypatch.setattr(prewarm, "start_initial_prefetch",
+                            lambda video, audio, client: fetched.append(video))
+
+        async def cannot_prepare(video_data):
+            return None
+
+        prewarm.warm_video(object(), _resolve(time.time() - 3600), cannot_prepare)
+        await prewarm.drain()
+        assert fetched == []
+
+    async def test_a_warm_that_works_is_not_backed_off(self, monkeypatch):
+        fetched = []
+        monkeypatch.setattr(prewarm, "start_initial_prefetch",
+                            lambda video, audio, client: fetched.append(video))
+        good = _resolve(time.time() + 21600)
+
+        async def prepare(video_data):
+            return good
+
+        for _ in range(2):
+            prewarm.warm_video(object(), good, prepare)
+            await prewarm.drain()
+        assert len(fetched) == 2
+
+
+class TestSpeculationIsQuiet:
+    """A rendition nobody asked for, refused, is not a warning per rendition."""
+
+    @pytest.fixture(autouse=True)
+    def clean(self):
+        manifest_service.clear_index_cache()
+        yield
+        manifest_service.clear_index_cache()
+
+    async def test_a_refused_speculative_probe_is_logged_at_debug(
+            self, monkeypatch, caplog):
+        class Refused:
+            status_code = 403
+
+            async def aread(self):
+                return b""
+
+            async def aclose(self):
+                return None
+
+        async def refuse(client, url, headers=None, max_redirects=3):
+            return Refused(), None
+
+        monkeypatch.setattr(manifest_service, "open_upstream_stream", refuse)
+        formats = [{"url": _signed(time.time() - 60, str(itag))}
+                   for itag in range(137, 151)]
+
+        with caplog.at_level(logging.DEBUG, logger="services.manifest"):
+            probed = await manifest_service.probe_formats(None, formats)
+
+        assert probed == 0
+        warnings = [record for record in caplog.records
+                    if record.levelno >= logging.WARNING]
+        assert warnings == [], "14 warnings for a fetch nobody asked for buries real ones"
+        assert any("403" in record.getMessage() for record in caplog.records)
+
+    async def test_a_probe_someone_is_waiting_for_still_warns(
+            self, monkeypatch, caplog):
+        """The same refusal on the manifest a player asked for is the room's
+        problem, and stays visible at warning level."""
+        class Refused:
+            status_code = 403
+
+            async def aread(self):
+                return b""
+
+            async def aclose(self):
+                return None
+
+        async def refuse(client, url, headers=None, max_redirects=3):
+            return Refused(), None
+
+        monkeypatch.setattr(manifest_service, "open_upstream_stream", refuse)
+        with caplog.at_level(logging.DEBUG, logger="services.manifest"):
+            await manifest_service.probe_index(None, _signed(time.time() - 60, "137"))
+
+        assert [record for record in caplog.records
+                if record.levelno >= logging.WARNING]
 
 
 class TestWhichRenditionIsWarmed:
