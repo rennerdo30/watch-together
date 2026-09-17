@@ -311,16 +311,17 @@ export function CustomPlayer({
             return;
         }
         if (typeof shareSource === 'string') {
-            if (video.src !== shareSource) {
-                video.srcObject = null;
-                video.src = shareSource;
-                // Nothing is decodable the instant the object URL is set:
-                // the first chunk still has to arrive and be appended.
-                video.addEventListener('loadeddata', () => {
-                    void startPlayback(video).then(setPlaybackGate);
-                }, { once: true });
-            }
-            return;
+            if (video.src === shareSource) return;
+            video.srcObject = null;
+            video.src = shareSource;
+            // Nothing is decodable the instant the object URL is set: the
+            // first chunk still has to arrive and be appended. The listener
+            // is removed on the way out, because a source that is replaced
+            // before it ever loaded — a resync does exactly that — would
+            // otherwise leave one behind for every attempt.
+            const start = () => { void startPlayback(video).then(setPlaybackGate); };
+            video.addEventListener('loadeddata', start, { once: true });
+            return () => video.removeEventListener('loadeddata', start);
         }
         if (video.srcObject) video.srcObject = null;
     }, [shareSource, mediaElement]);

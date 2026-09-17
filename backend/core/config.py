@@ -70,6 +70,10 @@ SHARE_QUALITY_MAX_LENGTH = 20
 # is echoed to viewers, which create a SourceBuffer with it, so it is capped
 # to something a media type can plausibly be.
 SHARE_FORMAT_MAX_LENGTH = 120
+# A text frame on the media socket. Only the format announcement is sent as
+# text, so this is far above anything legitimate; without it the only limit
+# would be the server's own frame size, which is measured in megabytes.
+SHARE_CONTROL_MAX_BYTES = 4 * 1024
 # The first chunk carries the container header and is retained for the whole
 # share, because a viewer joining later cannot decode a byte without it. A
 # WebM header runs to a couple of kilobytes; this is far above that and far

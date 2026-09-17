@@ -487,6 +487,7 @@ export default function RoomPage() {
         origin: BACKEND_ORIGIN,
         roomId,
         active: !!liveShare && !amSharing,
+        connectionId: myConnectionId,
         user: devUser,
     });
 
@@ -1615,10 +1616,13 @@ export default function RoomPage() {
                                 </select>
                                 <p className="mt-2 text-[11px] leading-relaxed text-neutral-500">
                                     About {(SHARE_QUALITY_PRESETS[shareQuality].maxBitrateBps / 1_000_000).toFixed(0)} Mbit/s
-                                    of your upload per viewer, since each one receives their own copy.
+                                    of your upload, whoever is watching: you send one copy and the
+                                    server passes it on.
                                 </p>
                                 <p className="mt-3 text-[11px] leading-relaxed text-amber-200/90">
-                                    Viewers connect directly to you, so they can see your IP address.
+                                    The picture travels through this server, so it arrives about a
+                                    second late — and every viewer costs the server that much
+                                    bandwidth again.
                                 </p>
                                 {shareError && (
                                     <p role="alert" className="mt-3 text-[11px] text-red-300">{shareError}</p>

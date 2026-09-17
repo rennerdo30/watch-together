@@ -341,6 +341,19 @@ def _drain_until(ws, msg_type, limit=12):
     raise AssertionError(f"no {msg_type!r} message within {limit} messages")
 
 
+def _settle(room_socket) -> None:
+    """Wait for the server to have worked through what was sent.
+
+    A ping is answered unconditionally, and everything sent before it —
+    including on another connection, since one worker serves them all — has
+    been handled by the time the pong comes back. Without this, a test that
+    asserts something was *refused* has nothing to wait for, and a
+    regression hangs it instead of failing it.
+    """
+    room_socket.send_json({"type": "ping", "payload": {"client_time": 1}})
+    _drain_until(room_socket, "pong", limit=20)
+
+
 def _start_share(room_socket, room: str) -> str:
     connection_id = _drain_until(room_socket, "sync")["your_connection_id"]
     room_socket.send_json({"type": "share_start", "payload": {"title": "Gameplay"}})
@@ -393,6 +406,129 @@ class TestOnlyTheSharerMayPushMedia:
                 message = socket.receive()
 
             assert message["code"] == config.SHARE_CLOSE_NOT_AUTHORIZED
+
+
+class TestAPublisherCannotOutliveItsShare:
+    def test_a_stale_media_socket_cannot_feed_the_next_share(self, client):
+        """The media socket outlives the room socket that authorised it.
+
+        A member can start a share, drop their room connection — which ends
+        their share and frees the slot — and keep the media socket open. If
+        the relay were addressed by room rather than by share, the next
+        member's share would be fed by the previous member's socket: a
+        stranger's bytes, and an initialisation segment nobody can decode.
+        """
+        room = "relay-stale"
+        from services.share_relay import relay as live_relay
+
+        first = client.websocket_connect(f"/ws/{room}?user=a@example.com")
+        first_socket = first.__enter__()
+        connection_id = _start_share(first_socket, room)
+        media = client.websocket_connect(
+            f"/ws/share/{room}?role=publisher&connection={connection_id}"
+            f"&user=a@example.com")
+        publisher = media.__enter__()
+        publisher.send_json({"type": "format", "mime": "video/webm;codecs=vp8"})
+        publisher.send_bytes(FIRST)
+
+        # The sharer's room connection goes. The share ends with it.
+        first.__exit__(None, None, None)
+        assert live_relay.relay_of(room) is None
+
+        with client.websocket_connect(f"/ws/{room}?user=b@example.com") as second:
+            _start_share(second, room)
+            assert live_relay.relay_of(room) is not None
+
+            # The stale socket speaks into the room it no longer owns.
+            publisher.send_json({"type": "format", "mime": "video/evil"})
+            publisher.send_bytes(FIRST)
+            _settle(second)
+
+            stale_relay = live_relay.relay_of(room)
+            assert stale_relay is not None, "and it did not end the new share either"
+            assert stale_relay.mime is None, "nothing it said was believed"
+            assert stale_relay.init is None
+            assert stale_relay.chunks_in == 0
+
+            closing = publisher.receive()
+            media.__exit__(None, None, None)
+            assert closing["type"] == "websocket.close"
+            assert closing["code"] == config.SHARE_CLOSE_NO_SHARE
+
+    def test_an_oversized_control_message_is_refused(self, client):
+        room = "relay-fat-control"
+        with client.websocket_connect(f"/ws/{room}?user=a@example.com") as sharer:
+            connection_id = _start_share(sharer, room)
+
+            with client.websocket_connect(
+                    f"/ws/share/{room}?role=publisher&connection={connection_id}"
+                    f"&user=a@example.com") as publisher:
+                publisher.send_text("x" * (config.SHARE_CONTROL_MAX_BYTES + 1))
+                message = publisher.receive()
+
+            assert message["code"] == config.SHARE_CLOSE_PROTOCOL
+
+
+class TestAViewerWhoLeavesStopsWatching:
+    async def test_viewers_of_one_identity_are_dropped(self, relay):
+        relay.open("room", "conn-1", "sharer@example.com")
+        relay.set_format("room", "video/webm;codecs=vp8")
+        leaving_socket, staying_socket = FakeShareSocket(), FakeShareSocket()
+        leaving = relay.add_viewer("room", leaving_socket, "gone@example.com")
+        staying = relay.add_viewer("room", staying_socket, "here@example.com")
+        relay.publish("room", FIRST)
+
+        assert relay.drop_viewers_of("room", "gone@example.com") == 1
+        await drain(relay, leaving)
+        await drain(relay, staying)
+
+        assert leaving_socket.closed == (config.SHARE_CLOSE_NOT_AUTHORIZED,
+                                         config.SHARE_CONTROL_ENDED)
+        assert staying_socket.closed is None
+        assert staying_socket.binary == [INIT, cluster(b"opening frames")]
+
+    def test_leaving_the_room_closes_the_media_socket(self, client):
+        """A share is for the people in the room, and the media socket is a
+        connection of its own: leaving has to take it with it."""
+        room = "relay-leaver"
+        from services.share_relay import relay as live_relay
+
+        with client.websocket_connect(f"/ws/{room}?user=a@example.com") as sharer:
+            connection_id = _start_share(sharer, room)
+            watcher = client.websocket_connect(f"/ws/{room}?user=b@example.com")
+            watcher_socket = watcher.__enter__()
+            _drain_until(watcher_socket, "sync")
+
+            with client.websocket_connect(
+                    f"/ws/share/{room}?role=publisher&connection={connection_id}"
+                    f"&user=a@example.com") as publisher, \
+                    client.websocket_connect(
+                        f"/ws/share/{room}?role=viewer&user=b@example.com") as viewer:
+                publisher.send_json({"type": "format", "mime": "video/webm;codecs=vp8"})
+                publisher.send_bytes(FIRST)
+                assert viewer.receive_json()["type"] == "format"
+                assert live_relay.viewer_count(room) == 1
+
+                # b leaves the room, but not the media socket.
+                watcher.__exit__(None, None, None)
+                _settle(sharer)
+
+                # Its socket is closed from the relay's side; the connection
+                # itself is removed a round trip later, when its handler
+                # notices, which is not what this is about.
+                watching = live_relay.relay_of(room).viewers.values()
+                assert all(v.closing for v in watching), \
+                    "someone who has left the room is still being sent its share"
+
+                # Behind whatever was already on its way out.
+                closing = None
+                for _ in range(6):
+                    message = viewer.receive()
+                    if message["type"] == "websocket.close":
+                        closing = message
+                        break
+                assert closing is not None
+                assert closing["code"] == config.SHARE_CLOSE_NOT_AUTHORIZED
 
 
 class TestTheMediaGetsThere:

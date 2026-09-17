@@ -367,6 +367,28 @@ class ShareRelay:
         relay = self._rooms.get(room_id)
         return len(relay.viewers) if relay else 0
 
+    def drop_viewers_of(self, room_id: str, label: str) -> int:
+        """Stop sending this room's share to one identity.
+
+        A share is for the people in the room, and the media socket is a
+        separate connection: without this, someone who leaves keeps
+        receiving the picture until the share ends. Checked when they join
+        *and* when they go.
+        """
+        relay = self._rooms.get(room_id)
+        if relay is None:
+            return 0
+        leaving = [v for v in relay.viewers.values() if v.label == label]
+        for viewer in leaving:
+            self._finish(viewer, config.SHARE_CLOSE_NOT_AUTHORIZED,
+                         config.SHARE_CONTROL_ENDED)
+        if leaving:
+            logger.info(
+                "Stopped sending the share in %s to %s: no longer in the room",
+                room_id, label,
+            )
+        return len(leaving)
+
     async def pump(self, viewer: ShareViewer) -> None:
         """Send one viewer its queue, forever, on its own task.
 
@@ -478,7 +500,11 @@ class ShareRelay:
     # --- diagnostics --------------------------------------------------------
 
     def snapshot(self) -> List[dict]:
-        """What is being relayed right now, for logs and the admin view."""
+        """What is being relayed right now: one row per room.
+
+        Read by anything that has to know without touching the internals —
+        a log line, a test making sure no share leaks into the next one.
+        """
         return [
             {
                 "room_id": relay.room_id,

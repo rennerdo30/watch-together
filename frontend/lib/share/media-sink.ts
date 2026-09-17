@@ -70,12 +70,6 @@ export class ShareSink {
         this.pump();
     }
 
-    /** How far the buffered stream now reaches, in seconds. */
-    bufferedEnd(): number {
-        const buffered = this.buffer?.buffered;
-        return buffered && buffered.length ? buffered.end(buffered.length - 1) : 0;
-    }
-
     private pump() {
         const buffer = this.buffer;
         if (this.disposed || !buffer || buffer.updating) return;
@@ -88,7 +82,9 @@ export class ShareSink {
             buffer.appendBuffer(chunk);
         } catch (error) {
             // A buffer this browser has decided is full, or bytes it cannot
-            // parse. Either way this session is over; the room reconnects.
+            // parse. Either way this decode session is over — a failed
+            // `SourceBuffer` cannot be revived — so the caller is told, and
+            // it is the caller that decides whether to build another.
             this.onError('The shared screen could not be decoded.');
             console.error('[Share] Could not append a chunk:', error);
         }

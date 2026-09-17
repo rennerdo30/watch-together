@@ -20,7 +20,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { SHARE_RECONNECT_DELAY_MS } from '../constants';
+import { SHARE_DECODE_RETRY_LIMIT, SHARE_RECONNECT_DELAY_MS } from '../constants';
 import { ShareSink } from './media-sink';
 import {
     SHARE_CLOSE_BUSY, SHARE_CLOSE_NOT_AUTHORIZED, SHARE_CLOSE_TOO_MANY_VIEWERS,
@@ -34,6 +34,13 @@ interface ViewerOptions {
     roomId: string;
     /** Whether someone else's share is running right now. */
     active: boolean;
+    /**
+     * This browser's room connection. Not sent anywhere — it is here so
+     * that a room socket which dropped and came back reopens the media
+     * socket with it. The server closes a viewer that has left the room,
+     * and a reconnect is exactly the case where it did, briefly.
+     */
+    connectionId: string;
     /** The development identity, when the page is running with one. */
     user?: string;
 }
@@ -53,7 +60,7 @@ const TERMINAL_CLOSE_CODES = new Set([
 ]);
 
 export function useShareViewer(options: ViewerOptions): ShareViewerHandle {
-    const { origin, roomId, active, user } = options;
+    const { origin, roomId, active, connectionId, user } = options;
     const [src, setSrc] = useState<string | null>(null);
     // 'idle' while this socket has not reached the point of playing
     // anything; the value the room sees is derived below, so a share that
@@ -61,6 +68,13 @@ export function useShareViewer(options: ViewerOptions): ShareViewerHandle {
     const [reached, setReached] = useState<ShareViewerStatus>('idle');
     const [message, setMessage] = useState<string | null>(null);
     const sinkRef = useRef<ShareSink | null>(null);
+    const socketRef = useRef<WebSocket | null>(null);
+    // How many times this share's decoder has failed on these bytes. A
+    // decode that dies takes the picture with it and nothing revives it in
+    // place, so the socket is dropped and the server starts this viewer
+    // again from a cluster — but only so many times, because a stream this
+    // browser genuinely cannot play would otherwise reconnect for ever.
+    const decodeFailuresRef = useRef(0);
 
     const dropSink = useCallback(() => {
         sinkRef.current?.dispose();
@@ -71,6 +85,15 @@ export function useShareViewer(options: ViewerOptions): ShareViewerHandle {
     const startSink = useCallback((mime: string) => {
         dropSink();
         const sink = new ShareSink(mime, (reason) => {
+            if (decodeFailuresRef.current < SHARE_DECODE_RETRY_LIMIT) {
+                decodeFailuresRef.current += 1;
+                console.warn('[Share] Rebuilding the decoder after:', reason);
+                // Closing is what stops the server sending to a sink that no
+                // longer exists; the reconnect below brings back a fresh
+                // initialisation segment and a cluster to start at.
+                socketRef.current?.close();
+                return;
+            }
             setReached('failed');
             setMessage(reason);
         });
@@ -81,7 +104,8 @@ export function useShareViewer(options: ViewerOptions): ShareViewerHandle {
     }, [dropSink]);
 
     useEffect(() => {
-        if (!active) return;
+        if (!active || !connectionId) return;
+        decodeFailuresRef.current = 0;
 
         let socket: WebSocket | null = null;
         let retry: ReturnType<typeof setTimeout> | null = null;
@@ -91,6 +115,7 @@ export function useShareViewer(options: ViewerOptions): ShareViewerHandle {
             if (cancelled) return;
             socket = new WebSocket(shareSocketUrl(origin, roomId, 'viewer', { user }));
             socket.binaryType = 'arraybuffer';
+            socketRef.current = socket;
 
             socket.onmessage = (event) => {
                 if (typeof event.data !== 'string') {
@@ -107,6 +132,11 @@ export function useShareViewer(options: ViewerOptions): ShareViewerHandle {
                     if (typeof MediaSource === 'undefined' || !MediaSource.isTypeSupported(control.mime)) {
                         setReached('failed');
                         setMessage('This browser cannot play the shared screen.');
+                        // Nothing will change by trying again, and leaving
+                        // the socket open would have the server sending a
+                        // stream at a browser that cannot decode a byte.
+                        cancelled = true;
+                        socket?.close();
                         return;
                     }
                     // Sent before the initialisation segment, both at the
@@ -156,7 +186,7 @@ export function useShareViewer(options: ViewerOptions): ShareViewerHandle {
             setReached('idle');
             setMessage(null);
         };
-    }, [active, origin, roomId, user, dropSink, startSink]);
+    }, [active, connectionId, origin, roomId, user, dropSink, startSink]);
 
     return {
         src: active ? src : null,
