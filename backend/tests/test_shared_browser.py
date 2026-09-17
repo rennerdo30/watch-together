@@ -595,52 +595,28 @@ class TestTheBrowserMessages:
 # --- a relay that is only half configured -----------------------------------
 
 
-class TestHalfConfiguredTurnDoesNotBreakEverything:
-    """`WEBRTC_TURN_URL` alone used to take screen sharing down with it.
+class TestTheRelayIsNekosAloneNow:
+    """`WEBRTC_TURN_URL` says one thing only: neko has a way out.
 
-    A TURN entry with a blank username or credential does not merely fail to
-    relay: `new RTCPeerConnection(...)` throws on it, so no peer connection is
-    built at all — including the direct ones that never needed a relay. The
-    shared browser makes that configuration much more likely, because its
-    setup instructions are the first thing in this project that asks an
-    operator to fill these values in.
+    It used to be handed to every member's browser as an ICE server for
+    screen sharing, which is why a blank username or credential was so
+    dangerous — `new RTCPeerConnection(...)` throws on a half-filled TURN
+    entry, and screen sharing stopped entirely. Screen sharing no longer
+    uses WebRTC at all, so no browser is ever given these values; the only
+    reader left is the shared browser's media-path check, and neko takes its
+    own ICE list from `BROWSER_ICE_SERVERS`.
     """
 
-    def test_a_turn_url_without_credentials_is_dropped(self, client, monkeypatch):
+    def test_no_endpoint_hands_ice_servers_to_a_browser(self, client, monkeypatch):
         monkeypatch.setattr(config, "WEBRTC_TURN_URL", "turn:relay.example.net:3478")
-        monkeypatch.setattr(config, "WEBRTC_TURN_USERNAME", "")
-        monkeypatch.setattr(config, "WEBRTC_TURN_CREDENTIAL", "")
 
-        servers = client.get("/api/webrtc/ice").json()["iceServers"]
+        assert client.get("/api/webrtc/ice").status_code == 404
 
-        assert all("turn:" not in str(server.get("urls")) for server in servers)
-        # STUN still comes back: dropping the relay must not drop the rest.
-        assert servers, "the STUN servers went with it"
-
-    def test_a_fully_configured_relay_is_offered(self, client, monkeypatch):
-        monkeypatch.setattr(config, "WEBRTC_TURN_URL", "turn:relay.example.net:3478")
-        monkeypatch.setattr(config, "WEBRTC_TURN_USERNAME", "user")
-        monkeypatch.setattr(config, "WEBRTC_TURN_CREDENTIAL", "secret")
-
-        servers = client.get("/api/webrtc/ice").json()["iceServers"]
-
-        relay = [s for s in servers if "turn:" in str(s.get("urls"))]
-        assert relay == [{
-            "urls": "turn:relay.example.net:3478",
-            "username": "user",
-            "credential": "secret",
-        }]
-
-    def test_the_shared_browser_still_counts_it_as_a_media_path(self, monkeypatch):
-        """Deliberately different from the two above: neko is given its ICE
-        list through its own environment (`BROWSER_ICE_SERVERS`), so a relay
-        the *browsers* must not be handed is still one neko can be aimed at."""
+    def test_a_relay_url_is_a_media_path_for_the_shared_browser(self, monkeypatch):
         monkeypatch.setattr(config, "BROWSER_ENABLED", True)
         monkeypatch.setattr(config, "BROWSER_USER_PASSWORD", "user-secret")
         monkeypatch.setattr(config, "BROWSER_PUBLIC_IP", "")
         monkeypatch.setattr(config, "BROWSER_UDP_PORTS", "")
         monkeypatch.setattr(config, "WEBRTC_TURN_URL", "turn:relay.example.net:3478")
-        monkeypatch.setattr(config, "WEBRTC_TURN_USERNAME", "")
-        monkeypatch.setattr(config, "WEBRTC_TURN_CREDENTIAL", "")
 
         assert shared_browser.media_transport() == config.BROWSER_TRANSPORT_TURN

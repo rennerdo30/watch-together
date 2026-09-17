@@ -45,9 +45,10 @@ services:
       - BROWSER_PUBLIC_IP=${BROWSER_PUBLIC_IP:-}
       - BROWSER_UDP_PORTS=${BROWSER_UDP_PORTS:-}
       - BROWSER_SESSION_COOKIE_SECURE=${BROWSER_SESSION_COOKIE_SECURE:-true}
+      # Read only as "is there a relay neko can use at all?"; the relay's
+      # own credentials go to the container in BROWSER_ICE_SERVERS. Screen
+      # sharing no longer uses WebRTC, so no browser is given ICE servers.
       - WEBRTC_TURN_URL=${WEBRTC_TURN_URL:-}
-      - WEBRTC_TURN_USERNAME=${WEBRTC_TURN_USERNAME:-}
-      - WEBRTC_TURN_CREDENTIAL=${WEBRTC_TURN_CREDENTIAL:-}
     deploy:
       resources:
         limits:
