@@ -123,6 +123,16 @@ def empty_cookie_store():
 
 
 @pytest.fixture(autouse=True)
+def empty_playback_history():
+    """One test's viewers never show up in another's telemetry."""
+    from services.playback_quality import history
+
+    history.reset()
+    yield
+    history.reset()
+
+
+@pytest.fixture(autouse=True)
 def reset_room_state():
     """Keep room state from leaking between tests."""
     from connection_manager import manager

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import {
   Activity,
   Database,
+  Gauge,
   HardDrive,
   ListVideo,
   MemoryStick,
@@ -34,6 +35,14 @@ const SEGMENT_ROWS_SHOWN = 10;
 const FORMAT_URL_MAX_LENGTH = 60;
 
 const numberFormatter = new Intl.NumberFormat();
+const timeFormatter = new Intl.DateTimeFormat(undefined, {
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+});
+
+/** How many recent picture changes the history table shows. */
+const PLAYBACK_HISTORY_ROWS_SHOWN = 15;
 
 /**
  * The full picture behind a viewer's rung, for the row's tooltip: auto
@@ -41,6 +50,7 @@ const numberFormatter = new Intl.NumberFormat();
  */
 function describePlayback(viewer: AdminPlayback): string {
     const parts = [
+        viewer.verdict,
         `mode ${viewer.mode ?? '?'} (${viewer.engine ?? '?'})`,
         viewer.surface_px ? `surface ${viewer.surface_px}px @${viewer.pixel_ratio ?? '?'}` : 'surface unknown',
         viewer.estimate_bps ? `estimate ${(viewer.estimate_bps / 1_000_000).toFixed(2)} Mbps` : 'estimate pending',
@@ -118,8 +128,11 @@ function SectionCard({
   action?: React.ReactNode;
   children: React.ReactNode;
 }) {
+  // The section is named, so each card is a landmark: several of them now
+  // list the same viewer, and "the row for this room" has to mean one
+  // section's row.
   return (
-    <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
+    <section aria-label={title} className="rounded-2xl border border-white/10 bg-white/5 p-5">
       <div className="mb-4 flex items-center justify-between gap-3">
         <h2 className="ui-heading flex items-center gap-2 text-neutral-300">
           {icon}
@@ -357,6 +370,50 @@ export default function AdminPage() {
             </div>
           ) : (
             <p className="text-sm text-neutral-500">No rooms right now.</p>
+          )}
+        </SectionCard>
+
+        {/* Picture changes, including viewers who are no longer connected */}
+        <SectionCard title="Picture changes" icon={<Gauge aria-hidden="true" className="h-4 w-4" />}>
+          {overview && overview.playback_history.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="ui-label text-neutral-500">
+                  <tr>
+                    <th className="pb-1.5 pr-4">When</th>
+                    <th className="pb-1.5 pr-4">Viewer</th>
+                    <th className="pb-1.5 pr-4">Room</th>
+                    <th className="pb-1.5 pr-4">Rung</th>
+                    <th className="pb-1.5 pr-4">Cap</th>
+                    <th className="pb-1.5">Why</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5 font-mono">
+                  {[...overview.playback_history]
+                    .reverse()
+                    .slice(0, PLAYBACK_HISTORY_ROWS_SHOWN)
+                    .map((event, index) => (
+                      <tr key={`${event.member}-${event.at}-${index}`} title={describePlayback(event)}>
+                        <td className="py-1.5 pr-4 text-neutral-500">
+                          {timeFormatter.format(event.at * 1000)}
+                        </td>
+                        <td className="py-1.5 pr-4">{event.member}</td>
+                        <td className="py-1.5 pr-4 text-neutral-500">{event.room}</td>
+                        <td className="py-1.5 pr-4">{event.rung ? `${event.rung}p` : '—'}</td>
+                        <td className="py-1.5 pr-4">{event.cap ? `${event.cap}p` : 'none'}</td>
+                        <td className="py-1.5">{event.verdict}</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+              <p className="mt-2 text-xs text-neutral-500">
+                One row per change of picture, newest first, including viewers who have left.
+                The same lines are in the backend log, where they can be read from the host
+                with <code>./deploy/host-status.sh --quality</code>.
+              </p>
+            </div>
+          ) : (
+            <p className="text-sm text-neutral-500">No player has reported a picture yet.</p>
           )}
         </SectionCard>
 
