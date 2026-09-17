@@ -201,6 +201,12 @@ export class ApiError extends Error {
 /** What one viewer's player reports about its own picture. */
 export interface AdminPlayback {
     member: string;
+    /**
+     * Which input best explains the rung, decided server-side so the panel
+     * and the backend log say the same thing (`surface-capped`,
+     * `bandwidth-limited`, `dropping-frames`, …).
+     */
+    verdict: string;
     rung: number | null;
     cap: number | null;
     surface_px: number | null;
@@ -226,12 +232,23 @@ export interface AdminRoom {
     permanent: boolean;
 }
 
+/** A report from the bounded history, which outlives the connection. */
+export interface AdminPlaybackEvent extends AdminPlayback {
+    room: string;
+}
+
 export interface AdminOverview {
     requested_by: string;
     uptime_seconds: number;
     totals: { rooms: number; viewers: number };
     rooms: AdminRoom[];
     cookie_users: string[];
+    /**
+     * Every recent *change* of picture, oldest first, including viewers who
+     * have left. The same lines are in the backend log, where an operator on
+     * the host reads them with `deploy/host-status.sh --quality`.
+     */
+    playback_history: AdminPlaybackEvent[];
 }
 
 /** One served segment, as the proxy recorded it. */

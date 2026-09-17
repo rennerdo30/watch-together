@@ -9,7 +9,7 @@ change it in the same commit that makes it untrue. Newest state first.
 - **Production**: https://w2g.renner.dev runs `main` (see `git log -1`). Deployed
   with `./deploy/deploy.sh`; CI (backend, frontend lint/build, Playwright
   e2e, extension checks, CodeQL, container publish) green on that commit.
-- **Suites**: 647 backend tests (`cd backend && pytest`), 119 Playwright
+- **Suites**: 667 backend tests (`cd backend && pytest`), 119 Playwright
   tests (`cd frontend && npm run test:e2e`), lint 0 errors / 14 warnings.
 - **Admin panel** at `/admin`: rooms with members and a force-close, every
   cache tier with a clear action. Gated by `ADMIN_EMAILS` (set on the host
@@ -18,10 +18,44 @@ change it in the same commit that makes it untrue. Newest state first.
   open ones were merged on 2026-09-15. *Security alerts are disabled* on the
   repo — enabling them (Settings → Code security) is worth doing.
 
+## Reading per-viewer telemetry from the host
+
+"Which rung is this viewer on, and why" is answered from the backend log,
+not from a browser. Cloudflare Access is configured in production, so
+`/api/admin/*` correctly returns 401 to anything inside the docker network —
+that is deliberate and must stay that way.
+
+```sh
+./deploy/host-status.sh --quality --tail=4000          # one row per viewer
+./deploy/host-status.sh --quality=alice@example.com    # plus her full trail
+```
+
+Each row carries the rung, the cap, the drawing surface, the pixel ratio,
+the measured estimate, the dropped-frame ratio, the ladder size, the mode,
+the engine, a verdict and the time it last changed. Viewers who have left
+are still listed. The verdict names the input that decided the rung:
+`surface-capped` (their player is small), `bandwidth-limited` (below the cap
+with rungs left), `dropping-frames` (the decoder, not the link),
+`saver-mode`, `single-rung-ladder`, `no-rung-reported`.
+
+The raw lines are in the backend log, so a log bundle answers the same
+question:
+
+```sh
+./deploy/host-status.sh --logs=backend --tail=4000 | grep 'Playback quality:'
+```
+
+Only *changes* reach INFO; the client's thirty-second repeats are at DEBUG
+(`LOG_LEVEL=DEBUG` to see them). The same reports are kept in a bounded
+in-memory ring for the admin panel's "Picture changes" card, which is the
+browser's copy of the same thing and is lost on restart. Format and
+thresholds: `backend/services/playback_quality.py`.
+
 ## Shipped recently (newest first)
 
 | Commit | What | Why it mattered |
 | --- | --- | --- |
+| `3c53078` | Per-viewer telemetry in the backend log (one INFO line per change, with a verdict), `host-status.sh --quality`, and a bounded history the admin panel shows | The reports existed but only a browser signed in to Access could read them, and only while the viewer was connected — from the host every admin call is a 401, by design. See *Reading per-viewer telemetry from the host* above. |
 | `72c2de6` | Screen sharing: a member's gameplay on the room's player, peer to peer, signalling over the room socket | The first thing a room can watch that this server does not fetch. Media never touches the origin, so it works behind the tunnel with no open port — and is bounded to a few viewers, since the sharer sends one copy each. |
 | `a1a0a16` | Prewarming: a skip's destination warmed at the right byte offset (new subsegment table from the `sidx`), the next queue entry probed and warmed near the end of the current video, from both server and client; player buffers 3 min | Every jump the room makes is scheduled, and each landed in an empty buffer on bytes nobody had fetched. |
 | `2f1ce07` | Auto quality: a viewer-chosen mode (Balanced/Highest/Data saver), a stats overlay that names the cap, the surface and the measured estimate, three sticky-low fixes, and per-viewer telemetry in the admin panel | A viewer on 1 Gbit was always on a low rendition and nothing could say why. An unmeasured surface (never-laid-out element) capped auto at the ladder's second rung and the cap outlived everything but a CSS resize; a pixel-ratio change never re-capped; the remembered bandwidth was the *last* sample, so one dip ratcheted down every later session. |
@@ -147,6 +181,7 @@ cd frontend && npm run build && npm run lint && npx playwright test
 ./deploy/host-status.sh --probe=/api/rooms      # ask the backend from inside
 ./deploy/host-status.sh --logs=backend --tail=500
 ./deploy/host-status.sh --perf --tail=4000      # media transfer stats
+./deploy/host-status.sh --quality --tail=4000   # which rung each viewer is on
 ./deploy/host-status.sh --diag                  # yt-dlp / PO provider
 ```
 

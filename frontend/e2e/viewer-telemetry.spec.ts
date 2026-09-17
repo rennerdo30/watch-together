@@ -39,7 +39,10 @@ test('an admin can see which rung each viewer is on, and why', async ({ browser 
     { timeout: 20_000 }).toBe(true);
 
   await admin.goto('/admin?user=admin@example.com');
-  const row = admin.getByRole('row', { name: new RegExp(roomId) });
+  // Scoped to the Rooms card: the panel now lists the same viewer in more
+  // than one table, so a page-wide row lookup is ambiguous.
+  const rooms = admin.getByRole('region', { name: 'Rooms' });
+  const row = rooms.getByRole('row', { name: new RegExp(roomId) });
   await expect(row).toBeVisible({ timeout: 15_000 });
 
   // The rung the viewer is on, and the cap that is keeping them there —
@@ -48,16 +51,30 @@ test('an admin can see which rung each viewer is on, and why', async ({ browser 
   await expect.poll(async () => {
     await admin.reload();
     await expect(admin.getByRole('heading', { name: 'Rooms' })).toBeVisible({ timeout: 15_000 });
-    const line = admin.getByRole('row', { name: new RegExp(roomId) });
-    return (await line.textContent()) ?? '';
+    return (await row.textContent()) ?? '';
   }, { timeout: 30_000 }).toMatch(/blurry-viewer: \d+p \/ cap 1080p/);
 
   // And the inputs behind it, on the same line.
-  const detail = await admin.getByTitle(/mode balanced \(mse\)/).getAttribute('title');
+  const detail = await row.getByTitle(/mode balanced \(mse\)/).getAttribute('title');
   expect(detail).toMatch(/surface \d+px @\d/);
   expect(detail).toMatch(/rungs offered/);
+  // The verdict leads: which of those inputs decided the rung. The backend
+  // decides it, and logs the same word, so the panel and an operator reading
+  // the log from the host give the same answer.
+  expect(detail).toMatch(/^(surface-capped|bandwidth-limited|dropping-frames|saver-mode|single-rung-ladder|no-rung-reported)/);
+
+  // A report used to live on the connection and leave with the viewer; the
+  // history outlives them.
+  const changes = admin.getByRole('region', { name: 'Picture changes' });
+  const change = changes.getByRole('row', { name: new RegExp(VIEWER) }).first();
+  await expect(change).toBeVisible({ timeout: 15_000 });
+  await expect(change).toContainText(roomId);
 
   await viewerCtx.close();
+  await admin.reload();
+  await expect(changes.getByRole('row', { name: new RegExp(VIEWER) }).first())
+    .toBeVisible({ timeout: 15_000 });
+
   await adminCtx.close();
 });
 
@@ -112,14 +129,17 @@ test('the transfers table says who was served, by which tier, and how fast',
     await page.goto('/admin?user=admin@example.com');
     await expect(page.getByRole('heading', { name: 'Proxy transfers' })).toBeVisible({ timeout: 15_000 });
 
-    const row = page.getByRole('row', { name: /blurry-viewer/ });
+    // Scoped to this card: a viewer named here may also appear among the
+    // picture changes, which is a different table about a different thing.
+    const transfers = page.getByRole('region', { name: 'Proxy transfers' });
+    const row = transfers.getByRole('row', { name: /blurry-viewer/ });
     await expect(row).toBeVisible({ timeout: 15_000 });
     await expect(row).toContainText('upstream');
     await expect(row).toContainText('16 Mbps');
 
     // A memory hit measures a copy inside the server, not a link, so it
     // reports no rate rather than an imaginary one.
-    const cached = page.getByRole('row', { name: /other-viewer/ });
+    const cached = transfers.getByRole('row', { name: /other-viewer/ });
     await expect(cached).toContainText('memory');
     await expect(cached).toContainText('—');
 

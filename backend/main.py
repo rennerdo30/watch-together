@@ -1603,8 +1603,9 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     })
 
             elif msg_type == "playback_quality":
-                # Diagnostic only: it is never broadcast and never stored.
-                manager.record_playback_quality(websocket, payload)
+                # Diagnostic only: never broadcast, never persisted. A change
+                # is logged at INFO so the host can read it without a browser.
+                manager.record_playback_quality(websocket, payload, room_id)
 
             elif msg_type == "ping":
                 await websocket.send_json({

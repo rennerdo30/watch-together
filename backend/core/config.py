@@ -325,6 +325,15 @@ METRICS_SAMPLE_CAPACITY = 500  # Recent proxy transfers kept in the ring buffer
 METRICS_SLOW_UPSTREAM_MS = 5000  # Upstream fetches slower than this are counted
 METRICS_DEFAULT_SAMPLE_LIMIT = 50  # Samples returned by the metrics endpoint
 
+# Per-viewer playback quality telemetry (services/playback_quality.py).
+# Reports arrive on the room socket at most every QUALITY_REPORT_INTERVAL_MS
+# (30 s) per viewer, so these bound what a steady room writes and keeps.
+PLAYBACK_QUALITY_HISTORY_CAPACITY = 200  # Notable reports kept after a viewer leaves
+PLAYBACK_QUALITY_ESTIMATE_CHANGE_RATIO = 0.25  # Bandwidth shift worth a log line
+PLAYBACK_QUALITY_DROPPED_CHANGE = 0.02  # Dropped-frame shift worth a log line
+PLAYBACK_QUALITY_DROPPED_TROUBLE = 0.05  # Above this, the decoder is the problem
+ADMIN_PLAYBACK_HISTORY_LIMIT = 50  # Recent reports the admin overview returns
+
 # Ensure directories exist
 for directory in [CACHE_DIR, "data", YTDLP_CACHE_DIR]:
     if not os.path.exists(directory):
