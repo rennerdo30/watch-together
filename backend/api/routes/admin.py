@@ -24,6 +24,7 @@ from services.cache import memory_cache, disk_cache_report, clear_disk_cache
 from services.database import get_all_cached_formats, clear_format_cache
 from services.metrics import proxy_metrics
 from services import user_cookies
+from services.playback_quality import history as playback_history, verdict as playback_verdict
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,8 @@ async def admin_overview(request: Request, response: Response):
             "playback": [
                 {
                     "member": getattr(ws, "user_email", config.GUEST_IDENTITY),
-                    **getattr(ws, "playback_quality", {}),
+                    "verdict": playback_verdict(ws.playback_quality),
+                    **ws.playback_quality,
                 }
                 for ws in connections
                 if getattr(ws, "playback_quality", None)
@@ -89,6 +91,11 @@ async def admin_overview(request: Request, response: Response):
         },
         "rooms": rooms,
         "cookie_users": cookie_users,
+        # Every recent *change* of picture, including viewers who have since
+        # left — `rooms[].playback` only knows who is connected right now.
+        # The same lines are in the backend log; this is the browser's copy.
+        "playback_history": playback_history.snapshot(
+            limit=config.ADMIN_PLAYBACK_HISTORY_LIMIT),
     }
 
 
