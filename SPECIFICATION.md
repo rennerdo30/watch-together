@@ -369,6 +369,7 @@ type ServerMessage =
 - [x] Cookie authentication
 - [x] Browser extension for cookie sync
 - [x] Audio normalization
+- [x] Mono audio downmix
 - [x] Drag-and-drop queue
 - [x] Room persistence
 

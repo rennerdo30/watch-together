@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 import { Loader2, Info, Activity, Play, VolumeX } from 'lucide-react';
 import { PlayerControls } from './player-controls';
 import { QualityOption } from '@/lib/api';
-import { useAudioNormalization, useHlsPlayer, useShakaPlayer, HlsQualityLevel, AUTO_QUALITY } from './player/hooks';
+import { useAudioProcessing, useHlsPlayer, useShakaPlayer, HlsQualityLevel, AUTO_QUALITY } from './player/hooks';
 import { startPlayback, type PlaybackStart } from '@/lib/playback';
 import type { SponsorSegment } from '@/lib/sponsorblock';
 import type { Storyboard } from '@/lib/storyboard';
@@ -82,8 +82,9 @@ const parseStoredGain = (stored: string | null, fallback: number) => {
  * 
  * Architecture:
  * - HLS mode: Uses HLS.js for adaptive streaming
- * - DASH mode: Uses custom useDashSync hook for manual A/V synchronization
- * - Both modes: Use useAudioNormalization for night mode audio processing
+ * - DASH mode: Uses Shaka through MSE, fed by the generated manifest, so one
+ *   element carries both tracks against a single clock
+ * - Both modes: Use useAudioProcessing for night mode levelling and mono downmix
  */
 export function CustomPlayer({
     url,
@@ -174,6 +175,10 @@ export function CustomPlayer({
         'w2g-player-normalization', true, parseStoredBoolean);
     const [normalizationGain, setNormalizationGain] = useLocalStorageState(
         'w2g-player-normalization-gain', 1, parseStoredGain);
+    // Mono is one viewer's choice about their own speakers, so it is stored
+    // per browser and never sent to the room.
+    const [isMonoEnabled, setIsMonoEnabled] = useLocalStorageState(
+        'w2g-player-mono', false, parseStoredBoolean);
 
     // === HLS PLAYER HOOK ===
     const [hlsLoading, setHlsLoading] = useState(true);
@@ -214,12 +219,13 @@ export function CustomPlayer({
     const qualities = isMseMode ? shakaPlayer.qualities : hlsQualities;
     const currentQuality = isMseMode ? shakaPlayer.currentQuality : hlsPlayer.currentLevel;
 
-    // === AUDIO NORMALIZATION HOOK ===
+    // === AUDIO PROCESSING HOOK ===
     // Both engines carry audio on the video element.
-    const normalization = useAudioNormalization({
+    const audio = useAudioProcessing({
         sourceElement: mediaElement,
-        enabled: isNormalizationEnabled,
+        normalize: isNormalizationEnabled,
         gain: normalizationGain,
+        mono: isMonoEnabled,
     });
 
     const isBuffering = isMseMode ? shakaPlayer.isBuffering : hlsPlayer.isBuffering;
@@ -472,6 +478,10 @@ export function CustomPlayer({
         setNormalizationGain(val);
     }, [setNormalizationGain]);
 
+    const toggleMono = useCallback(() => {
+        setIsMonoEnabled(!isMonoEnabled);
+    }, [isMonoEnabled, setIsMonoEnabled]);
+
     // === RENDER ===
     return (
         <div
@@ -629,8 +639,14 @@ export function CustomPlayer({
                         )}
                         <div className="flex justify-between border-t border-white/5 pt-1.5 mt-1.5">
                             <span className="text-zinc-500">Normalization</span>
-                            <span className={cn("text-right", normalization.isActive ? "text-emerald-400" : "text-zinc-500")}>
-                                {normalization.isActive ? 'Active' : 'Off'}
+                            <span className={cn("text-right", audio.normalizeActive ? "text-emerald-400" : "text-zinc-500")}>
+                                {audio.normalizeActive ? 'Active' : 'Off'}
+                            </span>
+                        </div>
+                        <div className="flex justify-between">
+                            <span className="text-zinc-500">Channels</span>
+                            <span className={cn("text-right", audio.monoActive ? "text-emerald-400" : "text-zinc-500")}>
+                                {audio.monoActive ? 'Mono' : 'Stereo'}
                             </span>
                         </div>
                     </div>
@@ -660,6 +676,8 @@ export function CustomPlayer({
                 onToggleNormalization={toggleNormalization}
                 normalizationGain={normalizationGain}
                 onNormalizationGainChange={updateNormalizationGain}
+                monoAudio={isMonoEnabled}
+                onToggleMono={toggleMono}
                 syncThreshold={syncThreshold}
                 onSyncThresholdChange={onSyncThresholdChange}
                 onPlayToggle={handlePlayToggle}

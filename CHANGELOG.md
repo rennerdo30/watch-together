@@ -51,6 +51,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Mono audio**: a per-viewer switch in player settings → Mono audio that
+  folds every channel into one, so both speakers carry the same mix. Anything
+  panned hard to one side is no longer lost to someone listening through a
+  single earbud or hearing on one side. It applies to that viewer's own audio
+  only, works with levelling on or off, and is remembered in their browser.
+
 - **Chapters**: a video's chapters (YouTube's sections — set by the creator
   or read from timestamps in the description) travel with the resolved video.
   They are notched on the seek bar, named under the pointer while hovering

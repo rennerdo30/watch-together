@@ -9,7 +9,7 @@ change it in the same commit that makes it untrue. Newest state first.
 - **Production**: https://w2g.renner.dev runs `main` (see `git log -1`). Deployed
   with `./deploy/deploy.sh`; CI (backend, frontend lint/build, Playwright
   e2e, extension checks, CodeQL, container publish) green on that commit.
-- **Suites**: 588 backend tests (`cd backend && pytest`), 101 Playwright
+- **Suites**: 588 backend tests (`cd backend && pytest`), 104 Playwright
   tests (`cd frontend && npm run test:e2e`), lint 0 errors / 14 warnings.
 - **Admin panel** at `/admin`: rooms with members and a force-close, every
   cache tier with a clear action. Gated by `ADMIN_EMAILS` (set on the host
@@ -22,6 +22,7 @@ change it in the same commit that makes it untrue. Newest state first.
 
 | Commit | What | Why it mattered |
 | --- | --- | --- |
+| _this change_ | Mono audio: per-viewer downmix in player settings, one graph (`useAudioProcessing`) for levelling and mono | Anything panned hard to one side was lost to a viewer on one earbud or with hearing on one side. The graph used to exist only while levelling was on. |
 | `4413fc0` | Auto quality capped to the drawing surface + one rung of headroom (`ABR_LEVELS_ABOVE_SURFACE`), following resizes | A seek buffered ~5 s: auto had picked 2160p AV1 for a laptop-sized player, whose 13–28 MB segments take seconds each; nothing shows after a seek until one lands. |
 | `a43b7e7` | Proxy refuses bare (unranged) GETs for large googlevideo files | A download manager on one viewer's Chrome pulled every rendition in full — 17 of 18.4 GB served — and starved real segment fetches. See *Performance* below. |
 | `5d97eb5` | Seek bar hit area 4 px → 16 px, track thickens on hover | It was unhittable. |
