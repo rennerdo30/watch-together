@@ -33,6 +33,7 @@ from core.config import (
     PREWARM_NEXT_VIDEO_SECONDS, DEFAULT_USER_AGENT,
     SHARE_SIGNAL_KINDS, SHARE_SIGNAL_MAX_BYTES,
     SHARE_TITLE_MAX_LENGTH, SHARE_QUALITY_MAX_LENGTH,
+    BROWSER_TITLE_MAX_LENGTH, BROWSER_BUSY_LIVE_SHARE,
 )
 from core.security import (
     get_user_from_request, get_user_from_websocket,
@@ -70,10 +71,12 @@ from api.routes.tokens import router as tokens_router
 from api.routes.extension import router as extension_router
 from api.routes.admin import router as admin_router
 from api.routes.user_settings import router as user_settings_router
+from api.routes.browser import router as browser_router
 from connection_manager import manager
 from services.sponsorblock import SponsorSkipper
 from services.watch_history import reporter as history_reporter
 from services import stream_owner
+from services import shared_browser
 
 # Room-wide SponsorBlock skipping; armed from the WebSocket handler below.
 sponsor_skipper = SponsorSkipper(manager)
@@ -340,6 +343,7 @@ app.include_router(tokens_router)
 app.include_router(extension_router)
 app.include_router(admin_router)
 app.include_router(user_settings_router)
+app.include_router(browser_router)
 
 
 # ============================================================================
@@ -1601,6 +1605,44 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         "payload": {"kind": kind, "data": data,
                                     "from": getattr(websocket, "connection_id", "")},
                     })
+
+            elif msg_type == "browser_open":
+                # The shared browser takes the player, the way a screen share
+                # does: whatever was playing stops where it is, and its
+                # position is on its queue entry so closing returns to it.
+                if not shared_browser.is_available():
+                    await websocket.send_json({
+                        "type": "error",
+                        "payload": {"message": "The shared browser is not available on this instance"},
+                    })
+                else:
+                    session, refusal = manager.open_browser(
+                        room_id, websocket,
+                        title=str(payload.get("title") or "")[:BROWSER_TITLE_MAX_LENGTH],
+                    )
+                    if session is None:
+                        message = (
+                            "Someone is sharing their screen in this room"
+                            if refusal == BROWSER_BUSY_LIVE_SHARE
+                            else "Another room is using the shared browser"
+                        )
+                        await websocket.send_json({
+                            "type": "error", "payload": {"message": message}})
+                    else:
+                        await manager.update_state(room_id, {"is_playing": False})
+                        await manager.broadcast(
+                            {"type": "browser_opened", "payload": session}, room_id)
+                        await publish_room_activity(
+                            room_id, "browser_opened", actor=user_email)
+
+            elif msg_type == "browser_close":
+                session = manager.close_browser(room_id, websocket)
+                if session:
+                    await manager.broadcast({
+                        "type": "browser_closed",
+                        "payload": {"reason": "closed", "email": session["opened_by"]},
+                    }, room_id)
+                    await publish_room_activity(room_id, "browser_closed", actor=user_email)
 
             elif msg_type == "playback_quality":
                 # Diagnostic only: it is never broadcast and never stored.

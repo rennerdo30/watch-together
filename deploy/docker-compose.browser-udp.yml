@@ -1,0 +1,23 @@
+# Opening a UDP range on the host for the shared browser.
+#
+# This is the one file in the deployment that publishes a port, and it is
+# separate on purpose: `docker-compose.yml` promises that nothing is
+# published, and an operator who wants that to stop being true should have to
+# say so on the command line.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.browser-udp.yml \
+#                  --profile browser up -d
+#
+# It needs BROWSER_UDP_PORTS (a range, e.g. 59000-59100) and BROWSER_PUBLIC_IP
+# (the address that range is reachable at from the internet) in .env. The
+# range must also be open in whatever firewall the host and the provider run;
+# a candidate pointing at a filtered port is worse than no candidate, because
+# every viewer waits out a timeout before falling back.
+#
+# The alternative is a TURN relay, which needs none of this: see the
+# `BROWSER_ICE_SERVERS` section of deploy/README.md.
+
+services:
+  neko:
+    ports:
+      - "${BROWSER_UDP_PORTS:?BROWSER_UDP_PORTS must be set to publish a UDP range}:${BROWSER_UDP_PORTS}/udp"

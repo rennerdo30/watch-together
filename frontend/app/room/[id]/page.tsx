@@ -7,11 +7,15 @@ import {
     Plus, SkipForward,
     Play, ListVideo, Settings, X, Palette, ShieldCheck, Home, Bug,
     Crown, Shield, User as UserIcon, ChevronDown, Lock, Copy, Check, Infinity, Sun, ExternalLink, Scissors, Puzzle,
-    MonitorUp, MonitorStop
+    MonitorUp, MonitorStop, Globe
 } from 'lucide-react';
 import { prewarmVideo } from '@/lib/prewarm';
 import { captureScreen, shareUnsupportedReason, stopStream } from '@/lib/webrtc/screen-capture';
 import { fetchIceServers, type IncomingSignal, type LiveShare, type SignalKind } from '@/lib/webrtc/signalling';
+import {
+    browserUnavailableText, fetchBrowserStatus, openBrowserSession,
+    type SharedBrowserSession, type SharedBrowserStatus,
+} from '@/lib/shared-browser';
 import { usePeerPublisher } from '@/lib/webrtc/usePeerPublisher';
 import { usePeerViewer } from '@/lib/webrtc/usePeerViewer';
 import { ResolveResponse, dashManifestUrl, resolveUrl, getExtensionToken, regenerateExtensionToken, ExtensionToken, getUserSettings, updateUserSettings, getCookies, forgetCookies, extensionDownloadUrl, type CookieStatus, type UserSettings } from '@/lib/api';
@@ -462,6 +466,7 @@ export default function RoomPage() {
         void fetchIceServers(BACKEND_ORIGIN).then(setIceServers);
     }, []);
 
+
     // `sendMsg` is defined further down; reaching it through a ref keeps
     // these callbacks stable and free of declaration order.
     const sendMsgRef = useRef<(type: string, payload?: unknown) => void>(() => { });
@@ -502,6 +507,51 @@ export default function RoomPage() {
         }
     }, [shareQuality, stopSharing]);
 
+    // === THE ROOM'S SHARED BROWSER ===
+    // A real browser running on the server, in the same place a share goes:
+    // one player, one source. Unlike a share it is not this room's to assume
+    // — there is one container for the whole instance, and its picture needs
+    // a path out that the tunnel cannot provide — so the status is fetched
+    // before the button is drawn, and says why when the answer is no.
+    const [browserStatus, setBrowserStatus] = useState<SharedBrowserStatus | null>(null);
+    const [sharedBrowser, setSharedBrowser] = useState<SharedBrowserSession | null>(null);
+    const [browserEmbed, setBrowserEmbed] = useState<{ path: string; control: boolean } | null>(null);
+    const [browserDialogOpen, setBrowserDialogOpen] = useState(false);
+    const [browserError, setBrowserError] = useState<string | null>(null);
+
+    const refreshBrowserStatus = useCallback(() => {
+        void fetchBrowserStatus(BACKEND_ORIGIN, roomId).then(setBrowserStatus);
+    }, [roomId]);
+
+    useEffect(() => { refreshBrowserStatus(); }, [refreshBrowserStatus]);
+
+    // The session is minted per tab, not per room: the cookie it sets is
+    // this browser's way in, so every member asks for their own once the
+    // room has the browser open.
+    useEffect(() => {
+        if (!sharedBrowser) { setBrowserEmbed(null); return; }
+        let cancelled = false;
+        setBrowserError(null);
+        void openBrowserSession(BACKEND_ORIGIN, roomId)
+            .then((embed) => { if (!cancelled) setBrowserEmbed(embed); })
+            .catch(() => {
+                if (!cancelled) setBrowserError('Could not get into the shared browser.');
+            });
+        return () => { cancelled = true; };
+    }, [sharedBrowser, roomId]);
+
+    const openSharedBrowser = useCallback(() => {
+        setBrowserError(null);
+        sendMsgRef.current('browser_open', { title: 'Shared browser' });
+        setBrowserDialogOpen(false);
+    }, []);
+
+    const closeSharedBrowser = useCallback(() => {
+        sendMsgRef.current('browser_close', {});
+    }, []);
+
+    const browserBlockedText = browserUnavailableText(browserStatus);
+
     const handleWsMessage = (msg: WsMessage) => {
         const type = msg.type;
         const payload = msg.payload ?? {};
@@ -517,6 +567,10 @@ export default function RoomPage() {
                 }
                 setLiveShare((payload.live_share as LiveShare | null) ?? null);
                 if (payload.live_share) sendMsg('share_ready', {});
+                // …and whether the room already has the browser open, so a
+                // member who joins mid-session sees it rather than an empty
+                // player with a button that says "open".
+                setSharedBrowser((payload.shared_browser as SharedBrowserSession | null) ?? null);
                 // On sync (initial load or reconnect), set video data and re-resolve for fresh DASH URLs
                 if (payload.video_data) {
                     const syncVideoData = payload.video_data;
@@ -703,6 +757,14 @@ export default function RoomPage() {
                 }
                 break;
             }
+
+            case 'browser_opened':
+                setSharedBrowser(payload as unknown as SharedBrowserSession);
+                break;
+
+            case 'browser_closed':
+                setSharedBrowser(null);
+                break;
 
             case 'share_ended':
                 setLiveShare(null);
@@ -1067,6 +1129,16 @@ export default function RoomPage() {
                                 <span className="ui-label text-neutral-200">Resolving...</span>
                             </div>
                         )}
+                        {sharedBrowser && (
+                            <div className="absolute top-3 left-3 z-20 flex items-center gap-2 rounded-full bg-black/70 px-3 py-1.5 text-[11px] text-white backdrop-blur">
+                                <Globe aria-hidden="true" className="h-3 w-3" />
+                                <span data-testid="shared-browser-banner">
+                                    {browserEmbed?.control
+                                        ? 'You are driving the shared browser'
+                                        : `Shared browser, opened by ${sharedBrowser.opened_by}`}
+                                </span>
+                            </div>
+                        )}
                         {liveShare && (
                             <div className="absolute top-3 left-3 z-20 flex items-center gap-2 rounded-full bg-black/70 px-3 py-1.5 text-[11px] text-white backdrop-blur">
                                 <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />
@@ -1085,7 +1157,34 @@ export default function RoomPage() {
                                 </p>
                             </div>
                         )}
-                        {liveShare ? (
+                        {sharedBrowser ? (
+                            // neko's own interface, on this origin under the
+                            // prefix nginx proxies it at. The cookie that
+                            // authenticates it was set by the session call
+                            // above and is scoped to that prefix, so nothing
+                            // on this page can read it and nothing is passed
+                            // in the URL.
+                            browserEmbed ? (
+                                <iframe
+                                    data-testid="shared-browser-frame"
+                                    src={browserEmbed.path}
+                                    title="Shared browser"
+                                    className="h-full w-full border-0 bg-black"
+                                    allow="autoplay; clipboard-read; clipboard-write; fullscreen"
+                                />
+                            ) : (
+                                <div className="flex h-full w-full flex-col items-center justify-center gap-2 px-6 text-center">
+                                    {browserError ? (
+                                        <p role="alert" className="text-sm text-red-300">{browserError}</p>
+                                    ) : (
+                                        <>
+                                            <Loader2 aria-hidden="true" className="h-5 w-5 animate-spin text-white opacity-80" />
+                                            <span className="ui-label text-neutral-200">Joining the shared browser...</span>
+                                        </>
+                                    )}
+                                </div>
+                            )
+                        ) : liveShare ? (
                             <ErrorBoundary>
                                 <CustomPlayer
                                     key={`share-${liveShare.connection_id}`}
@@ -1363,15 +1462,114 @@ export default function RoomPage() {
                             <button
                                 type="button"
                                 onClick={() => { setShareError(null); setShareDialogOpen(true); }}
-                                disabled={!!liveShare}
-                                title={liveShare ? `${liveShare.email} is already sharing` : 'Share your screen with the room'}
+                                disabled={!!liveShare || !!sharedBrowser}
+                                title={liveShare
+                                    ? `${liveShare.email} is already sharing`
+                                    : sharedBrowser
+                                        ? 'The shared browser is on the player'
+                                        : 'Share your screen with the room'}
                                 className={`px-4 h-9 bg-neutral-800/50 hover:bg-neutral-800 text-neutral-100 font-medium rounded-lg text-sm border ${activeTheme.border} disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors`}
                             >
                                 <MonitorUp aria-hidden="true" className="w-3.5 h-3.5" />
                                 Share screen
                             </button>
                         )}
+                        {sharedBrowser ? (
+                            <button
+                                type="button"
+                                onClick={closeSharedBrowser}
+                                data-testid="close-shared-browser"
+                                className="px-4 h-9 bg-red-500/15 hover:bg-red-500/25 text-red-300 font-medium rounded-lg text-sm border border-red-500/30 flex items-center gap-1.5 transition-colors"
+                            >
+                                <Globe aria-hidden="true" className="w-3.5 h-3.5" />
+                                Close browser
+                            </button>
+                        ) : (
+                            <button
+                                type="button"
+                                onClick={() => { setBrowserError(null); setBrowserDialogOpen(true); }}
+                                data-testid="open-shared-browser"
+                                disabled={!!liveShare}
+                                title={liveShare
+                                    ? 'Someone is sharing their screen'
+                                    : browserBlockedText ?? 'Open a browser everyone can watch and take turns driving'}
+                                className={`px-4 h-9 bg-neutral-800/50 hover:bg-neutral-800 text-neutral-100 font-medium rounded-lg text-sm border ${activeTheme.border} disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors`}
+                            >
+                                <Globe aria-hidden="true" className="w-3.5 h-3.5" />
+                                Shared browser
+                            </button>
+                        )}
                     </form>
+
+                    {/* Whether a shared browser can be opened at all, said
+                        before the button does anything. It is a deployment
+                        question — the picture is WebRTC and this deployment
+                        publishes no ports — so when the answer is no, the
+                        room says which piece is missing rather than opening
+                        a black rectangle. */}
+                    {browserDialogOpen && (
+                        <div
+                            role="dialog"
+                            aria-modal="true"
+                            aria-label="Shared browser"
+                            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+                            onClick={() => setBrowserDialogOpen(false)}
+                        >
+                            <div
+                                onClick={(event) => event.stopPropagation()}
+                                className="w-full max-w-md rounded-xl border border-neutral-800 bg-neutral-900 p-5 shadow-2xl"
+                            >
+                                <h2 className="text-sm font-semibold text-white">Shared browser</h2>
+                                <p className="mt-2 text-xs leading-relaxed text-neutral-400">
+                                    A browser runs on the server and everyone in the room watches
+                                    the same page. The room admin drives it; the video playing now
+                                    pauses and comes back when the browser is closed.
+                                </p>
+                                {browserBlockedText ? (
+                                    <p
+                                        role="alert"
+                                        data-testid="shared-browser-unavailable"
+                                        className="mt-3 text-[11px] leading-relaxed text-amber-200/90"
+                                    >
+                                        {browserBlockedText}
+                                    </p>
+                                ) : browserStatus?.held_by_room && browserStatus.held_by_room !== roomId ? (
+                                    <p
+                                        role="alert"
+                                        data-testid="shared-browser-unavailable"
+                                        className="mt-3 text-[11px] leading-relaxed text-amber-200/90"
+                                    >
+                                        The room &ldquo;{browserStatus.held_by_room}&rdquo; is using it right now.
+                                        There is one browser for the whole instance.
+                                    </p>
+                                ) : (
+                                    <p className="mt-3 text-[11px] leading-relaxed text-neutral-500">
+                                        Anything typed into it — including passwords — is visible
+                                        to everyone in the room, and stays in the browser after
+                                        you close it.
+                                    </p>
+                                )}
+                                <div className="mt-5 flex justify-end gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => setBrowserDialogOpen(false)}
+                                        className="px-3 h-9 rounded-lg text-sm text-neutral-300 hover:bg-white/5"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={openSharedBrowser}
+                                        data-testid="confirm-shared-browser"
+                                        disabled={!!browserBlockedText}
+                                        className={`px-4 h-9 ${activeTheme.text} font-medium rounded-lg text-sm ${activeTheme.accent} hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed`}
+                                    >
+                                        Open it
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                     {/* What sharing a screen means, said before the picker opens */}
                     {shareDialogOpen && (

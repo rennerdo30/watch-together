@@ -9,7 +9,7 @@ change it in the same commit that makes it untrue. Newest state first.
 - **Production**: https://w2g.renner.dev runs `main` (see `git log -1`). Deployed
   with `./deploy/deploy.sh`; CI (backend, frontend lint/build, Playwright
   e2e, extension checks, CodeQL, container publish) green on that commit.
-- **Suites**: 647 backend tests (`cd backend && pytest`), 119 Playwright
+- **Suites**: 711 backend tests (`cd backend && pytest`), 124 Playwright
   tests (`cd frontend && npm run test:e2e`), lint 0 errors / 14 warnings.
 - **Admin panel** at `/admin`: rooms with members and a force-close, every
   cache tier with a clear action. Gated by `ADMIN_EMAILS` (set on the host
@@ -22,6 +22,7 @@ change it in the same commit that makes it untrue. Newest state first.
 
 | Commit | What | Why it mattered |
 | --- | --- | --- |
+| _this branch_ | Shared browser: a neko container in the room's player, opened and closed over the room socket, sessions minted server-side | The first thing the tunnel cannot carry. Media is WebRTC, the origin publishes nothing, so it is opt-in and reports *why* it is unavailable rather than offering a button — see *Shared browser* below. |
 | `72c2de6` | Screen sharing: a member's gameplay on the room's player, peer to peer, signalling over the room socket | The first thing a room can watch that this server does not fetch. Media never touches the origin, so it works behind the tunnel with no open port — and is bounded to a few viewers, since the sharer sends one copy each. |
 | `a1a0a16` | Prewarming: a skip's destination warmed at the right byte offset (new subsegment table from the `sidx`), the next queue entry probed and warmed near the end of the current video, from both server and client; player buffers 3 min | Every jump the room makes is scheduled, and each landed in an empty buffer on bytes nobody had fetched. |
 | `2f1ce07` | Auto quality: a viewer-chosen mode (Balanced/Highest/Data saver), a stats overlay that names the cap, the surface and the measured estimate, three sticky-low fixes, and per-viewer telemetry in the admin panel | A viewer on 1 Gbit was always on a low rendition and nothing could say why. An unmeasured surface (never-laid-out element) capped auto at the ladder's second rung and the cap outlived everything but a CSS resize; a pixel-ratio change never re-capped; the remembered bandwidth was the *last* sample, so one dip ratcheted down every later session. |
@@ -52,6 +53,32 @@ Peer-to-peer also means the sharer's uplink carries one copy per viewer,
 and that viewers see each other's IP addresses. `WEBRTC_TURN_URL` /
 `WEBRTC_TURN_USERNAME` / `WEBRTC_TURN_CREDENTIAL` add a relay without code
 changes (it hides addresses and rescues strict NATs, at a bandwidth cost).
+
+## Shared browser: what the tests cannot prove
+
+Nothing in either suite has ever spoken to a neko container. The backend
+tests stub it at its HTTP boundary (`tests/test_shared_browser.py`), and
+`frontend/e2e/shared-browser.spec.ts` stubs the status endpoint, the session
+endpoint and the `/neko/` document. What is proven is this server's half:
+who may open it, that one room holds it at a time, that a screen share and
+the browser cannot both be on the player, that no password appears in any
+response, and that a room with no media path says so.
+
+**Unverified from a sandbox, and worth checking first on a real host:**
+
+- that neko 3.1.5 accepts `POST /neko/api/login` and returns a usable
+  `NEKO_SESSION` cookie, and that re-setting that token as our own cookie on
+  `/neko` authenticates the embed. This is read from neko's source
+  (`server/internal/api/session.go`), not from a running container.
+- that neko sends no `X-Frame-Options`/`frame-ancestors` of its own that
+  would refuse the same-origin iframe. nginx's CSP now carries `frame-src
+  'self'` for it.
+- that media actually flows. That is the deployment question the feature is
+  built around: `./host-status.sh --probe=/api/browser` reports what was
+  *configured*, never what works. With the UDP option, check the range is
+  open from outside; with TURN, check neko gathers a relay candidate — the
+  frontend ICE list alone is the plausible mistake, and it looks fine until
+  nobody sees anything.
 
 ## Performance: findings and open ideas
 
@@ -167,3 +194,9 @@ Playwright binaries: after a `@playwright/test` bump run
   `frontend/components/player-controls.tsx`, hooks under
   `frontend/components/player/hooks/`.
 - Admin: `backend/api/routes/admin.py`, `frontend/app/admin/page.tsx`.
+- Shared browser: `backend/services/shared_browser.py` (availability,
+  sessions), `backend/api/routes/browser.py`, `browser_*` messages in
+  `backend/main.py`, `browser_sessions` in `connection_manager.py`;
+  `frontend/lib/shared-browser.ts` and the player area in the room page.
+  The neko service is behind the `browser` compose profile, and the
+  `/neko/` nginx location proxies it.

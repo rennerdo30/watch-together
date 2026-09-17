@@ -65,6 +65,19 @@ services:
       # until the janitor evicts, so a budget smaller than a viewing session
       # turns caching off partway through. Raise it on a host with room.
       MAX_CACHE_SIZE_GB: ${MAX_CACHE_SIZE_GB:-4}
+      # The shared browser (the `neko` service below). The backend reports it
+      # as unavailable — and the room says so plainly — unless a password and
+      # one of the two media paths are configured. See deploy/README.md.
+      BROWSER_ENABLED: ${BROWSER_ENABLED:-false}
+      BROWSER_USER_PASSWORD: ${BROWSER_USER_PASSWORD:-}
+      BROWSER_ADMIN_PASSWORD: ${BROWSER_ADMIN_PASSWORD:-}
+      BROWSER_PUBLIC_IP: ${BROWSER_PUBLIC_IP:-}
+      BROWSER_UDP_PORTS: ${BROWSER_UDP_PORTS:-}
+      # A TURN relay, shared with screen sharing: the same three values serve
+      # both, and either one alone is enough to make the browser usable.
+      WEBRTC_TURN_URL: ${WEBRTC_TURN_URL:-}
+      WEBRTC_TURN_USERNAME: ${WEBRTC_TURN_USERNAME:-}
+      WEBRTC_TURN_CREDENTIAL: ${WEBRTC_TURN_CREDENTIAL:-}
     volumes:
       # SQLite database and the segment cache. Cookies are never on it.
       - backend_data:/app/data
@@ -135,6 +148,53 @@ services:
         limits:
           memory: 256M
           cpus: '0.5'
+
+  # A real browser on the server, shown in the room's player and driven by
+  # whoever holds control. It is the one service here that cannot work on the
+  # tunnel alone: cloudflared carries HTTP and WebSocket, and this streams
+  # WebRTC. Hence the profile — it does not start unless asked for — and
+  # hence the two choices in deploy/README.md, neither of which is a default.
+  neko:
+    image: ghcr.io/m1k1o/neko/chromium:3.1.5
+    profiles: [ browser ]
+    restart: unless-stopped
+    dns: *doh_resolver
+    depends_on:
+      - dns
+    networks: [ watch_net ]
+    expose: [ "8080" ]
+    # Chromium's renderer shared memory. The 64 MB default crashes tabs.
+    shm_size: 2gb
+    environment:
+      # This prefix is agreed in three places: here, the nginx `location`,
+      # and BROWSER_PATH_PREFIX in backend/core/config.py.
+      NEKO_SERVER_PATH_PREFIX: /neko
+      NEKO_SERVER_PROXY: "true"
+      NEKO_DESKTOP_SCREEN: ${BROWSER_SCREEN:-1920x1080@30}
+      # The backend logs in over the internal network and hands members the
+      # resulting session cookie. Neither password ever reaches a browser.
+      NEKO_MEMBER_PROVIDER: multiuser
+      NEKO_MEMBER_MULTIUSER_USER_PASSWORD: ${BROWSER_USER_PASSWORD:-}
+      NEKO_MEMBER_MULTIUSER_ADMIN_PASSWORD: ${BROWSER_ADMIN_PASSWORD:-}
+      NEKO_SESSION_COOKIE_ENABLED: "true"
+      NEKO_SESSION_COOKIE_NAME: NEKO_SESSION
+      NEKO_SESSION_COOKIE_PATH: /neko
+      NEKO_SESSION_COOKIE_SECURE: ${BROWSER_SESSION_COOKIE_SECURE:-true}
+      # --- how the picture gets out ---------------------------------------
+      # UDP: a range published on the host (docker-compose.browser-udp.yml)
+      # with the host's public address announced as an ICE candidate.
+      NEKO_WEBRTC_EPR: ${BROWSER_UDP_PORTS:-}
+      NEKO_WEBRTC_NAT1TO1: ${BROWSER_PUBLIC_IP:-}
+      # TURN: a relay both ends reach outbound, so nothing is published.
+      # Both lists matter — the viewer needs one to find the relay, and neko
+      # needs one to allocate on it, which is what makes a closed host work.
+      NEKO_WEBRTC_ICESERVERS_FRONTEND: ${BROWSER_ICE_SERVERS:-}
+      NEKO_WEBRTC_ICESERVERS_BACKEND: ${BROWSER_ICE_SERVERS:-}
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+          cpus: '2.0'
 
   dns:
     # DNS-over-HTTPS resolver for the whole stack (see x-doh-resolver).
