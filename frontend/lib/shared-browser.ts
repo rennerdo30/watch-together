@@ -48,10 +48,10 @@ export interface SharedBrowserStatus {
  * this, so each one says what it means for them and who can change it.
  */
 export const BROWSER_UNAVAILABLE_TEXT: Record<BrowserUnavailableReason, string> = {
-    disabled: 'The shared browser is switched off on this instance. An administrator can enable it.',
-    no_password: 'The shared browser is not finished being set up on this instance.',
+    disabled: 'The shared browser is switched off in this instance\u2019s configuration.',
+    no_password: 'The shared browser is not finished being set up in this instance\u2019s configuration.',
     no_media_path:
-        'This instance has no way to send the browser’s picture out. It needs either a UDP port range opened on the server or a TURN relay configured — an administrator has to do one of the two.',
+        'This instance has no way to send the browser\u2019s picture out. It needs either a UDP port range opened on the server or a TURN relay configured; both are server settings, and the admin panel lists what is missing.',
 };
 
 /** The same fact, when the container simply is not running. */

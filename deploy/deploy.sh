@@ -98,6 +98,17 @@ trap close_master EXIT
 # resolve. --project-directory would repoint those and break the build.
 COMPOSE="docker compose -f deploy/docker-compose.yml --env-file ${REMOTE}/.env"
 
+# The shared browser is a profile, so `up -d` ignores it unless asked. The
+# host's own .env decides: setting BROWSER_ENABLED there is what an operator
+# does to turn the feature on, and the deploy has to act on that or the
+# setting appears to do nothing. Publishing a UDP range is a second, separate
+# decision — nothing else in this deploy publishes a port — so it takes its
+# own overlay file, and BROWSER_PUBLIC_IP is what says the range is really
+# reachable from outside.
+browser_setting() {
+	$SSH "grep -E '^${1}=' ${REMOTE}/.env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r\"'" 2>/dev/null || true
+}
+
 bold()   { printf '\033[1m%s\033[0m\n' "$*"; }
 green()  { printf '\033[1;32m%s\033[0m\n' "$*"; }
 red()    { printf '\033[1;31m%s\033[0m\n' "$*" >&2; }
@@ -188,6 +199,18 @@ bold "[5/6] docker compose up -d --build"
 if [ "$DRY_RUN" -eq 1 ]; then
 	yellow "  (--dry-run — skipping)"
 else
+	BROWSER_ENABLED_VALUE="$(browser_setting BROWSER_ENABLED)"
+	case "$(printf '%s' "$BROWSER_ENABLED_VALUE" | tr 'A-Z' 'a-z')" in
+		1|true|yes|on)
+			COMPOSE="${COMPOSE} --profile browser"
+			if [ -n "$(browser_setting BROWSER_UDP_PORTS)" ] && [ -n "$(browser_setting BROWSER_PUBLIC_IP)" ]; then
+				COMPOSE="${COMPOSE} -f deploy/docker-compose.browser-udp.yml"
+				yellow "  shared browser: on, publishing $(browser_setting BROWSER_UDP_PORTS)/udp"
+			else
+				yellow "  shared browser: on (no UDP range published — it needs a TURN relay to reach anyone)"
+			fi
+			;;
+	esac
 	$SSH "set -e; cd ${REMOTE} && ${COMPOSE} up -d --build"
 	green "  ✓ stack up"
 

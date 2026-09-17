@@ -237,6 +237,17 @@ export interface AdminPlaybackEvent extends AdminPlayback {
     room: string;
 }
 
+/** Why the shared browser is or is not usable, for the operator. */
+export interface AdminSharedBrowser {
+    available: boolean;
+    reason: string | null;
+    transport: string | null;
+    /** Settings still missing, as `KEY=value` hints an operator can act on. */
+    missing: string[];
+    /** Rooms holding the browser right now. */
+    rooms: string[];
+}
+
 export interface AdminOverview {
     requested_by: string;
     uptime_seconds: number;
@@ -249,6 +260,7 @@ export interface AdminOverview {
      * the host reads them with `deploy/host-status.sh --quality`.
      */
     playback_history: AdminPlaybackEvent[];
+    shared_browser: AdminSharedBrowser;
 }
 
 /** One served segment, as the proxy recorded it. */

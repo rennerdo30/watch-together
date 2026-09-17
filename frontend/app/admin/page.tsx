@@ -9,6 +9,7 @@ import {
   HardDrive,
   ListVideo,
   MemoryStick,
+  MonitorUp,
   RefreshCw,
   ShieldAlert,
   Trash2,
@@ -374,6 +375,50 @@ export default function AdminPage() {
         </SectionCard>
 
         {/* Picture changes, including viewers who are no longer connected */}
+        {/* Where an admin looks when a room says the shared browser is off.
+            There is no switch here to flip: it is deployment configuration,
+            so this names the keys and the state rather than pretending to
+            own them. */}
+        <SectionCard title="Shared browser" icon={<MonitorUp aria-hidden="true" className="h-4 w-4" />}>
+          {overview ? (
+            <div className="space-y-3 text-sm">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`rounded-full px-3 py-1 text-xs ${overview.shared_browser.available
+                  ? 'bg-emerald-500/15 text-emerald-300'
+                  : 'bg-neutral-500/15 text-neutral-300'}`}>
+                  {overview.shared_browser.available ? 'ready' : 'not available'}
+                </span>
+                {overview.shared_browser.transport && (
+                  <span className="rounded-full bg-white/5 px-3 py-1 text-xs text-neutral-300">
+                    media over {overview.shared_browser.transport}
+                  </span>
+                )}
+                {overview.shared_browser.rooms.length > 0 && (
+                  <span className="rounded-full bg-white/5 px-3 py-1 text-xs text-neutral-300">
+                    open in {overview.shared_browser.rooms.join(', ')}
+                  </span>
+                )}
+              </div>
+              {overview.shared_browser.missing.length > 0 && (
+                <div>
+                  <p className="text-xs text-neutral-400">
+                    Set these in the host&apos;s <code className="text-neutral-300">.env</code> and deploy
+                    again — there is no switch in this panel, because the browser is a container
+                    that has to be started and given a way to send its picture out:
+                  </p>
+                  <ul className="mt-2 space-y-1">
+                    {overview.shared_browser.missing.map((item) => (
+                      <li key={item} className="font-mono text-xs text-amber-200/90">{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="text-sm text-neutral-500">Loading…</p>
+          )}
+        </SectionCard>
+
         <SectionCard title="Picture changes" icon={<Gauge aria-hidden="true" className="h-4 w-4" />}>
           {overview && overview.playback_history.length > 0 ? (
             <div className="overflow-x-auto">
