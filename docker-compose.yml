@@ -37,6 +37,17 @@ services:
       - CF_ACCESS_AUD=${CF_ACCESS_AUD:-}
       # Defaults to on when Cloudflare Access is configured.
       - REQUIRE_AUTHENTICATION=${REQUIRE_AUTHENTICATION:-}
+      # The shared browser. Off unless both a password and a media path are
+      # configured; see deploy/README.md.
+      - BROWSER_ENABLED=${BROWSER_ENABLED:-false}
+      - BROWSER_USER_PASSWORD=${BROWSER_USER_PASSWORD:-}
+      - BROWSER_ADMIN_PASSWORD=${BROWSER_ADMIN_PASSWORD:-}
+      - BROWSER_PUBLIC_IP=${BROWSER_PUBLIC_IP:-}
+      - BROWSER_UDP_PORTS=${BROWSER_UDP_PORTS:-}
+      - BROWSER_SESSION_COOKIE_SECURE=${BROWSER_SESSION_COOKIE_SECURE:-true}
+      - WEBRTC_TURN_URL=${WEBRTC_TURN_URL:-}
+      - WEBRTC_TURN_USERNAME=${WEBRTC_TURN_USERNAME:-}
+      - WEBRTC_TURN_CREDENTIAL=${WEBRTC_TURN_CREDENTIAL:-}
     deploy:
       resources:
         limits:
@@ -105,6 +116,57 @@ services:
         limits:
           memory: 256M
           cpus: '0.5'
+
+  # A real browser on the server, streamed to the room over WebRTC, with
+  # whoever holds control typing into it. Opt-in: `docker compose
+  # --profile browser up -d`, and only after arranging a path for its media
+  # (see deploy/README.md — nothing else in this stack needs one).
+  neko:
+    image: ghcr.io/m1k1o/neko/chromium:3.1.5
+    container_name: watch-together-browser
+    profiles: [ browser ]
+    restart: unless-stopped
+    dns: *doh_resolver
+    depends_on:
+      - dns
+    expose:
+      - "8080"
+    networks:
+      - watch-network
+    # Chromium puts its renderer shared memory here; the container default of
+    # 64 MB makes tabs crash on anything with pictures in it.
+    shm_size: 2gb
+    environment:
+      # Served under a prefix, beside the app rather than on its own host.
+      # Three places have to agree on it: this, the nginx `location`, and
+      # BROWSER_PATH_PREFIX in backend/core/config.py.
+      - NEKO_SERVER_PATH_PREFIX=/neko
+      - NEKO_SERVER_PROXY=true
+      - NEKO_DESKTOP_SCREEN=${BROWSER_SCREEN:-1920x1080@30}
+      # Logins are made by the backend over the internal network; the
+      # passwords never reach a browser. Members are handed the resulting
+      # session cookie instead.
+      - NEKO_MEMBER_PROVIDER=multiuser
+      - NEKO_MEMBER_MULTIUSER_USER_PASSWORD=${BROWSER_USER_PASSWORD:-}
+      - NEKO_MEMBER_MULTIUSER_ADMIN_PASSWORD=${BROWSER_ADMIN_PASSWORD:-}
+      - NEKO_SESSION_COOKIE_ENABLED=true
+      - NEKO_SESSION_COOKIE_NAME=NEKO_SESSION
+      - NEKO_SESSION_COOKIE_PATH=/neko
+      - NEKO_SESSION_COOKIE_SECURE=${BROWSER_SESSION_COOKIE_SECURE:-true}
+      # --- how the picture gets out -----------------------------------
+      # Either a UDP range published on the host with this address
+      # announced as a candidate, or a TURN relay both ends can reach.
+      # With neither set the backend reports the feature as unavailable
+      # and the room says so instead of offering a button.
+      - NEKO_WEBRTC_EPR=${BROWSER_UDP_PORTS:-}
+      - NEKO_WEBRTC_NAT1TO1=${BROWSER_PUBLIC_IP:-}
+      - NEKO_WEBRTC_ICESERVERS_FRONTEND=${BROWSER_ICE_SERVERS:-}
+      - NEKO_WEBRTC_ICESERVERS_BACKEND=${BROWSER_ICE_SERVERS:-}
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+          cpus: '2.0'
 
   dns:
     # DNS-over-HTTPS resolver for the whole stack (see x-doh-resolver).

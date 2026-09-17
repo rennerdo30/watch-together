@@ -83,6 +83,83 @@ WEBRTC_TURN_USERNAME = os.getenv("WEBRTC_TURN_USERNAME", "").strip()
 WEBRTC_TURN_CREDENTIAL = os.getenv("WEBRTC_TURN_CREDENTIAL", "").strip()
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    """A boolean from the environment, spelled the way an operator would."""
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in ("true", "1", "yes", "on")
+
+
+# --- A shared browser in the room -------------------------------------------
+# A neko container (https://github.com/m1k1o/neko) runs a real browser on the
+# server and streams its screen to the room over WebRTC, with whoever holds
+# control typing into it. The room shows it in the player area, exactly where
+# a screen share goes, and for the same reason: one player, one source.
+#
+# It is off unless an operator turns it on, because unlike everything else in
+# this stack it cannot work behind the tunnel alone. cloudflared carries HTTP
+# and WebSocket; neko's media is WebRTC, which needs either a port open on the
+# host or a TURN relay to bounce off. See BROWSER_MEDIA_* below.
+BROWSER_ENABLED = _env_flag("BROWSER_ENABLED", False)
+# Where the backend reaches neko inside the stack. This is operator
+# configuration, not user input, so it is fetched directly rather than through
+# services/upstream.py — whose whole job is to refuse private addresses.
+BROWSER_INTERNAL_URL = os.getenv("BROWSER_INTERNAL_URL", "http://neko:8080").rstrip("/")
+# The prefix neko is served under, on this origin. Three things must agree on
+# it: nginx's `location`, neko's own NEKO_SERVER_PATH_PREFIX, and the iframe
+# the room renders. It is a constant rather than an environment variable so
+# they cannot drift apart.
+BROWSER_PATH_PREFIX = "/neko"
+# neko's own UI, asked to render as an embed: no sidebar, no chat, just the
+# screen and the controls that put a cursor on it.
+BROWSER_EMBED_QUERY = "embed=1"
+# Passwords for neko's `multiuser` member provider. They never leave this
+# process: the browser is handed a *session*, minted here (see
+# services/shared_browser.py), and never a password.
+BROWSER_USER_PASSWORD = os.getenv("BROWSER_USER_PASSWORD", "")
+BROWSER_ADMIN_PASSWORD = os.getenv("BROWSER_ADMIN_PASSWORD", "")
+# The cookie neko authenticates with, and how long the one this server sets
+# on a member's browser lives. Short: it is re-minted whenever the room opens
+# the browser, so there is no reason for it to outlive a sitting.
+BROWSER_SESSION_COOKIE_NAME = "NEKO_SESSION"
+BROWSER_SESSION_MAX_AGE_SECONDS = 4 * 3600
+# Set `Secure` on that cookie. On by default because the deployment is behind
+# HTTPS; a plain-HTTP development stack has to turn it off or the browser
+# will not store it.
+BROWSER_SESSION_COOKIE_SECURE = _env_flag("BROWSER_SESSION_COOKIE_SECURE", True)
+BROWSER_REQUEST_TIMEOUT_SECONDS = 10.0
+BROWSER_TITLE_MAX_LENGTH = 80
+# How long a health answer is reused. Every room asks on load, and an
+# enabled-but-absent container makes each of those wait out the timeout
+# above; without this, one misconfigured instance spends a request per room
+# per page load on a connection that will not open.
+BROWSER_HEALTH_CACHE_SECONDS = 10.0
+
+# How media leaves the neko container. Neither of these is something this
+# server can test for, so both are read from configuration and reported to
+# the room as-is; what the room must never do is offer a button that cannot
+# work. See `services/shared_browser.media_transport`.
+#
+# The public address announced as an ICE candidate (NEKO_WEBRTC_NAT1TO1),
+# together with the UDP ports published on the host (NEKO_WEBRTC_EPR). Both
+# are needed: an announced address with nothing listening behind it is worse
+# than no announcement at all.
+BROWSER_PUBLIC_IP = os.getenv("BROWSER_PUBLIC_IP", "").strip()
+BROWSER_UDP_PORTS = os.getenv("BROWSER_UDP_PORTS", "").strip()
+# Transports, in the order they are preferred. Direct UDP is a hop shorter
+# and costs nobody bandwidth; a relay works where no port can be opened.
+BROWSER_TRANSPORT_UDP = "udp"
+BROWSER_TRANSPORT_TURN = "turn"
+# Why the room cannot open a browser, as codes rather than sentences: the
+# wording belongs to the interface that shows it.
+BROWSER_UNAVAILABLE_DISABLED = "disabled"
+BROWSER_UNAVAILABLE_NO_MEDIA_PATH = "no_media_path"
+BROWSER_UNAVAILABLE_NO_PASSWORD = "no_password"
+BROWSER_BUSY_OTHER_ROOM = "another_room"
+BROWSER_BUSY_LIVE_SHARE = "live_share"
+
+
 # --- Warming what the room is about to need ---------------------------------
 # A jump lands in an empty buffer, so the player shows nothing until a whole
 # segment has arrived from the CDN. Both kinds of jump this room makes are
