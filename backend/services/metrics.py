@@ -1,15 +1,27 @@
 """
 Proxy metrics collection.
 
-Records one sample per upstream fetch so streaming failures can be
-characterised after the fact: which host, which byte offset, how long
-the upstream took, how many bytes reached the client, and how the
-transfer ended. Aggregates are kept per host and per error class; raw
-samples are kept in a bounded ring buffer for the most recent requests.
+Records one sample per served segment so streaming failures can be
+characterised after the fact: who asked, which host, which byte offset,
+which cache tier answered, how long the upstream took, how many bytes
+reached the client, and how the transfer ended. Aggregates are kept per
+host and per error class; raw samples are kept in a bounded ring buffer
+for the most recent requests.
 
 This exists because the January HAR capture of the streaming failures
 contained only page-load traffic and no segment requests at all, so the
 failure signature has to be gathered server-side instead.
+
+Two later questions shaped what a sample carries. "Why is this one
+viewer always on a low rendition?" needs the identity, because a sample
+that cannot be attributed describes the instance rather than anyone on
+it. And cache hits used to return before recording anything, so the
+aggregate counted only the misses: a viewer served entirely from cache
+looked like a viewer who was not watching.
+
+The identity is for the admin panel only. `snapshot` leaves it out
+unless asked, because `/api/metrics/proxy` is open to any signed-in
+viewer and who watched what is nobody else's business.
 """
 import time
 import asyncio
@@ -25,11 +37,29 @@ from core.config import (
 logger = logging.getLogger(__name__)
 
 
+# Which tier answered the request.
+TIER_UPSTREAM = "upstream"
+TIER_MEMORY = "memory"
+TIER_DISK = "disk"
+
 # Terminal states for a proxied transfer.
 OUTCOME_OK = "ok"
 OUTCOME_UPSTREAM_ERROR = "upstream_error"
 OUTCOME_CLIENT_ABORTED = "client_aborted"
 OUTCOME_TRUNCATED = "truncated"
+
+
+def throughput_mbps(bytes_sent: int, transfer_ms: float, cache_tier: str) -> Optional[float]:
+    """Megabits per second the client was served at, when that is measurable.
+
+    Only a streamed transfer measures anything: the bytes leave while the
+    clock runs. A memory hit is assembled and handed to the server whole,
+    so its elapsed time describes a copy inside this process and would
+    report an imaginary gigabit link.
+    """
+    if cache_tier == TIER_MEMORY or transfer_ms <= 0 or bytes_sent <= 0:
+        return None
+    return round(bytes_sent * 8 / (transfer_ms / 1000) / 1_000_000, 2)
 
 
 class ProxyMetrics:
@@ -41,6 +71,7 @@ class ProxyMetrics:
         self._totals: Dict[str, int] = defaultdict(int)
         self._by_host: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
         self._by_outcome: Dict[str, int] = defaultdict(int)
+        self._by_tier: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
         self._started_at = time.time()
 
     async def record(
@@ -54,6 +85,8 @@ class ProxyMetrics:
         range_start: int = 0,
         expected_bytes: Optional[int] = None,
         error: Optional[str] = None,
+        identity: Optional[str] = None,
+        cache_tier: str = TIER_UPSTREAM,
     ) -> None:
         """Record one completed (or failed) proxy transfer."""
         sample = {
@@ -67,6 +100,9 @@ class ProxyMetrics:
             "range_start": range_start,
             "expected_bytes": expected_bytes,
             "error": error,
+            "identity": identity,
+            "cache_tier": cache_tier,
+            "mbps": throughput_mbps(bytes_sent, transfer_ms, cache_tier),
         }
 
         async with self._lock:
@@ -74,6 +110,9 @@ class ProxyMetrics:
             self._totals["requests"] += 1
             self._totals["bytes_sent"] += bytes_sent
             self._by_outcome[outcome] += 1
+            tier_stats = self._by_tier[cache_tier]
+            tier_stats["requests"] += 1
+            tier_stats["bytes_sent"] += bytes_sent
             host_stats = self._by_host[host]
             host_stats["requests"] += 1
             host_stats["bytes_sent"] += bytes_sent
@@ -97,13 +136,23 @@ class ProxyMetrics:
                 host, status, range_start, bytes_sent, upstream_ms, transfer_ms,
             )
 
-    async def snapshot(self, sample_limit: int = 50) -> dict:
-        """Return aggregates plus the most recent samples."""
+    async def snapshot(self, sample_limit: int = 50, include_identity: bool = False) -> dict:
+        """Return aggregates plus the most recent samples.
+
+        `include_identity` is for the admin panel. Without it every sample
+        is stripped of who made the request, because the open metrics
+        endpoint would otherwise tell any signed-in viewer what everyone
+        else is watching and when.
+        """
         async with self._lock:
             samples: List[dict] = list(self._samples)[-sample_limit:]
             totals = dict(self._totals)
             by_outcome = dict(self._by_outcome)
             by_host = {host: dict(stats) for host, stats in self._by_host.items()}
+            by_tier = {tier: dict(stats) for tier, stats in self._by_tier.items()}
+
+        if not include_identity:
+            samples = [{k: v for k, v in sample.items() if k != "identity"} for sample in samples]
 
         failures = [s for s in samples if s["outcome"] != OUTCOME_OK]
         return {
@@ -111,6 +160,7 @@ class ProxyMetrics:
             "totals": totals,
             "by_outcome": by_outcome,
             "by_host": by_host,
+            "by_cache_tier": by_tier,
             "recent_failures": failures,
             "recent_samples": samples,
         }
@@ -122,6 +172,7 @@ class ProxyMetrics:
             self._totals.clear()
             self._by_host.clear()
             self._by_outcome.clear()
+            self._by_tier.clear()
             self._started_at = time.time()
 
 

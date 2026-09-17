@@ -46,6 +46,21 @@ test('the Shaka build still exposes what the latency correction reads', () => {
   expect(bundle).toContain('"shaka.abr.SimpleAbrManager"');
 });
 
+test('the Shaka build still honours the switching and prefetch keys set here', () => {
+  // Shaka ignores a configuration key it does not know, so a rename in a
+  // future release would quietly restore the behaviour each of these was
+  // added to change: switches queued behind a minute of buffered media,
+  // segments fetched strictly one at a time, and every response under 20 ms
+  // discarded as a browser cache hit.
+  const bundle = readFileSync(
+    path.resolve(__dirname, '../node_modules/shaka-player/dist/shaka-player.compiled.js'),
+    'utf8',
+  );
+  for (const key of ['clearBufferSwitch', 'safeMarginSwitch', 'segmentPrefetchLimit', 'cacheLoadThreshold']) {
+    expect(bundle).toContain(key);
+  }
+});
+
 test('the wait for headers is not charged against the bytes of a segment', () => {
   // A segment that waited 500 ms and then arrived in 30 ms.
   expect(sampleTimeMs(530, { packetNumber: 1, timeToFirstByte: 500 })).toBe(30);

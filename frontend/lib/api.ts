@@ -198,11 +198,27 @@ export class ApiError extends Error {
     }
 }
 
+/** What one viewer's player reports about its own picture. */
+export interface AdminPlayback {
+    member: string;
+    rung: number | null;
+    cap: number | null;
+    surface_px: number | null;
+    pixel_ratio: number | null;
+    estimate_bps: number | null;
+    dropped_frames: number | null;
+    ladder_rungs: number | null;
+    mode: string | null;
+    engine: string | null;
+    at: number;
+}
+
 export interface AdminRoom {
     id: string;
     name: string;
     active_users: number;
     members: string[];
+    playback: AdminPlayback[];
     current_video: string | null;
     is_live: boolean;
     is_playing: boolean;
@@ -216,6 +232,25 @@ export interface AdminOverview {
     totals: { rooms: number; viewers: number };
     rooms: AdminRoom[];
     cookie_users: string[];
+}
+
+/** One served segment, as the proxy recorded it. */
+export interface AdminTransfer {
+    at: number;
+    host: string;
+    status: number | null;
+    outcome: string;
+    upstream_ms: number;
+    transfer_ms: number;
+    bytes_sent: number;
+    range_start: number;
+    expected_bytes: number | null;
+    error: string | null;
+    cache_tier: string;
+    /** Megabits per second, where the transfer measured anything. */
+    mbps: number | null;
+    /** Only the admin view carries this; the open metrics view does not. */
+    identity?: string | null;
 }
 
 export interface AdminSegmentEntry {
@@ -259,8 +294,9 @@ export interface AdminCacheReport {
         totals: Record<string, number>;
         by_outcome: Record<string, number>;
         by_host: Record<string, Record<string, number>>;
-        recent_failures: Record<string, unknown>[];
-        recent_samples: Record<string, unknown>[];
+        by_cache_tier: Record<string, Record<string, number>>;
+        recent_failures: AdminTransfer[];
+        recent_samples: AdminTransfer[];
     };
 }
 

@@ -60,6 +60,16 @@ async def admin_overview(request: Request, response: Response):
             "name": state.get("name", ""),
             "active_users": len(connections),
             "members": sorted({getattr(ws, "user_email", config.GUEST_IDENTITY) for ws in connections}),
+            # What each viewer's player says about its own picture, which is
+            # the only place the inputs to an auto-quality decision exist.
+            "playback": [
+                {
+                    "member": getattr(ws, "user_email", config.GUEST_IDENTITY),
+                    **getattr(ws, "playback_quality", {}),
+                }
+                for ws in connections
+                if getattr(ws, "playback_quality", None)
+            ],
             "current_video": video_data.get("title"),
             "is_live": bool(video_data.get("is_live")),
             "is_playing": bool(state.get("is_playing")),
@@ -92,7 +102,8 @@ async def admin_cache(request: Request, response: Response):
         "segments": disk_cache_report(max_entries=config.ADMIN_SEGMENT_LIST_LIMIT),
         "memory": memory_cache.get_stats(),
         "formats": await get_all_cached_formats(),
-        "proxy": await proxy_metrics.snapshot(sample_limit=config.ADMIN_PROXY_SAMPLE_LIMIT),
+        "proxy": await proxy_metrics.snapshot(
+            sample_limit=config.ADMIN_PROXY_SAMPLE_LIMIT, include_identity=True),
     }
 
 
