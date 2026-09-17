@@ -488,9 +488,9 @@ class ConnectionManager:
             # Append connection inside lock to prevent race condition
             self.active_connections[room_id].append(websocket)
             setattr(websocket, "user_email", user_email)
-            # Peers address each other by connection, not by person: the
-            # same member in two tabs is two browsers, each needing its own
-            # stream.
+            # A browser, not a person: the same member in two tabs is two
+            # connections, and the share relay authorises a media socket
+            # against exactly one of them.
             setattr(websocket, "connection_id", uuid.uuid4().hex)
 
         await self._save_room_state(room_id)
@@ -534,6 +534,15 @@ class ConnectionManager:
             
             # Update members list
             active_emails = [getattr(ws, "user_email", GUEST_IDENTITY) for ws in self.active_connections[room_id]]
+
+            # Someone who has left the room stops being sent its share. The
+            # media socket is a connection of its own, so leaving does not
+            # close it; without this a member could watch a room they are no
+            # longer in, and without appearing in it.
+            leaver = getattr(websocket, "user_email", GUEST_IDENTITY)
+            if leaver not in active_emails:
+                share_relay.drop_viewers_of(room_id, leaver)
+
             if room_id in self.room_states:
                 self.room_states[room_id]["members"] = [{"email": email} for email in sorted(list(set(active_emails)))]
 

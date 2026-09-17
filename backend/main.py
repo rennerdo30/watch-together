@@ -34,8 +34,8 @@ from core.config import (
     PREWARM_NEXT_VIDEO_SECONDS, STREAM_URL_MIN_LIFETIME_SECONDS,
     STREAM_URL_SERVE_MIN_SECONDS, DEFAULT_USER_AGENT,
     SHARE_TITLE_MAX_LENGTH, SHARE_QUALITY_MAX_LENGTH,
-    SHARE_CHUNK_MAX_BYTES, SHARE_CONTROL_FORMAT, SHARE_CLOSE_PROTOCOL,
-    SHARE_CLOSE_NOT_AUTHORIZED, SHARE_CLOSE_NO_SHARE,
+    SHARE_CHUNK_MAX_BYTES, SHARE_CONTROL_FORMAT, SHARE_CONTROL_MAX_BYTES,
+    SHARE_CLOSE_PROTOCOL, SHARE_CLOSE_NOT_AUTHORIZED, SHARE_CLOSE_NO_SHARE,
     BROWSER_TITLE_MAX_LENGTH, BROWSER_BUSY_LIVE_SHARE,
 )
 from core.security import (
@@ -1837,6 +1837,22 @@ async def _share_publisher_socket(websocket: WebSocket, room_id: str, user_email
             message = await websocket.receive()
             if message["type"] == "websocket.disconnect":
                 break
+            # Every message, of either kind, is checked against *this*
+            # socket's relay rather than against the room's. A share that
+            # ended while its media socket stayed open — the sharer's room
+            # connection dropped, an admin stopped it — leaves this handler
+            # parked here, and by then the room may belong to somebody
+            # else's share. Addressing the room by name would let those
+            # bytes land in it.
+            if share_relay.relay_of(room_id) is not relay:
+                logger.info(
+                    f"Share media from {user_email} in {room_id} outlived its "
+                    f"share; closing the connection"
+                )
+                await websocket.close(code=SHARE_CLOSE_NO_SHARE,
+                                      reason="This share is no longer running")
+                break
+
             chunk = message.get("bytes")
             if chunk is not None:
                 if len(chunk) > SHARE_CHUNK_MAX_BYTES:
@@ -1846,8 +1862,6 @@ async def _share_publisher_socket(websocket: WebSocket, room_id: str, user_email
                     )
                     await websocket.close(code=SHARE_CLOSE_PROTOCOL,
                                           reason="Media chunk too large")
-                    break
-                if share_relay.relay_of(room_id) is None:
                     break
                 if relay.mime is None:
                     # Without the format there is no SourceBuffer to append
@@ -1869,6 +1883,14 @@ async def _share_publisher_socket(websocket: WebSocket, room_id: str, user_email
             text = message.get("text")
             if not text:
                 continue
+            if len(text) > SHARE_CONTROL_MAX_BYTES:
+                logger.warning(
+                    f"Oversized share control from {user_email} in {room_id}: "
+                    f"{len(text)} bytes"
+                )
+                await websocket.close(code=SHARE_CLOSE_PROTOCOL,
+                                      reason="Control message too large")
+                break
             try:
                 control = json.loads(text)
             except json.JSONDecodeError:

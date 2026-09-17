@@ -21,7 +21,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { SHARE_PUBLISHER_BACKLOG_BYTES, SHARE_TIMESLICE_MS } from '../constants';
 import { recorderOptions } from './screen-capture';
 import {
-    SHARE_CONTROL_FORMAT, shareCloseReason, shareSocketUrl,
+    SHARE_CLOSE_ENDED, SHARE_CONTROL_FORMAT, shareCloseReason, shareSocketUrl,
     type SharePublisherStatus,
 } from './relay';
 import type { ShareQuality } from '../constants';
@@ -112,6 +112,13 @@ export function useSharePublisher(options: PublisherOptions): SharePublisherHand
         };
 
         socket.onclose = (event) => {
+            if (event.code === SHARE_CLOSE_ENDED) {
+                // The room ended the share — an admin can — and the notice
+                // on the room socket is what the player reacts to. Reporting
+                // a failure here would flash an error on the way out.
+                setReached('idle');
+                return;
+            }
             setReached('failed');
             setMessage(shareCloseReason(event.code)
                 ?? 'The connection carrying your screen closed.');
@@ -119,8 +126,10 @@ export function useSharePublisher(options: PublisherOptions): SharePublisherHand
         socket.onerror = () => socket.close();
 
         return () => {
-            // Stopping the recorder first lets its last chunk out before the
-            // socket goes; the room is told separately that it is over.
+            // The recorder is stopped for the capture's sake, not for the
+            // stream's: its final chunk is delivered asynchronously, after
+            // this socket has already closed, so the share simply ends on
+            // the last chunk that made it. The room is told separately.
             try { recorder?.stop(); } catch { /* already stopped with the tracks */ }
             socket.onclose = null;
             socket.close();

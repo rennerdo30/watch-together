@@ -308,6 +308,17 @@ export const SHARE_LIVE_EDGE_CHECK_MS = 1000;
 export const SHARE_RECONNECT_DELAY_MS = 2000;
 
 /**
+ * How many times a viewer rebuilds its decoder before giving up.
+ *
+ * A `SourceBuffer` that has failed is finished — there is no way to revive
+ * one in place — so the answer is a new socket, which the server starts
+ * from the initialisation segment and a fresh cluster. Bounded, because a
+ * stream this browser genuinely cannot play would otherwise reconnect for
+ * ever and say nothing.
+ */
+export const SHARE_DECODE_RETRY_LIMIT = 2;
+
+/**
  * How many bytes may sit unsent on the sharer's socket before the room
  * tells them their uplink is the bottleneck.
  *

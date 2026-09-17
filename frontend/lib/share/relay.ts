@@ -38,7 +38,6 @@ export const SHARE_CONTROL_TOO_SLOW = 'too_slow';
  */
 export const SHARE_CLOSE_PROTOCOL = 4400;
 export const SHARE_CLOSE_NOT_AUTHORIZED = 4403;
-export const SHARE_CLOSE_NO_SHARE = 4404;
 export const SHARE_CLOSE_TOO_SLOW = 4408;
 export const SHARE_CLOSE_BUSY = 4409;
 export const SHARE_CLOSE_ENDED = 4410;

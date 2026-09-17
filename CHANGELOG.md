@@ -43,8 +43,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **The media socket is authenticated exactly as the room socket is**, and a
   publisher additionally has to *be* the room's current sharer: the verified
   identity and the connection id together, because the connection id is
-  public inside the room. Viewers must be in the room they are watching, and
-  nothing a viewer sends on that socket is ever relayed.
+  public inside the room. Every message is then checked against *that*
+  share rather than against the room, so a media socket that outlives its
+  share — the sharer's room connection dropped, an admin stopped it —
+  cannot feed the next member's share. Viewers must be in the room they are
+  watching, and are cut off when they leave it rather than only checked on
+  the way in; nothing a viewer sends on that socket is ever relayed.
 - **Removed with it**: `frontend/lib/webrtc/` (the publisher, the viewer and
   the signalling), the `share_signal` and `share_ready` messages and their
   relay, `GET /api/webrtc/ice`, and the `WEBRTC_STUN_URLS` /
