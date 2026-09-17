@@ -15,6 +15,7 @@ from core.config import (
 from services.database import save_room, get_all_rooms, delete_room
 from services.sponsorblock import SETTINGS_KEY as SPONSORBLOCK_KEY, normalize_settings
 from services import playback_quality
+from services.share_relay import relay as share_relay
 
 
 class ConnectionManager:
@@ -33,7 +34,7 @@ class ConnectionManager:
         #
         # Deliberately not part of `room_states`: that dict is copied to
         # SQLite on every change, and a share cannot outlive the process
-        # that carries its signalling. A restart leaves no peers, so a
+        # carrying its media. A restart leaves no media socket, so a
         # remembered share would only describe something that is gone.
         self.live_shares: Dict[str, dict] = {}
         # room_id -> the shared browser session that room has open.
@@ -86,36 +87,6 @@ class ConnectionManager:
             return None
         websocket.playback_quality = kept
         return kept
-
-    def peers(self, room_id: str) -> List[dict]:
-        """Every browser connected to a room, in join order."""
-        return [
-            {
-                "connection_id": getattr(ws, "connection_id", ""),
-                "email": getattr(ws, "user_email", GUEST_IDENTITY),
-            }
-            for ws in self.active_connections.get(room_id, [])
-            if getattr(ws, "connection_id", None)
-        ]
-
-    async def send_to_connection(self, room_id: str, connection_id: str, message: dict) -> bool:
-        """Deliver a message to one browser in one room.
-
-        The room is part of the address on purpose: signalling carries one
-        member's payload to another, and a connection id from somewhere else
-        must not be reachable with it.
-        """
-        for ws in list(self.active_connections.get(room_id, [])):
-            if getattr(ws, "connection_id", None) != connection_id:
-                continue
-            try:
-                await ws.send_json(message)
-                return True
-            except Exception as exc:
-                logger.warning(f"Failed to deliver to {connection_id} in {room_id}: {exc}")
-                await self.disconnect(ws, room_id)
-                return False
-        return False
 
     def share_of(self, room_id: str) -> Optional[dict]:
         """What the room is watching live from one of its own members."""
@@ -388,9 +359,6 @@ class ConnectionManager:
                 elapsed = time.time() - state.get("last_sync_time", time.time())
                 state["timestamp"] = state.get("timestamp", 0) + elapsed
 
-        # Who is connected, by connection rather than by person: signalling
-        # addresses browsers, and one member can have several.
-        state["peers"] = self.peers(room_id)
         # What is being shared right now, if anything.
         state["live_share"] = self.live_shares.get(room_id)
         # …and whether the room has the shared browser open.
@@ -520,9 +488,9 @@ class ConnectionManager:
             # Append connection inside lock to prevent race condition
             self.active_connections[room_id].append(websocket)
             setattr(websocket, "user_email", user_email)
-            # Peers address each other by connection, not by person: the
-            # same member in two tabs is two browsers, each needing its own
-            # stream.
+            # A browser, not a person: the same member in two tabs is two
+            # connections, and the share relay authorises a media socket
+            # against exactly one of them.
             setattr(websocket, "connection_id", uuid.uuid4().hex)
 
         await self._save_room_state(room_id)
@@ -557,6 +525,8 @@ class ConnectionManager:
             share = self.live_shares.get(room_id)
             if share and share["connection_id"] == getattr(websocket, "connection_id", None):
                 del self.live_shares[room_id]
+                # The media socket and the viewers attached to it go with it.
+                share_relay.end(room_id)
                 await self.broadcast({
                     "type": "share_ended",
                     "payload": {"reason": "disconnected", "email": share["email"]},
@@ -564,6 +534,15 @@ class ConnectionManager:
             
             # Update members list
             active_emails = [getattr(ws, "user_email", GUEST_IDENTITY) for ws in self.active_connections[room_id]]
+
+            # Someone who has left the room stops being sent its share. The
+            # media socket is a connection of its own, so leaving does not
+            # close it; without this a member could watch a room they are no
+            # longer in, and without appearing in it.
+            leaver = getattr(websocket, "user_email", GUEST_IDENTITY)
+            if leaver not in active_emails:
+                share_relay.drop_viewers_of(room_id, leaver)
+
             if room_id in self.room_states:
                 self.room_states[room_id]["members"] = [{"email": email} for email in sorted(list(set(active_emails)))]
 
@@ -605,6 +584,7 @@ class ConnectionManager:
                     if rid in self._room_locks:
                         del self._room_locks[rid]
                     self.live_shares.pop(rid, None)
+                    share_relay.end(rid)
                     # A room nobody came back to must not keep holding the
                     # instance's one browser away from every other room.
                     self.browser_sessions.pop(rid, None)
@@ -640,6 +620,7 @@ class ConnectionManager:
                 pass
         self.active_connections.pop(room_id, None)
         self.live_shares.pop(room_id, None)
+        share_relay.end(room_id)
         self.browser_sessions.pop(room_id, None)
         async with self._state_lock:
             self.room_states.pop(room_id, None)

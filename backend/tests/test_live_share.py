@@ -1,13 +1,12 @@
 """
 One member's screen on the room's player.
 
-A share is the first thing a room watches that this server does not fetch:
-the media travels browser to browser and only the handshake passes through
-here. That makes three things worth pinning — that the room's one player
-has one source, that a handshake reaches exactly the browser it was
-addressed to and nothing else, and that a share disappears with the person
+This file is about how a share *behaves in a room*: that the room's one
+player has one source, that the slot is the sharer's and the admin's to
+release and nobody else's, and that a share disappears with the person
 sharing it rather than leaving everyone watching a frame that will never
-change.
+change. How the picture itself travels — the media socket, the retained
+header, what happens to a viewer who falls behind — is test_share_relay.py.
 """
 import asyncio
 import os
@@ -34,16 +33,14 @@ async def join(manager, room_id: str, email: str) -> FakeWebSocket:
 
 
 class TestEveryBrowserIsAddressable:
-    async def test_the_same_member_in_two_tabs_is_two_peers(self, manager):
-        """A share has to reach each browser; one id per person would send
-        one of the two tabs someone else's answer."""
+    async def test_the_same_member_in_two_tabs_is_two_connections(self, manager):
+        """The relay authorises a media socket by connection, not by person:
+        one id per person would let a second tab push into the first's
+        share."""
         first = await join(manager, "room", "same@example.com")
         second = await join(manager, "room", "same@example.com")
 
         assert first.connection_id != second.connection_id
-        peers = manager.peers("room")
-        assert [peer["email"] for peer in peers] == ["same@example.com"] * 2
-        assert len({peer["connection_id"] for peer in peers}) == 2
 
     async def test_a_browser_is_told_its_own_id(self, manager):
         socket = await join(manager, "room", "who@example.com")
@@ -93,41 +90,6 @@ class TestOneSharerAtATime:
         assert manager.share_of("room") is None
 
 
-class TestTheHandshakeGoesWhereItWasSent:
-    async def test_a_signal_reaches_one_browser_and_no_other(self, manager):
-        sharer = await join(manager, "room", "sharer@example.com")
-        viewer = await join(manager, "room", "viewer@example.com")
-        other = await join(manager, "room", "other@example.com")
-        for socket in (sharer, viewer, other):
-            socket.sent.clear()
-
-        delivered = await manager.send_to_connection("room", viewer.connection_id, {
-            "type": "share_signal", "payload": {"kind": "offer", "data": "v=0"},
-        })
-
-        assert delivered is True
-        assert [m["payload"]["kind"] for m in viewer.sent] == ["offer"]
-        assert other.sent == [] and sharer.sent == []
-
-    async def test_a_connection_id_from_another_room_is_not_reachable(self, manager):
-        """The room is part of the address: a signal must not be a way to
-        reach a browser that is not in the conversation."""
-        here = await join(manager, "room", "here@example.com")
-        elsewhere = await join(manager, "other-room", "elsewhere@example.com")
-        elsewhere.sent.clear()
-
-        delivered = await manager.send_to_connection(
-            "room", elsewhere.connection_id, {"type": "share_signal", "payload": {}})
-
-        assert delivered is False
-        assert elsewhere.sent == []
-        assert here.sent[-1]["type"] != "share_signal"
-
-    async def test_an_unknown_target_is_simply_not_delivered(self, manager):
-        await join(manager, "room", "here@example.com")
-        assert await manager.send_to_connection("room", "nope", {"type": "x"}) is False
-
-
 class TestAShareEndsWithItsSharer:
     async def test_a_disconnecting_sharer_ends_the_share(self, manager):
         sharer = await join(manager, "room", "sharer@example.com")
@@ -163,7 +125,7 @@ class TestAShareEndsWithItsSharer:
 
 class TestAShareIsNotPartOfTheRoomsHistory:
     async def test_it_is_never_written_to_the_database(self, manager, monkeypatch):
-        """A share cannot outlive the process carrying its signalling, so
+        """A share cannot outlive the process carrying its media, so
         remembering one would only describe something that is gone."""
         saved = []
         import connection_manager as module
@@ -200,7 +162,10 @@ class TestAShareIsNotPartOfTheRoomsHistory:
         sync = [m for m in latecomer.sent if m["type"] == "sync"][0]["payload"]
         assert sync["live_share"]["email"] == "sharer@example.com"
         assert sync["live_share"]["title"] == "Gameplay"
-        assert any(peer["connection_id"] == sharer.connection_id for peer in sync["peers"])
+        # The sharer's connection id comes with it: the media socket is
+        # authorised against exactly that, and a latecomer's player has to
+        # know whether the share is its own.
+        assert sync["live_share"]["connection_id"] == sharer.connection_id
 
     async def test_a_room_without_a_share_says_so(self, manager):
         socket = await join(manager, "room", "alone@example.com")
@@ -269,60 +234,6 @@ class TestTheShareMessages:
                 if message["type"] == "pong":
                     break
             assert refusals and "already sharing" in refusals[0]
-
-    def test_the_handshake_reaches_the_other_browser_verbatim(self, client):
-        room = "share-signal"
-        with client.websocket_connect(f"/ws/{room}?user=a@example.com") as sharer, \
-                client.websocket_connect(f"/ws/{room}?user=b@example.com") as viewer:
-            sharer_id = _drain_until(sharer, "sync")["your_connection_id"]
-            viewer_id = _drain_until(viewer, "sync")["your_connection_id"]
-
-            sharer.send_json({"type": "share_signal", "payload": {
-                "to": viewer_id, "kind": "offer", "data": {"sdp": "v=0", "type": "offer"}}})
-
-            signal = _drain_until(viewer, "share_signal")
-            assert signal["kind"] == "offer"
-            assert signal["data"] == {"sdp": "v=0", "type": "offer"}
-            # Stamped with who it came from, so the answer knows where to go.
-            assert signal["from"] == sharer_id
-
-    def test_a_viewer_announces_itself_to_the_sharer(self, client):
-        room = "share-ready"
-        with client.websocket_connect(f"/ws/{room}?user=a@example.com") as sharer, \
-                client.websocket_connect(f"/ws/{room}?user=b@example.com") as viewer:
-            _drain_until(sharer, "sync")
-            viewer_id = _drain_until(viewer, "sync")["your_connection_id"]
-            sharer.send_json({"type": "share_start", "payload": {"title": "Gameplay"}})
-            _drain_until(sharer, "share_started")
-
-            viewer.send_json({"type": "share_ready", "payload": {}})
-
-            ready = _drain_until(sharer, "share_ready")
-            assert ready["from"] == viewer_id
-            assert ready["email"] == "b@example.com"
-
-    def test_junk_and_oversized_payloads_are_refused(self, client):
-        room = "share-junk"
-        from core.config import SHARE_SIGNAL_MAX_BYTES
-
-        with client.websocket_connect(f"/ws/{room}?user=a@example.com") as sender, \
-                client.websocket_connect(f"/ws/{room}?user=b@example.com") as target:
-            _drain_until(sender, "sync")
-            target_id = _drain_until(target, "sync")["your_connection_id"]
-
-            # A kind nobody handles, and an SDP far larger than any real one.
-            sender.send_json({"type": "share_signal", "payload": {
-                "to": target_id, "kind": "execute", "data": "rm -rf"}})
-            sender.send_json({"type": "share_signal", "payload": {
-                "to": target_id, "kind": "offer", "data": "x" * (SHARE_SIGNAL_MAX_BYTES + 1)}})
-            # Something that is delivered, to prove the refusals were not
-            # merely slower than the assertion.
-            sender.send_json({"type": "share_signal", "payload": {
-                "to": target_id, "kind": "ice", "data": {"candidate": "a"}}})
-
-            signal = _drain_until(target, "share_signal")
-            assert signal["kind"] == "ice"
-            assert signal["data"] == {"candidate": "a"}
 
     def test_stopping_tells_the_room_and_leaves_the_queue_alone(self, client):
         room = "share-stop"

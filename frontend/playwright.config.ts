@@ -65,13 +65,10 @@ export default defineConfig({
         BROWSER_ENABLED: 'true',
         BROWSER_USER_PASSWORD: 'e2e-user',
         BROWSER_ADMIN_PASSWORD: 'e2e-admin',
-        // A complete triple. A URL with no credentials makes the browser
-        // refuse to build any peer connection at all, which takes screen
-        // sharing down with it — see
-        // TestHalfConfiguredTurnDoesNotBreakEverything.
+        // A relay for neko's media, which is all this value means now:
+        // screen sharing is carried by the backend and no browser is ever
+        // handed ICE servers.
         WEBRTC_TURN_URL: 'turn:relay.invalid:3478',
-        WEBRTC_TURN_USERNAME: 'e2e',
-        WEBRTC_TURN_CREDENTIAL: 'e2e',
       },
     },
     {

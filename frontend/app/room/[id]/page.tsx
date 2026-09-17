@@ -10,14 +10,14 @@ import {
     MonitorUp, MonitorStop, Globe
 } from 'lucide-react';
 import { prewarmVideo } from '@/lib/prewarm';
-import { captureScreen, shareUnsupportedReason, stopStream } from '@/lib/webrtc/screen-capture';
-import { fetchIceServers, type IncomingSignal, type LiveShare, type SignalKind } from '@/lib/webrtc/signalling';
+import { captureScreen, shareUnsupportedReason, stopStream } from '@/lib/share/screen-capture';
+import { type LiveShare } from '@/lib/share/relay';
 import {
     browserUnavailableText, fetchBrowserStatus, openBrowserSession,
     type SharedBrowserSession, type SharedBrowserStatus,
 } from '@/lib/shared-browser';
-import { usePeerPublisher } from '@/lib/webrtc/usePeerPublisher';
-import { usePeerViewer } from '@/lib/webrtc/usePeerViewer';
+import { useSharePublisher } from '@/lib/share/useSharePublisher';
+import { useShareViewer } from '@/lib/share/useShareViewer';
 import { ResolveResponse, dashManifestUrl, resolveUrl, getExtensionToken, regenerateExtensionToken, ExtensionToken, getUserSettings, updateUserSettings, getCookies, forgetCookies, extensionDownloadUrl, type CookieStatus, type UserSettings } from '@/lib/api';
 import { CustomPlayer } from '@/components/custom-player';
 import { chapterAt, formatChapterTime } from '@/lib/chapters';
@@ -447,8 +447,11 @@ export default function RoomPage() {
     // The badge now uses actualPlayerTime which is updated via onTimeUpdate
 
     // === SHARING A SCREEN WITH THE ROOM ===
-    // The media never touches this server: these browsers talk to each
-    // other and the room socket carries only the handshake.
+    // The media goes through this server, on its own WebSocket: the origin
+    // publishes no ports and the tunnel carries HTTP and WebSocket only, so
+    // there is no path between two browsers to use instead. It costs about
+    // a second of delay and the server's bandwidth per viewer; it works
+    // from anywhere, which the direct path did not.
     const [liveShare, setLiveShare] = useState<LiveShare | null>(null);
     const [myConnectionId, setMyConnectionId] = useState('');
     // The socket handler is installed once and keeps the render it was
@@ -459,25 +462,34 @@ export default function RoomPage() {
     const [shareDialogOpen, setShareDialogOpen] = useState(false);
     const [shareQuality, setShareQuality] = useState<ShareQuality>(DEFAULT_SHARE_QUALITY);
     const [shareError, setShareError] = useState<string | null>(null);
-    const [iceServers, setIceServers] = useState<RTCIceServer[]>([]);
     const amSharing = !!liveShare && liveShare.connection_id === myConnectionId;
 
+    // In development the identity travels as a query parameter, exactly as
+    // it does on the room socket.
+    const [devUser, setDevUser] = useState<string | undefined>(undefined);
     useEffect(() => {
-        void fetchIceServers(BACKEND_ORIGIN).then(setIceServers);
+        setDevUser(new URLSearchParams(window.location.search).get('user') ?? undefined);
     }, []);
-
 
     // `sendMsg` is defined further down; reaching it through a ref keeps
     // these callbacks stable and free of declaration order.
     const sendMsgRef = useRef<(type: string, payload?: unknown) => void>(() => { });
-    const sendSignal = useCallback((to: string, kind: SignalKind, data: unknown) => {
-        sendMsgRef.current('share_signal', { to, kind, data });
-    }, []);
 
-    const publisher = usePeerPublisher({
-        stream: localShareStream, quality: shareQuality, iceServers, sendSignal,
+    const publisher = useSharePublisher({
+        origin: BACKEND_ORIGIN,
+        roomId,
+        connectionId: amSharing ? myConnectionId : '',
+        stream: amSharing ? localShareStream : null,
+        quality: shareQuality,
+        user: devUser,
     });
-    const viewer = usePeerViewer({ iceServers, sendSignal });
+    const viewer = useShareViewer({
+        origin: BACKEND_ORIGIN,
+        roomId,
+        active: !!liveShare && !amSharing,
+        connectionId: myConnectionId,
+        user: devUser,
+    });
 
     const stopSharing = useCallback((tellTheRoom = true) => {
         setLocalShareStream((current) => { stopStream(current); return null; });
@@ -559,14 +571,15 @@ export default function RoomPage() {
 
         switch (type) {
             case 'sync':
-                // Who this browser is, for peers to address, and whatever
-                // is already being shared when it arrives.
+                // Which browser this is — the relay checks it before taking
+                // media from anyone — and whatever is already being shared
+                // when it arrives. A member joining mid-share is the case
+                // the retained container header exists for.
                 if (payload.your_connection_id) {
                     myConnectionIdRef.current = payload.your_connection_id as string;
                     setMyConnectionId(payload.your_connection_id as string);
                 }
                 setLiveShare((payload.live_share as LiveShare | null) ?? null);
-                if (payload.live_share) sendMsg('share_ready', {});
                 // …and whether the room already has the browser open, so a
                 // member who joins mid-session sees it rather than an empty
                 // player with a button that says "open".
@@ -747,14 +760,10 @@ export default function RoomPage() {
                 }
                 break;
             case 'share_started': {
-                const share = payload as unknown as LiveShare;
-                setLiveShare(share);
-                // Everyone but the sharer asks to be sent the stream. The
-                // sharer's own player shows the capture directly.
-                if (share.connection_id !== myConnectionIdRef.current) {
-                    viewer.reset();
-                    sendMsg('share_ready', {});
-                }
+                // Everyone but the sharer opens the media socket, which the
+                // hooks do from this state; the sharer's own player shows
+                // the capture directly, with nothing in between.
+                setLiveShare(payload as unknown as LiveShare);
                 break;
             }
 
@@ -768,26 +777,10 @@ export default function RoomPage() {
 
             case 'share_ended':
                 setLiveShare(null);
-                viewer.reset();
                 // If this browser was the one sharing, the capture stops
                 // with it — an admin can end someone else's share.
                 stopSharing(false);
                 break;
-
-            case 'share_ready':
-                // A viewer is loaded and waiting; offer it the stream.
-                publisher.offerTo(payload.from as string);
-                break;
-
-            case 'share_signal': {
-                // Routed by who sent it: an answer or a candidate from
-                // someone this browser is sending to belongs to that
-                // connection, and anything else is the sharer talking to
-                // this viewer.
-                const signal = payload as unknown as IncomingSignal;
-                if (!publisher.accept(signal)) viewer.accept(signal);
-                break;
-            }
 
             case 'pong':
                 // Calculate round-trip latency
@@ -1146,14 +1139,32 @@ export default function RoomPage() {
                                 {!amSharing && viewer.status === 'connecting' && (
                                     <span className="text-neutral-400">· connecting…</span>
                                 )}
+                                {amSharing && publisher.behind && (
+                                    <span data-testid="share-uplink-behind" className="text-amber-300">
+                                        · your uplink is behind, try a lower quality
+                                    </span>
+                                )}
                             </div>
                         )}
-                        {liveShare && !amSharing && viewer.status === 'failed' && (
-                            <div role="alert" className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/80 px-6 text-center">
-                                <p className="text-sm font-semibold text-white">Could not reach {liveShare.email}</p>
+                        {liveShare && !amSharing && (viewer.status === 'failed' || viewer.status === 'too-slow') && (
+                            <div role="alert" data-testid="share-viewer-problem"
+                                className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/80 px-6 text-center">
+                                <p className="text-sm font-semibold text-white">
+                                    {viewer.status === 'too-slow'
+                                        ? 'The shared screen was stopped for you'
+                                        : `Could not play ${liveShare.email}'s screen`}
+                                </p>
                                 <p className="max-w-sm text-xs text-neutral-400">
-                                    Your network and theirs could not find a path to each other.
-                                    A different network — or leaving a VPN — usually fixes it.
+                                    {viewer.message ?? 'The stream could not be decoded in this browser.'}
+                                </p>
+                            </div>
+                        )}
+                        {amSharing && publisher.status === 'failed' && (
+                            <div role="alert" data-testid="share-publisher-problem"
+                                className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/80 px-6 text-center">
+                                <p className="text-sm font-semibold text-white">The room is not receiving your screen</p>
+                                <p className="max-w-sm text-xs text-neutral-400">
+                                    {publisher.message ?? 'The connection carrying it closed.'}
                                 </p>
                             </div>
                         )}
@@ -1190,7 +1201,7 @@ export default function RoomPage() {
                                     key={`share-${liveShare.connection_id}`}
                                     url=""
                                     isLive
-                                    shareStream={amSharing ? localShareStream : viewer.stream}
+                                    shareSource={amSharing ? localShareStream : viewer.src}
                                     playerRef={playerRef}
                                     syncThreshold={syncThreshold}
                                     onSyncThresholdChange={setSyncThreshold}
@@ -1605,10 +1616,13 @@ export default function RoomPage() {
                                 </select>
                                 <p className="mt-2 text-[11px] leading-relaxed text-neutral-500">
                                     About {(SHARE_QUALITY_PRESETS[shareQuality].maxBitrateBps / 1_000_000).toFixed(0)} Mbit/s
-                                    of your upload per viewer, since each one receives their own copy.
+                                    of your upload, whoever is watching: you send one copy and the
+                                    server passes it on.
                                 </p>
                                 <p className="mt-3 text-[11px] leading-relaxed text-amber-200/90">
-                                    Viewers connect directly to you, so they can see your IP address.
+                                    The picture travels through this server, so it arrives about a
+                                    second late — and every viewer costs the server that much
+                                    bandwidth again.
                                 </p>
                                 {shareError && (
                                     <p role="alert" className="mt-3 text-[11px] text-red-300">{shareError}</p>

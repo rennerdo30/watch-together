@@ -57,30 +57,71 @@ PREFETCH_AUDIO_COUNT = 5  # Number of audio segments to prefetch (more critical)
 PREFETCH_SESSION_TTL = 300  # 5 minutes - cleanup inactive prefetch sessions
 
 # --- Sharing a screen with the room ----------------------------------------
-# A member's own screen reaches the others browser to browser; this server
-# only relays the handshake. What may pass through it is fixed and bounded,
-# because it is the one message type carrying one member's payload to
-# another.
-SHARE_SIGNAL_KINDS = ("offer", "answer", "ice")
-# An SDP offer for a screen share runs to a few kilobytes; candidates are
-# far smaller. Well above what is needed, far below what is worth relaying.
-SHARE_SIGNAL_MAX_BYTES = 32 * 1024
+# The media travels through this process: the sharer's browser encodes its
+# screen with MediaRecorder and pushes the chunks up `/ws/share/{room}`, and
+# this server copies every chunk to every viewer of that room. The origin
+# publishes no ports and the tunnel carries HTTP and WebSocket only, so this
+# is the only media path that works here — at the cost of latency and of
+# every viewer's bandwidth crossing a single Python worker. The ceilings
+# below are what keeps that cost bounded; see services/share_relay.py.
 SHARE_TITLE_MAX_LENGTH = 80
 SHARE_QUALITY_MAX_LENGTH = 20
+# The MIME type the sharer announces, e.g. `video/webm;codecs=vp8,opus`. It
+# is echoed to viewers, which create a SourceBuffer with it, so it is capped
+# to something a media type can plausibly be.
+SHARE_FORMAT_MAX_LENGTH = 120
+# A text frame on the media socket. Only the format announcement is sent as
+# text, so this is far above anything legitimate; without it the only limit
+# would be the server's own frame size, which is measured in megabytes.
+SHARE_CONTROL_MAX_BYTES = 4 * 1024
+# The first chunk carries the container header and is retained for the whole
+# share, because a viewer joining later cannot decode a byte without it. A
+# WebM header runs to a couple of kilobytes; this is far above that and far
+# below anything worth holding in the memory that also serves rooms.
+SHARE_HEADER_MAX_BYTES = 1024 * 1024
+# One media chunk. At the highest preset a quarter-second of 1080p60 is a
+# few hundred kilobytes; anything past this is not a screen share.
+SHARE_CHUNK_MAX_BYTES = 4 * 1024 * 1024
+# What one viewer may have waiting to be sent before the relay decides it is
+# behind rather than briefly busy. Two megabytes is roughly two seconds of
+# the default preset: past that the viewer would be watching the past.
+SHARE_VIEWER_QUEUE_MAX_BYTES = 2 * 1024 * 1024
+SHARE_VIEWER_QUEUE_MAX_CHUNKS = 48
+# How often a viewer may be restarted at the live edge before it is dropped
+# instead. A hiccup is normal; four in half a minute is a connection that
+# cannot carry the share, and pretending otherwise only wastes the server's
+# bandwidth on a picture nobody can watch.
+SHARE_VIEWER_MAX_RESYNCS = 3
+SHARE_VIEWER_RESYNC_WINDOW_SECONDS = 30.0
+# Ceilings on what the relay may hold at once. Worst case for memory is
+# rooms x viewers x queue bytes, plus one retained header per room:
+# 4 x 8 x 2 MB + 4 MB, or about 68 MB, in a process that also holds the room
+# state, the segment caches and the rate limiter.
+SHARE_RELAY_MAX_ROOMS = 4
+SHARE_RELAY_MAX_VIEWERS = 8
+# Control messages on the media socket. Media is binary; these are text, so
+# the two can never be confused for one another.
+SHARE_CONTROL_FORMAT = "format"
+SHARE_CONTROL_RESYNC = "resync"
+SHARE_CONTROL_ENDED = "ended"
+SHARE_CONTROL_TOO_SLOW = "too_slow"
+# Close codes for the media socket, in the range applications own. A browser
+# sees these, so each one has to mean exactly one thing to the room's UI.
+SHARE_CLOSE_PROTOCOL = 4400
+SHARE_CLOSE_NOT_AUTHORIZED = 4403
+SHARE_CLOSE_NO_SHARE = 4404
+SHARE_CLOSE_TOO_SLOW = 4408
+SHARE_CLOSE_BUSY = 4409
+SHARE_CLOSE_ENDED = 4410
+SHARE_CLOSE_TOO_MANY_VIEWERS = 4429
 
-# Servers that help two browsers find a path to each other. STUN only tells
-# a browser how it looks from outside, which is enough for most home
-# connections and costs nothing; a TURN relay carries the media when no
-# direct path exists, and is configured per deployment rather than assumed.
-WEBRTC_STUN_URLS = tuple(
-    url.strip() for url in os.getenv(
-        "WEBRTC_STUN_URLS",
-        "stun:stun.cloudflare.com:3478,stun:stun.l.google.com:19302",
-    ).split(",") if url.strip()
-)
+# A TURN relay the shared browser can bounce its own WebRTC media off. This
+# is neko's media path, not the room's screen share — that goes through this
+# server now — so only the URL is read here, as the answer to "has the
+# operator arranged a way for neko's picture to get out at all?". The
+# credentials neko itself needs are given to the container through
+# BROWSER_ICE_SERVERS. See services/shared_browser.media_transport.
 WEBRTC_TURN_URL = os.getenv("WEBRTC_TURN_URL", "").strip()
-WEBRTC_TURN_USERNAME = os.getenv("WEBRTC_TURN_USERNAME", "").strip()
-WEBRTC_TURN_CREDENTIAL = os.getenv("WEBRTC_TURN_CREDENTIAL", "").strip()
 
 
 def _env_flag(name: str, default: bool = False) -> bool:

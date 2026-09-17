@@ -33,8 +33,9 @@ from core.config import (
     METRICS_DEFAULT_SAMPLE_LIMIT, POT_PROVIDER_EXTRACTOR_ARGS,
     PREWARM_NEXT_VIDEO_SECONDS, STREAM_URL_MIN_LIFETIME_SECONDS,
     STREAM_URL_SERVE_MIN_SECONDS, DEFAULT_USER_AGENT,
-    SHARE_SIGNAL_KINDS, SHARE_SIGNAL_MAX_BYTES,
     SHARE_TITLE_MAX_LENGTH, SHARE_QUALITY_MAX_LENGTH,
+    SHARE_CHUNK_MAX_BYTES, SHARE_CONTROL_FORMAT, SHARE_CONTROL_MAX_BYTES,
+    SHARE_CLOSE_PROTOCOL, SHARE_CLOSE_NOT_AUTHORIZED, SHARE_CLOSE_NO_SHARE,
     BROWSER_TITLE_MAX_LENGTH, BROWSER_BUSY_LIVE_SHARE,
 )
 from core.security import (
@@ -80,6 +81,7 @@ from services.watch_history import reporter as history_reporter
 from services import stream_owner
 from services import stream_expiry
 from services import shared_browser
+from services.share_relay import RelayRefused, relay as share_relay
 
 # Room-wide SponsorBlock skipping; armed from the WebSocket handler below.
 sponsor_skipper = SponsorSkipper(manager)
@@ -1659,52 +1661,35 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         "payload": {"message": "Someone else is already sharing in this room"},
                     })
                 else:
-                    await manager.update_state(room_id, {"is_playing": False})
-                    await manager.broadcast({"type": "share_started", "payload": share}, room_id)
-                    await publish_room_activity(
-                        room_id, "share_started", actor=user_email,
-                        video={"title": share["title"]} if share["title"] else None)
+                    try:
+                        # The relay is opened here rather than when the media
+                        # socket arrives, so that a viewer reacting to the
+                        # announcement below has something to attach to.
+                        share_relay.open(room_id, share["connection_id"], user_email)
+                    except RelayRefused as refused:
+                        manager.stop_share(room_id, websocket)
+                        await websocket.send_json({
+                            "type": "error",
+                            "payload": {"message": refused.message},
+                        })
+                    else:
+                        await manager.update_state(room_id, {"is_playing": False})
+                        await manager.broadcast({"type": "share_started", "payload": share}, room_id)
+                        await publish_room_activity(
+                            room_id, "share_started", actor=user_email,
+                            video={"title": share["title"]} if share["title"] else None)
 
             elif msg_type == "share_stop":
                 share = manager.stop_share(room_id, websocket)
                 if share:
+                    # The media socket goes with it: nothing may keep
+                    # arriving for a share the room has been told is over.
+                    share_relay.end(room_id)
                     await manager.broadcast({
                         "type": "share_ended",
                         "payload": {"reason": "stopped", "email": share["email"]},
                     }, room_id)
                     await publish_room_activity(room_id, "share_ended", actor=user_email)
-
-            elif msg_type == "share_ready":
-                # A viewer announcing itself to the sharer, which answers
-                # with an offer. Readiness beats guessing from the peer
-                # list: a browser that has not finished loading cannot
-                # negotiate, and a stale connection never will.
-                share = manager.share_of(room_id)
-                if share:
-                    await manager.send_to_connection(room_id, share["connection_id"], {
-                        "type": "share_ready",
-                        "payload": {"from": getattr(websocket, "connection_id", ""),
-                                    "email": user_email},
-                    })
-
-            elif msg_type == "share_signal":
-                # The handshake itself: offers, answers and ICE candidates,
-                # relayed verbatim between two browsers in this room. This
-                # is the only message that carries one member's payload to
-                # another, so what may be relayed is fixed and bounded.
-                kind = payload.get("kind")
-                target = payload.get("to")
-                data = payload.get("data")
-                if kind not in SHARE_SIGNAL_KINDS or not isinstance(target, str):
-                    logger.info(f"Refused share signal {kind!r} from {user_email} in {room_id}")
-                elif len(json.dumps(data)) > SHARE_SIGNAL_MAX_BYTES:
-                    logger.info(f"Refused oversized share signal from {user_email} in {room_id}")
-                else:
-                    await manager.send_to_connection(room_id, target, {
-                        "type": "share_signal",
-                        "payload": {"kind": kind, "data": data,
-                                    "from": getattr(websocket, "connection_id", "")},
-                    })
 
             elif msg_type == "browser_open":
                 # The shared browser takes the player, the way a screen share
@@ -1763,6 +1748,234 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
         # Always clean up the connection, regardless of how the handler exits
         await manager.disconnect_and_notify(websocket, room_id)
         history_reporter.member_left(room_id, user_email)
+
+
+def _is_connected_to_room(room_id: str, user_email: str) -> bool:
+    """Whether this identity holds a room socket for this room right now.
+
+    A screen share is for the people in the room. The media socket is a
+    second connection, so it has to check for itself that whoever opened it
+    is actually here — otherwise anyone who can authenticate could watch any
+    room's share without ever joining it, and without appearing in it.
+    """
+    return any(
+        getattr(ws, "user_email", GUEST_IDENTITY) == user_email
+        for ws in manager.active_connections.get(room_id, [])
+    )
+
+
+@app.websocket("/ws/share/{room_id}")
+async def share_media_endpoint(websocket: WebSocket, room_id: str):
+    """The screen share's media, in and out.
+
+    Deliberately not the room socket. Play, pause and seek have to arrive
+    the moment they are sent, and a WebSocket delivers in order: a megabyte
+    of video queued in front of a pause would hold the pause behind it, and
+    the room would drift by exactly as long as the video took to flush.
+    Two sockets, two queues, one of which may fall behind without taking
+    synchronisation with it.
+
+    `?role=publisher` is the sharer pushing chunks up, `?role=viewer` is
+    everyone else pulling them down. Identity is resolved exactly as the
+    room socket resolves it, and a publisher additionally has to *be* the
+    room's current sharer — otherwise a member could push frames into a
+    room somebody else is sharing in.
+    """
+    room_id = sanitize_room_id(room_id)
+    if not room_id:
+        await websocket.close(code=4000, reason="Invalid room ID")
+        return
+
+    user_email = get_user_from_websocket(websocket)
+    if not user_email:
+        if REQUIRE_AUTHENTICATION:
+            await websocket.close(code=4003, reason="Authentication required")
+            return
+        user_email = GUEST_IDENTITY
+
+    role = websocket.query_params.get("role")
+    if role == "publisher":
+        await _share_publisher_socket(websocket, room_id, user_email)
+    elif role == "viewer":
+        await _share_viewer_socket(websocket, room_id, user_email)
+    else:
+        await websocket.close(code=SHARE_CLOSE_PROTOCOL, reason="Unknown role")
+
+
+async def _share_publisher_socket(websocket: WebSocket, room_id: str, user_email: str):
+    """Take one member's encoded screen and hand every chunk to the relay."""
+    connection_id = websocket.query_params.get("connection", "")
+    share = manager.share_of(room_id)
+    # Both halves matter. The connection id is public inside the room — it
+    # is in the sync payload — so on its own it proves nothing; the verified
+    # identity is what makes it the sharer's.
+    if share is None:
+        await websocket.accept()
+        await websocket.close(code=SHARE_CLOSE_NO_SHARE,
+                              reason="Nobody is sharing in this room")
+        return
+    if share["connection_id"] != connection_id or share["email"] != user_email:
+        logger.warning(
+            f"Refused screen share media from {user_email} in {room_id}: "
+            f"{share['email']} holds the share"
+        )
+        await websocket.accept()
+        await websocket.close(code=SHARE_CLOSE_NOT_AUTHORIZED,
+                              reason="You are not the member sharing in this room")
+        return
+
+    await websocket.accept()
+    try:
+        relay = share_relay.attach_publisher(room_id, connection_id)
+    except RelayRefused as refused:
+        logger.info(f"Refused a share relay in {room_id}: {refused.message}")
+        await websocket.close(code=refused.code, reason=refused.message)
+        return
+
+    try:
+        while True:
+            message = await websocket.receive()
+            if message["type"] == "websocket.disconnect":
+                break
+            # Every message, of either kind, is checked against *this*
+            # socket's relay rather than against the room's. A share that
+            # ended while its media socket stayed open — the sharer's room
+            # connection dropped, an admin stopped it — leaves this handler
+            # parked here, and by then the room may belong to somebody
+            # else's share. Addressing the room by name would let those
+            # bytes land in it.
+            if share_relay.relay_of(room_id) is not relay:
+                logger.info(
+                    f"Share media from {user_email} in {room_id} outlived its "
+                    f"share; closing the connection"
+                )
+                await websocket.close(code=SHARE_CLOSE_NO_SHARE,
+                                      reason="This share is no longer running")
+                break
+
+            chunk = message.get("bytes")
+            if chunk is not None:
+                if len(chunk) > SHARE_CHUNK_MAX_BYTES:
+                    logger.warning(
+                        f"Oversized share chunk from {user_email} in {room_id}: "
+                        f"{len(chunk)} bytes"
+                    )
+                    await websocket.close(code=SHARE_CLOSE_PROTOCOL,
+                                          reason="Media chunk too large")
+                    break
+                if relay.mime is None:
+                    # Without the format there is no SourceBuffer to append
+                    # to, so the bytes could only ever be discarded.
+                    logger.warning(
+                        f"Share media from {user_email} in {room_id} before the "
+                        f"format was announced"
+                    )
+                    await websocket.close(code=SHARE_CLOSE_PROTOCOL,
+                                          reason="The format must be announced first")
+                    break
+                try:
+                    share_relay.publish(room_id, chunk)
+                except RelayRefused as refused:
+                    await websocket.close(code=refused.code, reason=refused.message)
+                    break
+                continue
+
+            text = message.get("text")
+            if not text:
+                continue
+            if len(text) > SHARE_CONTROL_MAX_BYTES:
+                logger.warning(
+                    f"Oversized share control from {user_email} in {room_id}: "
+                    f"{len(text)} bytes"
+                )
+                await websocket.close(code=SHARE_CLOSE_PROTOCOL,
+                                      reason="Control message too large")
+                break
+            try:
+                control = json.loads(text)
+            except json.JSONDecodeError:
+                logger.warning(f"Invalid share control from {user_email} in {room_id}")
+                continue
+            if control.get("type") == SHARE_CONTROL_FORMAT:
+                share_relay.set_format(room_id, str(control.get("mime") or ""))
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        logger.error(f"Share publisher error for {user_email} in {room_id}: {exc}")
+    finally:
+        share_relay.close_publisher(room_id, connection_id)
+        # A media socket that dies without a `share_stop` — a laptop lid, a
+        # dropped connection — leaves the room's player waiting for a frame
+        # that is never coming. Ending the share is what puts the queue back.
+        #
+        # On its own task, deliberately: this handler is being torn down, and
+        # a server that cancels the disconnected connection's task would
+        # otherwise take the room's notification down with it. The task
+        # touches only room state, which is this worker's own.
+        _run_detached(_end_share_after_media_loss(room_id, connection_id, user_email))
+
+
+# Tasks that have to outlive the connection that started them. Held onto
+# because asyncio keeps only a weak reference to a running task.
+_detached_tasks: set = set()
+
+
+def _run_detached(coroutine) -> None:
+    task = asyncio.create_task(coroutine)
+    _detached_tasks.add(task)
+    task.add_done_callback(_detached_tasks.discard)
+
+
+async def _end_share_after_media_loss(room_id: str, connection_id: str, email: str):
+    """Tell the room a share is over because its media connection went."""
+    share = manager.share_of(room_id)
+    if not share or share["connection_id"] != connection_id:
+        return
+    manager.live_shares.pop(room_id, None)
+    logger.info(f"The media connection for the share in {room_id} closed; ending it")
+    await manager.broadcast({
+        "type": "share_ended",
+        "payload": {"reason": "disconnected", "email": share["email"]},
+    }, room_id)
+    await publish_room_activity(room_id, "share_ended", actor=email)
+
+
+async def _share_viewer_socket(websocket: WebSocket, room_id: str, user_email: str):
+    """Send one watching browser the header, then the live edge."""
+    if not _is_connected_to_room(room_id, user_email):
+        logger.info(f"Refused a share viewer for {room_id}: {user_email} is not in it")
+        await websocket.accept()
+        await websocket.close(code=SHARE_CLOSE_NOT_AUTHORIZED,
+                              reason="You are not in this room")
+        return
+
+    await websocket.accept()
+    try:
+        viewer = share_relay.add_viewer(room_id, websocket, user_email)
+    except RelayRefused as refused:
+        await websocket.close(code=refused.code, reason=refused.message)
+        return
+
+    # Sending runs on its own task so that a congested viewer waits on its
+    # own transport and nothing else; this coroutine stays on `receive()`,
+    # which is how a disconnect is noticed at all.
+    pump = asyncio.create_task(share_relay.pump(viewer))
+    try:
+        while True:
+            message = await websocket.receive()
+            if message["type"] == "websocket.disconnect":
+                break
+            # Viewers have nothing to say on this socket. Anything they send
+            # is ignored rather than relayed: this is a one-way pipe, and
+            # that is what keeps a viewer from injecting frames.
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        logger.info(f"Share viewer {user_email} in {room_id} ended: {exc}")
+    finally:
+        share_relay.remove_viewer(room_id, viewer)
+        pump.cancel()
 
 
 # ============================================================================
