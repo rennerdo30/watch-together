@@ -77,6 +77,8 @@ backend/
 │   ├── mp4_index.py          # Fragmented-MP4 box scanning (init/index ranges)
 │   ├── metrics.py            # Per-transfer proxy metrics
 │   ├── prefetcher.py         # Segment prefetching
+│   ├── share_relay.py        # Screen sharing: per-room fan-out, retained header, per-viewer queues
+│   ├── webm.py               # Where a WebM stream can be picked up from (cluster boundaries)
 │   ├── sponsorblock.py       # SponsorBlock lookup + server-side room-wide skipping
 │   ├── stream_owner.py       # Stream URL -> member whose cookies fetch it (manifest probes, proxy)
 │   ├── user_settings.py      # Per-user preferences (JSON per identity, cached)
@@ -151,6 +153,21 @@ element.
 There is no second playback path. The former two-element approach (`<video>` +
 `<audio>` with JavaScript drift correction) is deleted: two media elements cannot be
 kept frame-accurate, which is a platform property, not a tuning problem.
+
+### Screen sharing
+A member's screen is carried **by this server**, not between browsers: the origin
+publishes no ports and the tunnel carries HTTP and WebSocket only. The sharer's
+browser encodes with `MediaRecorder` and pushes chunks up `/ws/share/{room}`; the
+relay (`services/share_relay.py`) copies each chunk to every viewer, which decodes
+through Media Source Extensions. It costs about half a second of delay and one copy
+of the stream per viewer out of a single worker.
+
+Two things make it work rather than nearly work: the stream's initialisation segment
+is retained per room, and a viewer is only ever started at a **cluster**
+(`services/webm.py`) — appending from the middle of one fails permanently in
+Chromium. The same rule restarts a viewer whose bounded queue overflowed; one that
+keeps overflowing is closed with a message rather than silently starved. There is no
+peer-to-peer path left.
 
 ### Security Model
 - Identity comes from the **verified** `Cf-Access-Jwt-Assertion` JWT

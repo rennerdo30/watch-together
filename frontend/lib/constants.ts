@@ -219,10 +219,12 @@ export const PLAYER_STATS_REFRESH_MS = 1000;
 /**
  * What a screen share costs and looks like.
  *
- * Every viewer receives their own copy from the sharer's machine, so the
- * bitrate here is spent once per viewer: four friends on `smooth` is about
- * 32 Mbit/s of upload. Gameplay is motion, so the presets buy frame rate
- * before resolution, and `light` exists for a thin uplink.
+ * The sharer uploads one copy and the server sends one copy to each viewer,
+ * so this bitrate is spent once on the sharer's uplink and once per viewer
+ * on the server's: four friends on `smooth` is about 32 Mbit/s leaving a
+ * single Python worker. Gameplay is motion, so the presets buy frame rate
+ * before resolution, and `light` exists for a thin uplink — or for a room
+ * with more people in it than the server should be encoding for.
  */
 export const SHARE_QUALITY_PRESETS = {
     smooth: { label: 'Smooth — 1080p60', width: 1920, height: 1080, frameRate: 60, maxBitrateBps: 8_000_000 },
@@ -232,6 +234,90 @@ export const SHARE_QUALITY_PRESETS = {
 
 export type ShareQuality = keyof typeof SHARE_QUALITY_PRESETS;
 export const DEFAULT_SHARE_QUALITY: ShareQuality = 'smooth';
+
+/**
+ * How much screen one chunk holds, in milliseconds — the latency knob.
+ *
+ * `MediaRecorder` hands over a chunk every `timeslice`, and nothing can be
+ * relayed before its chunk is complete, so this number is the floor under
+ * the delay a viewer sees: a quarter of a second of encoding, plus the two
+ * WebSocket hops, plus whatever the viewer's `SourceBuffer` is holding.
+ * Lower would buy latency and spend it on overhead — every chunk is a frame
+ * on two sockets and a wake-up in a worker that also serves the proxy —
+ * and Chromium's muxer does not usefully split below about a tenth of a
+ * second anyway.
+ */
+export const SHARE_TIMESLICE_MS = 250;
+
+/**
+ * How often the encoder is asked for a keyframe, in milliseconds.
+ *
+ * Only a keyframe lets a decoder start from nothing, so this is how long a
+ * viewer who joins mid-share — or one the server has just restarted at the
+ * live edge — can be left looking at a picture that has not resolved yet.
+ * Keyframes are expensive, which is why this is not a second.
+ */
+export const SHARE_KEYFRAME_INTERVAL_MS = 2000;
+
+/**
+ * Containers to record in, best first.
+ *
+ * WebM only: `MediaRecorder`'s MP4 output is not fragmented the way Media
+ * Source needs, so it plays back nowhere. VP8 leads because it encodes
+ * 1080p60 of moving screen in real time on far more machines than VP9, and
+ * this runs on whatever the sharer happens to own.
+ */
+export const SHARE_MIME_CANDIDATES = [
+    'video/webm;codecs=vp8,opus',
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8',
+    'video/webm;codecs=vp9',
+] as const;
+
+/**
+ * How much of the share a viewer keeps behind the playhead, in seconds.
+ *
+ * A live stream that is never trimmed grows for as long as it runs, and it
+ * grows inside the browser's media memory rather than the tab's. Nobody
+ * scrubs backwards through a screen share, so the past is dropped.
+ */
+export const SHARE_BUFFER_KEEP_SECONDS = 20;
+
+/**
+ * How far behind the newest buffered frame a viewer may drift before it is
+ * moved back to the live edge, in seconds.
+ *
+ * Drift accumulates from every stall: the element keeps playing at 1x from
+ * wherever it was, so a two-second pause becomes two seconds of permanent
+ * delay. A share is worth watching only live, so it is taken back.
+ */
+export const SHARE_LIVE_EDGE_MAX_SECONDS = 2;
+
+/** How often a share viewer checks how far behind the live edge it is. */
+export const SHARE_LIVE_EDGE_CHECK_MS = 1000;
+
+/**
+ * How long a share viewer waits before opening its media socket again.
+ *
+ * Reconnecting is how a viewer recovers from anything transient — the share
+ * announced a moment before the socket was ready, a proxy dropping an idle
+ * connection — and the server gives it the header again, so it costs the
+ * picture and nothing else. Closes that say "not you" or "too slow" are not
+ * retried at all.
+ */
+export const SHARE_RECONNECT_DELAY_MS = 2000;
+
+/**
+ * How many bytes may sit unsent on the sharer's socket before the room
+ * tells them their uplink is the bottleneck.
+ *
+ * Roughly half a second of the default preset. There is nothing the page
+ * can do about it on the sharer's behalf: the chunks are one continuous
+ * byte stream, so skipping some would hand every viewer a hole they cannot
+ * decode. Lowering the quality is the remedy, and it is the sharer's to
+ * choose.
+ */
+export const SHARE_PUBLISHER_BACKLOG_BYTES = 512 * 1024;
 
 /**
  * How close to the end of a video its successor is prepared, in seconds.

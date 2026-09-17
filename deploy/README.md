@@ -184,13 +184,11 @@ viewer waits out an ICE timeout before giving up. Verify from elsewhere with
 
 ### Option B — a TURN relay (nothing published)
 
-Reuses the relay screen sharing already has (`WEBRTC_TURN_*`), plus the same
-credentials in the JSON shape neko wants:
+Two settings: the URL, which is how this server knows a relay exists at all,
+and the same relay with its credentials in the JSON shape neko wants.
 
 ```bash
 ./make-env.sh --set=WEBRTC_TURN_URL=turn:turn.example.net:3478 \
-              --set=WEBRTC_TURN_USERNAME=<user> \
-              --set=WEBRTC_TURN_CREDENTIAL=<secret> \
               --set=BROWSER_ICE_SERVERS='[{"urls":"turn:turn.example.net:3478","username":"<user>","credential":"<secret>"}]'
 docker compose -f deploy/docker-compose.yml \
                --env-file /opt/watch-together/.env --profile browser up -d

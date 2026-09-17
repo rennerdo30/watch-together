@@ -6,6 +6,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Screen sharing goes through the server
+
+- A shared screen no longer travels browser to browser. The sharer's browser
+  encodes its capture with `MediaRecorder` and pushes the chunks up
+  **`/ws/share/{room}`**, a WebSocket of its own; the server copies every
+  chunk to every viewer of that room, and each viewer plays it through Media
+  Source Extensions. The room socket carries play, pause and seek and
+  nothing else — a megabyte of video queued in front of a pause would hold
+  the pause behind it, and the room would drift by exactly that much.
+- **Why, and what it costs.** The origin publishes no ports and the tunnel
+  in front of it carries HTTP and WebSocket only, so the peer-to-peer path
+  worked only when the two networks happened to find each other. The relay
+  works from anywhere, and the bill is: about half a second of delay instead
+  of roughly two hundred milliseconds (measured end to end at **365 ms** on
+  a local run, from the pixel changing on the sharer's canvas to the same
+  pixel decoded by a viewer), a custom media pipeline instead of a transport
+  the browser maintains, and every viewer's copy leaving a single Python
+  worker — five viewers of the default preset is 40 Mbit/s of upload.
+- **A viewer who joins mid-share sees it.** The stream's initialisation
+  segment is retained per room and replayed to every new viewer, followed by
+  the stream from the next *cluster* rather than from wherever the recorder
+  happened to cut a chunk: appending from the middle of one makes Chromium
+  fail permanently (`CHUNK_DEMUXER_ERROR_APPEND_FAILED`), which was
+  reproducible at roughly one join in eight. `services/webm.py` finds those
+  boundaries.
+- **One slow viewer cannot stall the sharer.** Each viewer has a bounded
+  queue and its own sending task. A queue that fills is dropped whole — the
+  bytes are one continuous stream, so trimming it would corrupt what is
+  left — and the viewer is restarted at the next cluster the way a newcomer
+  is. A viewer that needs that more than `SHARE_VIEWER_MAX_RESYNCS` times in
+  `SHARE_VIEWER_RESYNC_WINDOW_SECONDS` is closed with a message saying its
+  connection could not keep up, rather than left on a still frame. Memory is
+  bounded on every axis: `SHARE_RELAY_MAX_ROOMS` × `SHARE_RELAY_MAX_VIEWERS`
+  × `SHARE_VIEWER_QUEUE_MAX_BYTES`, plus one retained header per room.
+- **The media socket is authenticated exactly as the room socket is**, and a
+  publisher additionally has to *be* the room's current sharer: the verified
+  identity and the connection id together, because the connection id is
+  public inside the room. Viewers must be in the room they are watching, and
+  nothing a viewer sends on that socket is ever relayed.
+- **Removed with it**: `frontend/lib/webrtc/` (the publisher, the viewer and
+  the signalling), the `share_signal` and `share_ready` messages and their
+  relay, `GET /api/webrtc/ice`, and the `WEBRTC_STUN_URLS` /
+  `WEBRTC_TURN_USERNAME` / `WEBRTC_TURN_CREDENTIAL` settings that only served
+  them. `WEBRTC_TURN_URL` stays: the shared browser still reads it as the
+  answer to "has the operator arranged a way for neko's picture to get out?".
+- The end-to-end test is no longer the "everything but the frames" spec it
+  had to be when the media went peer to peer past the sandbox. It stubs the
+  screen picker and nothing else, and asserts that the viewer's `<video>`
+  decodes: `readyState`, `videoWidth`, an advancing clock, and the latency
+  above — including for a viewer that joins four seconds late.
+
 ### Per-viewer telemetry is readable from the host
 
 - Each viewer's quality report is now logged at INFO whenever the picture

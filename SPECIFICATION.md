@@ -334,6 +334,8 @@ type ServerMessage =
 | Endpoint | Description |
 |----------|-------------|
 | `/ws/{room_id}` | Room synchronization |
+| `/ws/share/{room_id}?role=publisher` | The sharer's encoded screen, as binary chunks. Accepted only from the room's current sharer: the verified identity *and* the connection id from the sync payload |
+| `/ws/share/{room_id}?role=viewer` | One viewer's copy of that stream: the format, the retained initialisation segment, then the stream from the next cluster. Viewers may not send media |
 
 ## Security Considerations
 
