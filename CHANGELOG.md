@@ -186,6 +186,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Every YouTube Livestream Arrived As An Ordinary Video**: a stream with
+  DVR enabled showed no LIVE badge, a seek bar over a window that cannot be
+  seeked, a running duration, and the room's position sync correcting every
+  viewer towards a timestamp that means nothing on a live timeline. yt-dlp
+  reported the stream correctly; the resolve response did not. `is_live` is a
+  field yt-dlp fills in *while processing* a result, derived from
+  `live_status`, and resolution extracts with `process=False` — so the raw
+  YouTube result carried no `is_live` key at all and the response defaulted
+  it to false. Liveness is now read the way yt-dlp derives it: `live_status`
+  decides when the extractor set it, and the raw `is_live` flag answers for
+  the extractors that set that instead.
+
 - **Auto Quality Could Stick Low And Never Recover**: three ways, all
   invisible. A player whose element had not been laid out yet measured a
   drawing surface of zero pixels, which was treated as a very small player

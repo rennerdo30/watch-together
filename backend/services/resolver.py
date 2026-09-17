@@ -18,6 +18,33 @@ from services.user_cookies import choose_cookie_source, cookie_file
 
 logger = logging.getLogger(__name__)
 
+#: yt-dlp's `live_status` for a stream that is broadcasting right now. The
+#: other values ('not_live', 'is_upcoming', 'was_live', 'post_live') all
+#: describe something with a fixed timeline.
+LIVE_STATUS_LIVE = "is_live"
+
+
+def is_live_stream(info: dict) -> bool:
+    """Whether this extraction is of a stream broadcasting right now.
+
+    `is_live` is a *processed* field: yt-dlp fills it in from `live_status`
+    while it processes a result (`YoutubeDL._fill_common_fields`). Resolution
+    extracts with `process=False`, because processing every format costs
+    seconds per resolve, so the raw result of an extractor that reports
+    liveness as `live_status` — YouTube is one — carries no `is_live` key at
+    all. Reading only that key called every YouTube livestream a video: no
+    LIVE badge, a seek bar over a DVR window, and the room's position sync
+    dragging every viewer around a timeline that has no fixed origin.
+
+    The rule mirrors yt-dlp's own: `live_status` decides when the extractor
+    set it, and the raw `is_live` flag answers for extractors that set that
+    instead.
+    """
+    status = info.get("live_status")
+    if isinstance(status, str):
+        return status == LIVE_STATUS_LIVE
+    return bool(info.get("is_live"))
+
 
 def build_ydl_opts(cookie_path: Optional[str], user_agent: Optional[str] = None,
                    cache_dir: str = YTDLP_CACHE_DIR) -> dict:
@@ -321,7 +348,7 @@ def _build_resolve_response(url: str, info: dict, stream_info: dict) -> dict:
         "extractor_key": info.get("extractor_key"),
         "stream_url": stream_info["url"],
         "title": info.get("title", "Unknown Title"),
-        "is_live": info.get("is_live", False),
+        "is_live": is_live_stream(info),
         "thumbnail": info.get("thumbnail"),
         "backend_engine": "yt-dlp",
         "duration": info.get("duration"),
