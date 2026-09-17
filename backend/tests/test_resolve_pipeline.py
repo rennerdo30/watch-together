@@ -760,3 +760,80 @@ class TestChapters:
         response = _build_resolve_response("https://youtu.be/x", info, {"url": "https://cdn/v"})
         assert response["chapters"] == [{"start": 0.0, "end": 5.0, "title": "Only"}]
         assert "chapters" not in _build_resolve_response("https://youtu.be/x", {"title": "T"}, {"url": "u"})
+
+
+# What yt-dlp hands back for a YouTube livestream with DVR when extraction
+# runs with `process=False`, as resolution does: liveness is reported as
+# `live_status`, and there is no `is_live` key at all.
+RAW_LIVE_INFO = {
+    "title": "A DVR livestream",
+    "live_status": "is_live",
+    "duration": None,
+    "webpage_url": "https://www.youtube.com/watch?v=dvr",
+    "extractor_key": "Youtube",
+    "formats": [
+        {
+            "format_id": "300", "height": 720,
+            "manifest_url": "https://manifest.googlevideo.com/api/manifest/hls_variant/x/index.m3u8",
+            "url": "https://manifest.googlevideo.com/api/manifest/hls_playlist/720/index.m3u8",
+            "vcodec": "avc1.4D4020", "acodec": "mp4a.40.2",
+        },
+        {
+            "format_id": "301", "height": 1080,
+            "manifest_url": "https://manifest.googlevideo.com/api/manifest/hls_variant/x/index.m3u8",
+            "url": "https://manifest.googlevideo.com/api/manifest/hls_playlist/1080/index.m3u8",
+            "vcodec": "avc1.64002A", "acodec": "mp4a.40.2",
+        },
+    ],
+}
+
+
+class TestLiveStatus:
+    """A livestream has to still be a livestream when it reaches the room.
+
+    Resolution extracts with `process=False`, and `is_live` is a field yt-dlp
+    fills in *while processing* a result, from `live_status`. Reading it
+    straight off an unprocessed YouTube result therefore always found
+    nothing, and every YouTube livestream arrived in the room as an ordinary
+    video: no LIVE badge, a seek bar over a DVR window, and the room's
+    position sync correcting viewers towards a timestamp that means nothing
+    on a live timeline.
+    """
+
+    def test_a_live_status_without_an_is_live_key_still_resolves_as_live(self, client, monkeypatch):
+        import main
+        monkeypatch.setattr(main, "_extract_with_options", lambda url, opts: RAW_LIVE_INFO)
+
+        body = client.get("/api/resolve",
+                          params={"url": "https://www.youtube.com/watch?v=live-dvr"}).json()
+
+        assert body["is_live"] is True, "an unprocessed live result resolved as a video"
+        assert body["duration"] is None
+        assert body["stream_type"] == "hls"
+
+    def test_liveness_is_read_the_way_yt_dlp_derives_it(self):
+        from services.resolver import is_live_stream
+
+        # `live_status` decides whenever the extractor set it.
+        assert is_live_stream({"live_status": "is_live"}) is True
+        assert is_live_stream({"live_status": "not_live"}) is False
+        assert is_live_stream({"live_status": "is_upcoming"}) is False
+        # A stream that has finished is a recording with a fixed timeline.
+        assert is_live_stream({"live_status": "was_live", "is_live": False}) is False
+        assert is_live_stream({"live_status": "post_live"}) is False
+        # Extractors reporting liveness as `is_live` are honoured too, as are
+        # the processed results a queue refresh produces.
+        assert is_live_stream({"is_live": True}) is True
+        assert is_live_stream({"is_live": False}) is False
+        assert is_live_stream({}) is False
+
+    def test_a_recording_of_a_finished_stream_keeps_its_timeline(self, client, monkeypatch):
+        import main
+        finished = {**RAW_LIVE_INFO, "live_status": "was_live", "duration": 3600}
+        monkeypatch.setattr(main, "_extract_with_options", lambda url, opts: finished)
+
+        body = client.get("/api/resolve",
+                          params={"url": "https://www.youtube.com/watch?v=was-live"}).json()
+
+        assert body["is_live"] is False
+        assert body["duration"] == 3600
