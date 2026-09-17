@@ -19,6 +19,8 @@
 #   ./deploy/host-status.sh --ranges=<video-url>   # re-fetch each declared range upstream
 #   ./deploy/host-status.sh --perf [--tail=N]      # media transfer summary: cache hit rate,
 #                                                 # service-time percentiles, slowest paths
+#   ./deploy/host-status.sh --quality [--tail=N]   # which rung each viewer is on and why,
+#   ./deploy/host-status.sh --quality=<viewer>     # including viewers who have left
 #   ./deploy/host-status.sh --seek=<video-url>     # cost of a ranged read at increasing
 #                                                 # depths, upstream and through the proxy
 #   ./deploy/host-status.sh --host=10.0.0.5 --user=admin
@@ -46,6 +48,8 @@ SHOW_COOKIES=0
 MANIFEST_URL=""
 RANGES_URL=""
 RUN_PERF=0
+RUN_QUALITY=0
+QUALITY_VIEWER=""
 SEEK_URL=""
 
 for arg in "$@"; do
@@ -64,6 +68,8 @@ for arg in "$@"; do
 		--manifest=*) MANIFEST_URL="${arg#--manifest=}" ;;
 		--ranges=*) RANGES_URL="${arg#--ranges=}" ;;
 		--perf) RUN_PERF=1 ;;
+		--quality) RUN_QUALITY=1 ;;
+		--quality=*) RUN_QUALITY=1; QUALITY_VIEWER="${arg#--quality=}" ;;
 		--seek=*) SEEK_URL="${arg#--seek=}" ;;
 	esac
 done
@@ -88,6 +94,8 @@ ssh -o BatchMode=yes -o ConnectTimeout=15 "${SSH_USER}@${SSH_HOST}" \
 	 WT_MANIFEST_URL=$(printf '%q' "$MANIFEST_URL") \
 	 WT_RANGES_URL=$(printf '%q' "$RANGES_URL") \
 	 WT_PERF=$(printf '%q' "$RUN_PERF") \
+	 WT_QUALITY=$(printf '%q' "$RUN_QUALITY") \
+	 WT_QUALITY_VIEWER=$(printf '%q' "$QUALITY_VIEWER") \
 	 WT_SEEK_URL=$(printf '%q' "$SEEK_URL") \
 	 bash -s" <<'REMOTE_SCRIPT'
 set -u
@@ -103,6 +111,8 @@ SHOW_COOKIES="${WT_COOKIES:-0}"
 MANIFEST_URL="${WT_MANIFEST_URL:-}"
 RANGES_URL="${WT_RANGES_URL:-}"
 RUN_PERF="${WT_PERF:-0}"
+RUN_QUALITY="${WT_QUALITY:-0}"
+QUALITY_VIEWER="${WT_QUALITY_VIEWER:-}"
 SEEK_URL="${WT_SEEK_URL:-}"
 COMPOSE="docker compose -f deploy/docker-compose.yml --env-file ${REMOTE}/.env"
 
@@ -224,6 +234,74 @@ except ImportError:
 if oldest:
     print("oldest entry   %.1f hours" % ((time.time() - oldest) / 3600))
 PYEOF
+	exit 0
+fi
+
+# Which rung each viewer is on, and which input decided it. The backend
+# logs one line per *change* of picture (services/playback_quality.py), so
+# the answer is in the log rather than only in a browser signed in to
+# Cloudflare Access — and it survives the viewer disconnecting.
+if [ "$RUN_QUALITY" = "1" ]; then
+	cd "$REMOTE" || exit 1
+	# -t adds Docker's own timestamp: python's basicConfig does not print one.
+	$COMPOSE logs -t --no-log-prefix --tail "${TAIL_LINES}" backend 2>/dev/null \
+		| grep 'Playback quality:' > /tmp/wt-quality.log || true
+	if [ -n "$QUALITY_VIEWER" ]; then
+		echo "── latest picture per viewer, matching '${QUALITY_VIEWER}' ───────────"
+	else
+		echo "── latest picture per viewer (backend log) ───────────"
+	fi
+	awk -v filter="$QUALITY_VIEWER" -v tail="$TAIL_LINES" '
+	{
+		delete f
+		for (i = 1; i <= NF; i++) {
+			p = index($i, "=")
+			if (p > 1) f[substr($i, 1, p - 1)] = substr($i, p + 1)
+		}
+		if (!("member" in f) || !("verdict" in f)) next
+		if (filter != "" && index(f["member"], filter) == 0) next
+		m = f["member"]
+		if (changes[m]++ == 0) viewers++
+		# Docker stamps 2026-09-18T12:31:05.123456789Z; the wall clock is enough.
+		row[m] = sprintf("%-30s %-7s %-7s %-8s %-5s %-10s %-8s %-7s %-9s %-7s %-19s %7d  %s",
+			m, f["rung"], f["cap"], f["surface"], f["dpr"], f["estimate"],
+			f["dropped"], f["ladder"], f["mode"], f["engine"], f["verdict"],
+			changes[m], substr($1, 12, 8))
+		room[m] = f["room"]
+	}
+	END {
+		if (viewers == 0) {
+			print "(no quality reports in the last " tail " log lines - nobody"
+			print " played anything, raise --tail, or the filter matched nobody)"
+			exit
+		}
+		printf "%-30s %-7s %-7s %-8s %-5s %-10s %-8s %-7s %-9s %-7s %-19s %7s  %s\n",
+			"viewer", "rung", "cap", "surface", "dpr", "estimate", "dropped",
+			"ladder", "mode", "engine", "verdict", "changes", "last"
+		for (m in row) print row[m] | "sort"
+		close("sort")
+		print ""
+		print "rung    = the rendition being played;  cap = ceiling auto may not pass"
+		print "surface = height the video is drawn at, in CSS pixels;  dpr = device pixel ratio"
+		print "verdict = which input best explains the rung:"
+		print "  surface-capped     the player is small - a bigger window raises it"
+		print "  bandwidth-limited  below the cap with rungs left: the estimate chose this"
+		print "  dropping-frames    the decoder cannot keep up; bandwidth will not help"
+		print "  saver-mode         the viewer asked for less data"
+		print "  single-rung-ladder the stream offers nothing else"
+		print "  no-rung-reported   the player reported no picture at all"
+	}' /tmp/wt-quality.log
+	if [ -n "$QUALITY_VIEWER" ]; then
+		echo
+		echo "── how '${QUALITY_VIEWER}' got there (oldest first) ───────────"
+		grep -F "member=${QUALITY_VIEWER}" /tmp/wt-quality.log 2>/dev/null \
+			| sed -e 's/^\([0-9-]*\)T\([0-9:]*\)\.[0-9]*Z /\2  /' \
+			      -e 's/[^ ]*:Playback quality: //' \
+			| tail -30
+		grep -cF "member=${QUALITY_VIEWER}" /tmp/wt-quality.log 2>/dev/null \
+			| awk '{ if ($1 == 0) print "(no changes logged for that viewer)" }'
+	fi
+	rm -f /tmp/wt-quality.log
 	exit 0
 fi
 

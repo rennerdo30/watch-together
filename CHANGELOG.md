@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Per-viewer telemetry is readable from the host
+
+- Each viewer's quality report is now logged at INFO whenever the picture
+  **changes** — one greppable line with the member, the room, the rung, the
+  cap, the drawing surface, the pixel ratio, the measured estimate, the
+  dropped-frame ratio, the ladder size, the mode and the engine. A steady
+  picture's thirty-second repeats stay at DEBUG, so a quiet room writes
+  nothing. Reports were previously visible only through
+  `GET /api/admin/overview`, which needs a browser signed in to Cloudflare
+  Access: from the host every admin call correctly returns 401, so nobody
+  could answer "which rung is this viewer on" from the machine, from a log
+  bundle, or after the viewer had left.
+- Each line ends with a **verdict** naming the input that best explains the
+  rung: `surface-capped`, `bandwidth-limited`, `dropping-frames`,
+  `saver-mode`, `single-rung-ladder` or `no-rung-reported`. The panel shows
+  the same word, so both answers agree.
+- `./deploy/host-status.sh --quality [--tail=N]` summarises those lines into
+  one row per viewer — latest rung, every input, the verdict, how many times
+  it changed and when it was last seen — and `--quality=<viewer>` adds that
+  viewer's full trail. Viewers who have disconnected are still listed.
+- The admin panel gained a **Picture changes** card, backed by a bounded
+  in-memory history (`PLAYBACK_QUALITY_HISTORY_CAPACITY`) that outlives the
+  connection; each of its cards is now a named landmark.
+- Identity handling is unchanged: nothing weakens authentication, no bypass
+  or shared secret was added, and the email appears only in the backend log
+  (which already names the requester on every resolve, cookie lend and
+  history ping) and in the admin-only endpoint. Nothing is written to disk.
+
 ### Cookies are never stored
 
 - Cookies now reach the server only through the browser extension and live in

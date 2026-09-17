@@ -12,29 +12,7 @@ from fastapi import WebSocket
 from core.config import GUEST_IDENTITY
 from services.database import save_room, get_all_rooms, delete_room
 from services.sponsorblock import SETTINGS_KEY as SPONSORBLOCK_KEY, normalize_settings
-
-# What a player may call itself, so a browser cannot write arbitrary text
-# into the admin panel.
-QUALITY_MODES = ("balanced", "highest", "saver")
-PLAYBACK_ENGINES = ("mse", "hls")
-
-
-def _bounded_int(value, low: int, high: int) -> Optional[int]:
-    """An integer inside the range, or None for anything else."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    if value != value or value in (float("inf"), float("-inf")):
-        return None
-    return int(value) if low <= value <= high else None
-
-
-def _bounded_float(value, low: float, high: float) -> Optional[float]:
-    """A float inside the range, rounded for display, or None."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    if value != value or value in (float("inf"), float("-inf")):
-        return None
-    return round(float(value), 4) if low <= value <= high else None
+from services import playback_quality
 
 
 class ConnectionManager:
@@ -71,7 +49,8 @@ class ConnectionManager:
         return seen
 
     @staticmethod
-    def record_playback_quality(websocket: WebSocket, report: dict) -> Optional[dict]:
+    def record_playback_quality(websocket: WebSocket, report: dict,
+                                room_id: str) -> Optional[dict]:
         """Keep what one viewer's player reports about its own picture.
 
         Auto quality is decided in the browser, from inputs that only exist
@@ -81,24 +60,20 @@ class ConnectionManager:
         it — and the answer is usually one of those numbers rather than the
         instance.
 
-        It rides on the connection, so it disappears when they leave and is
-        never written anywhere. Only fields this understands are kept, and
-        each is bounded: it arrives from a browser.
+        The connection carries the latest report, for the live view. The
+        durable copies — a log line per change, and a bounded history that
+        outlives the connection — are `services/playback_quality.py`'s, so
+        the answer survives the viewer hanging up.
         """
-        if not isinstance(report, dict):
+        previous = getattr(websocket, "playback_quality", None)
+        kept = playback_quality.record(
+            room_id,
+            getattr(websocket, "user_email", GUEST_IDENTITY),
+            report,
+            previous,
+        )
+        if kept is None:
             return None
-        kept = {
-            "rung": _bounded_int(report.get("rung"), 0, 10_000),
-            "cap": _bounded_int(report.get("cap"), 0, 10_000),
-            "surface_px": _bounded_int(report.get("surface_px"), 0, 100_000),
-            "pixel_ratio": _bounded_float(report.get("pixel_ratio"), 0, 16),
-            "estimate_bps": _bounded_int(report.get("estimate_bps"), 0, 10_000_000_000),
-            "dropped_frames": _bounded_float(report.get("dropped_frames"), 0, 1),
-            "ladder_rungs": _bounded_int(report.get("ladder_rungs"), 0, 100),
-            "mode": report.get("mode") if report.get("mode") in QUALITY_MODES else None,
-            "engine": report.get("engine") if report.get("engine") in PLAYBACK_ENGINES else None,
-            "at": time.time(),
-        }
         websocket.playback_quality = kept
         return kept
 
