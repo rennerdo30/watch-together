@@ -263,6 +263,108 @@ class TestManifestResolvesOnDemand:
 
         assert len(captured_options) == attempts_after_resolve
 
+    async def test_a_cached_video_whose_urls_expired_is_resolved_again(
+            self, client, captured_options, stub_manifest):
+        """A cache entry outlives the signature on the URLs it holds.
+
+        Every URL states an `expire`; past it the CDN answers 403 to every
+        probe, and the manifest that comes back describes nothing. Serving
+        the entry as it stands makes the cache the reason playback fails.
+        """
+        import time
+        from services.database import cache_format
+
+        url = "https://youtu.be/expired-urls"
+        dead = int(time.time()) - 3600
+        signed = f"https://cdn.example.com/v.mp4?expire={dead}&itag=137&clen=1000"
+        await cache_format(url, {
+            "original_url": url, "duration": 120, "stream_type": "dash",
+            "stream_url": signed, "video_url": signed,
+            "audio_url": f"https://cdn.example.com/a.m4a?expire={dead}&itag=140&clen=500",
+            "available_qualities": [{"video_url": signed, "format_id": "137"}],
+            "audio_options": [{"audio_url": f"https://cdn.example.com/a.m4a?expire={dead}"
+                                            "&itag=140&clen=500", "format_id": "140"}],
+        })
+        before = len(captured_options)
+
+        response = client.get("/api/dash-manifest",
+                              params={"url": url, "user": "a@example.com"})
+
+        assert response.status_code == 200
+        assert len(captured_options) > before, "the dead URLs were used as they stood"
+
+    async def test_short_lived_urls_are_served_rather_than_replaced(
+            self, client, captured_options, monkeypatch):
+        """A player is waiting, so what is still signed is what it gets.
+
+        Requiring the margin that speculation uses would make every source
+        that issues short-lived URLs permanently unplayable through the
+        generated manifest, instead of merely fetched early. The player asks
+        for a fresh resolve when a fetch is actually refused.
+        """
+        import main as main_module
+        import time
+        from services.database import cache_format
+
+        served = []
+
+        async def fake_build(client_, duration_seconds, video_formats, audio_formats,
+                             proxy_base, headers=None):
+            served.extend(fmt["url"] for fmt in video_formats + audio_formats)
+            return "<MPD/>"
+
+        monkeypatch.setattr(main_module, "build_manifest_for_formats", fake_build)
+
+        url = "https://youtu.be/short-lived-urls"
+        soon = int(time.time()) + 60
+        video = f"https://cdn.example.com/v.mp4?expire={soon}&itag=137&clen=1000"
+        audio = f"https://cdn.example.com/a.m4a?expire={soon}&itag=140&clen=500"
+        await cache_format(url, {
+            "original_url": url, "duration": 120, "stream_type": "dash",
+            "stream_url": video, "video_url": video, "audio_url": audio,
+            "available_qualities": [{"video_url": video, "format_id": "137"}],
+            "audio_options": [{"audio_url": audio, "format_id": "140"}],
+        })
+        before = len(captured_options)
+
+        response = client.get("/api/dash-manifest",
+                              params={"url": url, "user": "a@example.com"})
+
+        assert response.status_code == 200
+        assert len(captured_options) == before, "a signed URL was thrown away for being short"
+        assert set(served) == {video, audio}
+
+    async def test_a_failed_refresh_reports_the_resolvers_own_reason(
+            self, client, monkeypatch, stub_manifest):
+        """Same contract as the not-cached branch beside it: an
+        age-restricted video says so, rather than becoming a generic 422
+        about URLs that could not be refreshed."""
+        import main as main_module
+        import time
+        from services.database import cache_format
+
+        url = "https://youtu.be/expired-and-age-restricted"
+        dead = int(time.time()) - 3600
+        signed = f"https://cdn.example.com/v.mp4?expire={dead}&itag=137&clen=1000"
+        audio = f"https://cdn.example.com/a.m4a?expire={dead}&itag=140&clen=500"
+        await cache_format(url, {
+            "original_url": url, "duration": 120, "stream_type": "dash",
+            "stream_url": signed, "video_url": signed, "audio_url": audio,
+            "available_qualities": [{"video_url": signed, "format_id": "137"}],
+            "audio_options": [{"audio_url": audio, "format_id": "140"}],
+        })
+
+        def age_restricted(url_, ydl_opts):
+            raise RuntimeError("ERROR: Sign in to confirm your age")
+
+        monkeypatch.setattr(main_module, "_extract_with_options", age_restricted)
+
+        response = client.get("/api/dash-manifest",
+                              params={"url": url, "user": "a@example.com"})
+
+        assert response.status_code == 403
+        assert "age-restricted" in response.json()["detail"].lower()
+
     async def test_an_unresolvable_video_still_reports_the_real_reason(
             self, client, monkeypatch, stub_manifest):
         """A 404 saying "call /api/resolve first" is not actionable."""
