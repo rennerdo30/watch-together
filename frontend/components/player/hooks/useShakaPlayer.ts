@@ -4,10 +4,13 @@ import { useRef, useEffect, useCallback, useState } from 'react';
 
 import { startPlayback, type PlaybackStart } from '@/lib/playback';
 import { latencyAwareAbrFactory, autoQualityCap } from '@/lib/abr';
-import { readOpeningEstimate, rememberBandwidth } from '@/lib/bandwidth-memory';
+import { readOpeningEstimate, rememberBandwidth, sessionHighWater } from '@/lib/bandwidth-memory';
+import { capHeadroom, DEFAULT_QUALITY_MODE, type QualityMode } from '@/lib/quality-mode';
 import {
-    ABR_CACHE_LOAD_THRESHOLD_MS,
-    ABR_LEVELS_ABOVE_SURFACE,
+    PLAYER_STATS_REFRESH_MS,
+    SHAKA_CACHE_LOAD_THRESHOLD_MS,
+    SHAKA_SEGMENT_PREFETCH_LIMIT,
+    SHAKA_SWITCH_SAFE_MARGIN_SECONDS,
     SHAKA_BUFFER_GOAL_SECONDS,
     SHAKA_BUFFER_BEHIND_SECONDS,
     SHAKA_REBUFFER_GOAL_SECONDS,
@@ -49,7 +52,24 @@ export interface ShakaStats {
     bandwidth: number;
     /** Height of the active variant, or 0 before one is chosen. */
     height: number;
+    /**
+     * The measured bandwidth estimate, in bits per second — what the ABR
+     * logic actually decides on. Zero until enough has been measured; until
+     * then Shaka cannot switch at all and is still on its opening guess,
+     * which is why `estimateIsMeasured` is reported beside it.
+     */
+    estimateBps: number;
+    estimateIsMeasured: boolean;
+    /** Tallest rung auto may pick, or null when the mode allows any. */
+    autoCap: number | null;
+    /** The drawing surface the cap was computed from, in device pixels. */
+    surfacePx: number;
+    /** Device pixel ratio at that moment; it can change without a resize. */
+    pixelRatio: number;
+    /** Frames the decoder dropped, as a fraction of those it was given. */
     droppedFrames: number;
+    /** Rungs this viewer's manifest actually offered. */
+    ladderRungs: number;
     videoCodec: string;
     audioCodec: string;
 }
@@ -59,6 +79,8 @@ export interface UseShakaPlayerOptions {
     /** Manifest URL. Ignored while `enabled` is false. */
     manifestUrl: string;
     enabled: boolean;
+    /** What this viewer wants auto quality to optimise for. */
+    qualityMode?: QualityMode;
     autoPlay?: boolean;
     initialTime?: number;
     onError?: (error: string) => void;
@@ -84,7 +106,13 @@ export interface UseShakaPlayerReturn {
 const EMPTY_STATS: ShakaStats = {
     bandwidth: 0,
     height: 0,
+    estimateBps: 0,
+    estimateIsMeasured: false,
+    autoCap: null,
+    surfacePx: 0,
+    pixelRatio: 0,
     droppedFrames: 0,
+    ladderRungs: 0,
     videoCodec: '',
     audioCodec: '',
 };
@@ -166,9 +194,15 @@ interface ShakaPlayerInstance {
 }
 
 export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerReturn {
-    const { videoRef, manifestUrl, enabled } = options;
+    const { videoRef, manifestUrl, enabled, qualityMode = DEFAULT_QUALITY_MODE } = options;
 
     const playerRef = useRef<ShakaPlayerInstance | null>(null);
+    // The mode changes while a video plays; reading it through a ref keeps it
+    // out of the effect's dependencies, which tear the player down.
+    const qualityModeRef = useRef(qualityMode);
+    // Set once the player is loaded, so a mode change can re-apply the cap
+    // without reloading anything.
+    const applyQualityCapRef = useRef<(() => void) | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [isBuffering, setIsBuffering] = useState(false);
     const [qualities, setQualities] = useState<ShakaQualityLevel[]>([]);
@@ -191,7 +225,12 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
         let player: ShakaPlayerInstance | null = null;
         let onProgress: (() => void) | undefined;
         let resizeObserver: ResizeObserver | null = null;
-        let measuredBandwidth: number | null = null;
+        let pixelRatioQuery: MediaQueryList | null = null;
+        let onPixelRatioChange: () => void = () => { };
+        // The best estimate this session reached, which is what gets
+        // remembered; see `sessionHighWater`.
+        let bestBandwidth: number | null = null;
+        let lastEstimate = 0;
 
         const setLoading = (loading: boolean) => {
             if (cancelled) return;
@@ -253,13 +292,14 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
             setQualities(levels);
 
             const active = variants.find((track) => track.active);
-            setStats({
+            setStats((previous) => ({
+                ...previous,
                 bandwidth: active?.bandwidth ?? 0,
                 height: active?.height ?? 0,
-                droppedFrames: 0,
+                ladderRungs: levels.length,
                 videoCodec: active?.videoCodec ?? '',
                 audioCodec: active?.audioCodec ?? '',
-            });
+            }));
         };
 
         const setup = async () => {
@@ -286,6 +326,15 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
                     bufferingGoal: SHAKA_BUFFER_GOAL_SECONDS,
                     rebufferingGoal: SHAKA_REBUFFER_GOAL_SECONDS,
                     bufferBehind: SHAKA_BUFFER_BEHIND_SECONDS,
+                    // A minute of buffered media is a minute before a better
+                    // rendition is seen; clear what is beyond the margin so a
+                    // switch takes effect while the viewer is still wondering
+                    // about it.
+                    clearBufferSwitch: true,
+                    safeMarginSwitch: SHAKA_SWITCH_SAFE_MARGIN_SECONDS,
+                    // Keep the next fetches in flight instead of leaving the
+                    // link idle for a round trip between segments.
+                    segmentPrefetchLimit: SHAKA_SEGMENT_PREFETCH_LIMIT,
                     // Every segment crosses the viewer -> tunnel -> origin ->
                     // CDN path, so a request can legitimately take a while and
                     // an occasional failure is worth retrying rather than
@@ -299,7 +348,10 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
                 },
                 // Stock variant selection fed with samples that exclude the
                 // wait for each response's headers; see lib/abr.ts.
-                abrFactory: latencyAwareAbrFactory(shaka, bps => { measuredBandwidth = bps; }),
+                abrFactory: latencyAwareAbrFactory(shaka, bps => {
+                    lastEstimate = bps;
+                    bestBandwidth = sessionHighWater(bestBandwidth, bps);
+                }),
                 abr: {
                     // Open on what this connection managed last time, or a
                     // conservative guess, and let measurements take over.
@@ -315,7 +367,7 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
                     // rung of bitrate headroom; see applyQualityCap below.
                     // Shaka's own restrictToElementSize allows no headroom.
                     switchInterval: SHAKA_SWITCH_INTERVAL_SECONDS,
-                    cacheLoadThreshold: ABR_CACHE_LOAD_THRESHOLD_MS,
+                    cacheLoadThreshold: SHAKA_CACHE_LOAD_THRESHOLD_MS,
                     advanced: {
                         fastHalfLife: SHAKA_ABR_FAST_HALF_LIFE,
                         slowHalfLife: SHAKA_ABR_SLOW_HALF_LIFE,
@@ -334,15 +386,25 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
             instance.addEventListener('adaptation', onTracksChanged);
             // Persist only fresh measurements, never Shaka's opening guess.
             let lastSavedAt = 0;
+            let lastStatsAt = 0;
             onProgress = () => {
-                if (cancelled || video.paused || measuredBandwidth === null) return;
+                if (cancelled) return;
                 const now = Date.now();
-                if (now - lastSavedAt < BANDWIDTH_MEMORY_SAVE_INTERVAL_MS) return;
-                if (Number.isFinite(measuredBandwidth) && measuredBandwidth > 0) {
-                    rememberBandwidth(measuredBandwidth, now);
-                    lastSavedAt = now;
+                if (now - lastStatsAt >= PLAYER_STATS_REFRESH_MS) {
+                    lastStatsAt = now;
+                    const quality = video.getVideoPlaybackQuality?.();
+                    const total = quality?.totalVideoFrames ?? 0;
+                    setStats((previous) => ({
+                        ...previous,
+                        estimateBps: lastEstimate,
+                        estimateIsMeasured: lastEstimate > 0,
+                        droppedFrames: total > 0 ? (quality?.droppedVideoFrames ?? 0) / total : 0,
+                    }));
                 }
-                measuredBandwidth = null;
+                if (video.paused || bestBandwidth === null) return;
+                if (now - lastSavedAt < BANDWIDTH_MEMORY_SAVE_INTERVAL_MS) return;
+                rememberBandwidth(bestBandwidth, now);
+                lastSavedAt = now;
             };
             video.addEventListener('timeupdate', onProgress);
 
@@ -356,19 +418,52 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
                 await instance.load(manifestUrl, startAt > 0 ? startAt : undefined);
                 if (cancelled) return;
                 onTracksChanged();
-                // Cap auto quality to the surface plus headroom, and follow
-                // the surface as the player is resized or goes fullscreen.
-                // Manual picks are not restricted.
+                // Cap auto quality to the surface plus the headroom this
+                // viewer's mode allows, and follow the surface as the player
+                // is resized or goes fullscreen. Manual picks are not
+                // restricted.
                 const applyQualityCap = () => {
                     if (cancelled) return;
-                    const heights = instance.getVariantTracks().map((track) => track.height ?? 0);
-                    const surface = video.clientHeight * (window.devicePixelRatio || 1);
-                    const cap = autoQualityCap(heights, surface, ABR_LEVELS_ABOVE_SURFACE);
-                    if (cap !== null) instance.configure({ abr: { restrictions: { maxHeight: cap } } });
+                    const pixelRatio = window.devicePixelRatio || 1;
+                    const surface = video.clientHeight * pixelRatio;
+                    const headroom = capHeadroom(qualityModeRef.current);
+                    const cap = headroom === null
+                        ? null
+                        : autoQualityCap(instance.getVariantTracks().map((track) => track.height ?? 0), surface, headroom);
+                    if (headroom === null) {
+                        // Not "leave it alone": a cap applied under another
+                        // mode would otherwise outlive the switch to this one.
+                        instance.configure({ abr: { restrictions: { maxHeight: Infinity } } });
+                    } else if (cap !== null) {
+                        instance.configure({ abr: { restrictions: { maxHeight: cap } } });
+                    } else {
+                        // Nothing measurable to cap against yet. The observer
+                        // below fires when the element is finally laid out.
+                        return;
+                    }
+                    setStats((previous) => ({ ...previous, autoCap: cap, surfacePx: surface, pixelRatio }));
                 };
+                applyQualityCapRef.current = applyQualityCap;
                 applyQualityCap();
                 resizeObserver = new ResizeObserver(applyQualityCap);
                 resizeObserver.observe(video);
+                // The pixel ratio can change with no CSS resize at all — a
+                // window dragged to a monitor with different scaling keeps
+                // its size in CSS pixels while every one of them is worth
+                // more or fewer device pixels. The ResizeObserver never fires
+                // for that, so the cap would stay computed for the old
+                // screen. Each query only reports leaving its own ratio, so a
+                // new one is armed after every change.
+                const watchPixelRatio = () => {
+                    pixelRatioQuery?.removeEventListener('change', onPixelRatioChange);
+                    pixelRatioQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+                    pixelRatioQuery.addEventListener('change', onPixelRatioChange);
+                };
+                onPixelRatioChange = () => {
+                    applyQualityCap();
+                    watchPixelRatio();
+                };
+                watchPixelRatio();
                 setLoading(false);
 
                 if (shouldAutoPlay) {
@@ -395,6 +490,8 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
             cancelled = true;
             if (onProgress) video.removeEventListener('timeupdate', onProgress);
             resizeObserver?.disconnect();
+            pixelRatioQuery?.removeEventListener('change', onPixelRatioChange);
+            applyQualityCapRef.current = null;
             const active = playerRef.current;
             playerRef.current = null;
             if (active) {
@@ -413,6 +510,12 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
         // the manifest on every pause, resume and seek — which both
         // rebuffered from zero and let a reload resume a paused room.
     }, [enabled, manifestUrl, videoRef]);
+
+    // A mode change re-caps the running player; it never reloads anything.
+    useEffect(() => {
+        qualityModeRef.current = qualityMode;
+        applyQualityCapRef.current?.();
+    }, [qualityMode]);
 
     const setQuality = useCallback((index: number) => {
         const player = playerRef.current;

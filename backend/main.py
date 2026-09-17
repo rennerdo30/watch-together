@@ -57,6 +57,7 @@ from services.manifest import build_manifest_for_formats, ManifestError
 from services.metrics import (
     proxy_metrics, OUTCOME_OK, OUTCOME_UPSTREAM_ERROR,
     OUTCOME_CLIENT_ABORTED, OUTCOME_TRUNCATED,
+    TIER_MEMORY, TIER_DISK,
 )
 from services.database import init_database, cache_format, get_cached_format
 from services.resolver import refresh_video_url, _extract_stream_url, _build_resolve_response
@@ -316,6 +317,7 @@ async def proxy_metrics_endpoint(
     """
     if not get_user_from_request(request):
         raise HTTPException(status_code=401, detail="User identity required")
+    # Any signed-in viewer may read this; it must not say who fetched what.
     return await proxy_metrics.snapshot(sample_limit=samples)
 
 
@@ -673,6 +675,8 @@ async def proxy_stream(request: Request, url: str):
     if not url:
         raise HTTPException(status_code=400, detail="Missing URL")
 
+    request_started = time.monotonic()
+
     # The proxy fetches upstream content on the caller's behalf, so it must
     # know who the caller is before doing any work.
     user_email = get_user_from_request(request)
@@ -832,6 +836,23 @@ async def proxy_stream(request: Request, url: str):
                 if serve_partial:
                     cached_headers["Content-Range"] = cached_content_range
 
+                # A hit used to return without recording anything, so the
+                # metrics described only the requests that missed: a viewer
+                # served from cache looked like a viewer who had stopped
+                # watching.
+                await proxy_metrics.record(
+                    host=hostname,
+                    status=206 if serve_partial else 200,
+                    outcome=OUTCOME_OK,
+                    upstream_ms=0.0,
+                    transfer_ms=(time.monotonic() - request_started) * 1000,
+                    bytes_sent=len(data),
+                    range_start=range_start,
+                    expected_bytes=len(data),
+                    identity=user_email,
+                    cache_tier=TIER_MEMORY,
+                )
+
                 return Response(
                     content=data,
                     media_type=content_type,
@@ -868,14 +889,34 @@ async def proxy_stream(request: Request, url: str):
                         pass
 
                     async def iter_cached():
+                        served = 0
+                        outcome = OUTCOME_OK
                         try:
                             while True:
                                 chunk = await cache_file.read(64 * 1024)
                                 if not chunk:
                                     break
+                                served += len(chunk)
                                 yield chunk
+                        except (asyncio.CancelledError, ConnectionResetError):
+                            # The viewer navigated away or seeked: their
+                            # business, not a failure of ours.
+                            outcome = OUTCOME_CLIENT_ABORTED
+                            raise
                         finally:
                             await cache_file.close()
+                            await proxy_metrics.record(
+                                host=hostname,
+                                status=206 if (range_header and stored_range) else 200,
+                                outcome=outcome,
+                                upstream_ms=0.0,
+                                transfer_ms=(time.monotonic() - request_started) * 1000,
+                                bytes_sent=served,
+                                range_start=range_start,
+                                expected_bytes=disk_meta.get("size"),
+                                identity=user_email,
+                                cache_tier=TIER_DISK,
+                            )
 
                     cached_headers = {
                         "Access-Control-Allow-Origin": "*",
@@ -1081,6 +1122,7 @@ async def proxy_stream(request: Request, url: str):
                             range_start=range_start,
                             expected_bytes=expected_bytes,
                             error=transfer_error,
+                            identity=user_email,
                         )
 
                 return StreamingResponse(stream_and_cache(), status_code=status_code, headers=response_headers)
@@ -1119,6 +1161,7 @@ async def proxy_stream(request: Request, url: str):
                             range_start=range_start,
                             expected_bytes=expected_bytes,
                             error=transfer_error,
+                            identity=user_email,
                         )
 
                 return StreamingResponse(stream_only(), status_code=status_code, headers=response_headers)
@@ -1133,6 +1176,7 @@ async def proxy_stream(request: Request, url: str):
             transfer_ms=0.0,
             bytes_sent=0,
             error=f"{type(e).__name__}: {e}",
+            identity=user_email,
         )
         raise HTTPException(status_code=500, detail=f"Proxy error: {e}")
 
@@ -1445,6 +1489,10 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         "type": "error",
                         "payload": {"message": "Only the room admin can change SponsorBlock settings"},
                     })
+
+            elif msg_type == "playback_quality":
+                # Diagnostic only: it is never broadcast and never stored.
+                manager.record_playback_quality(websocket, payload)
 
             elif msg_type == "ping":
                 await websocket.send_json({

@@ -122,6 +122,29 @@ export const SHAKA_ABR_SLOW_HALF_LIFE = 4;
 export const SHAKA_SWITCH_INTERVAL_SECONDS = 4;
 
 /**
+ * Seconds of buffered media a quality switch keeps.
+ *
+ * Shaka appends a switch after everything already buffered unless the
+ * buffer is cleared, and this player buffers a minute ahead: a correct
+ * upward switch was invisible for that long, which reads as "auto is stuck
+ * on low". Clearing beyond this margin makes a switch visible in seconds.
+ * The margin is what protects the other direction — a downward switch on a
+ * congested link still keeps more than `SHAKA_REBUFFER_GOAL_SECONDS` of
+ * already-downloaded media while the lower rendition refills.
+ */
+export const SHAKA_SWITCH_SAFE_MARGIN_SECONDS = 10;
+
+/**
+ * How many segments Shaka may fetch ahead of the one it needs next.
+ *
+ * Every segment costs a full viewer -> Cloudflare -> tunnel -> origin -> CDN
+ * round trip, and fetching strictly one at a time leaves the link idle for
+ * that whole wait — which also depresses the measured bandwidth the ABR
+ * logic learns from.
+ */
+export const SHAKA_SEGMENT_PREFETCH_LIMIT = 2;
+
+/**
  * How many ladder rungs above the drawing surface auto quality may go.
  *
  * The surface is the media element's height times the device pixel ratio.
@@ -130,15 +153,46 @@ export const SHAKA_SWITCH_INTERVAL_SECONDS = 4;
  * when downscaled. Bandwidth still gates the choice. Without any cap a
  * fast link was handed 4K AV1 for a laptop-sized player: 13–28 MB
  * segments, and every seek stared at a spinner until one had arrived.
+ *
+ * This is the headroom of the Balanced quality mode; `lib/quality-mode`
+ * holds the other two a viewer can choose instead.
  */
 export const ABR_LEVELS_ABOVE_SURFACE = 1;
 
 /**
- * A sample that completes faster than this, in milliseconds, is treated as
- * served from cache and excluded from bandwidth estimation. Latency
- * correction also requires at least this much measurable transfer time.
+ * The shortest transfer the latency correction will work with, in
+ * milliseconds. Subtracting the wait for headers from an interval this
+ * short leaves noise, so the uncorrected time is kept instead.
  */
 export const ABR_CACHE_LOAD_THRESHOLD_MS = 20;
+
+/**
+ * Below this many milliseconds Shaka treats a response as served from the
+ * browser's cache and ignores it.
+ *
+ * This is Shaka's own default. It used to be set to the correction
+ * threshold above, four times wider, which discarded the *fastest*
+ * measurements: a viewer close to the origin is served a segment from the
+ * proxy's memory cache in well under 20 ms, and that is a real transfer
+ * over a real network, not a cache hit inside their browser. Throwing those
+ * away biases the estimate down for exactly the viewers whose connection is
+ * fast.
+ */
+export const SHAKA_CACHE_LOAD_THRESHOLD_MS = 5;
+
+/**
+ * How often the playback statistics re-read the live measurements — the
+ * bandwidth estimate and the dropped-frame ratio — in milliseconds. They
+ * change with every segment; the overlay only has to stay readable.
+ */
+export const PLAYER_STATS_REFRESH_MS = 1000;
+
+/**
+ * How rarely a player repeats an unchanged quality report to the server, in
+ * milliseconds. A change — a different rung, cap or mode — is reported as
+ * it happens; this only keeps a steady picture from talking every second.
+ */
+export const QUALITY_REPORT_INTERVAL_MS = 30_000;
 
 /**
  * Codec preference, most efficient first.

@@ -11,6 +11,9 @@ import type { SponsorSegment } from '@/lib/sponsorblock';
 import type { Storyboard } from '@/lib/storyboard';
 import type { VideoChapter } from '@/lib/chapters';
 import { useLocalStorageState, parseStoredBoolean } from '@/lib/hooks/useLocalStorageState';
+import { DEFAULT_QUALITY_MODE, parseQualityMode, type QualityMode } from '@/lib/quality-mode';
+import { forgetBandwidth, readRememberedEstimate } from '@/lib/bandwidth-memory';
+import { PLAYER_STATS_REFRESH_MS, QUALITY_REPORT_INTERVAL_MS } from '@/lib/constants';
 import { useVideoEnhancement } from './player/hooks/useVideoEnhancement';
 
 interface CustomPlayerProps {
@@ -45,6 +48,26 @@ interface CustomPlayerProps {
     storyboard?: Storyboard;
     /** Chapters of the video, marked on the seek bar and named beside the time. */
     chapters?: VideoChapter[];
+    /**
+     * What this player can see about its own picture. Auto quality is
+     * decided here, from inputs that exist nowhere else — the size the
+     * video is drawn at, the pixel ratio, the measured bandwidth, the
+     * frames the decoder dropped — so a viewer reporting "it is always
+     * blurry for me" is otherwise unanswerable.
+     */
+    onQualityReport?: (report: QualityReport) => void;
+}
+
+export interface QualityReport {
+    rung: number;
+    cap: number | null;
+    surface_px: number;
+    pixel_ratio: number;
+    estimate_bps: number;
+    dropped_frames: number;
+    ladder_rungs: number;
+    mode: QualityMode;
+    engine: 'mse' | 'hls';
 }
 
 interface PlayerAPI {
@@ -69,6 +92,17 @@ const parseStoredVolume = (stored: string | null, fallback: number) => {
     if (stored === null) return fallback;
     const parsed = Number.parseFloat(stored);
     return Number.isFinite(parsed) ? Math.min(1, Math.max(0, parsed)) : fallback;
+};
+
+const parseStoredQualityMode = (stored: string | null, fallback: QualityMode) =>
+    stored === null ? fallback : parseQualityMode(stored);
+
+/** How long ago a remembered measurement was taken, for the stats overlay. */
+const formatAge = (ageMs: number) => {
+    const minutes = Math.round(ageMs / 60_000);
+    if (minutes < 1) return 'just now';
+    if (minutes < 60) return `${minutes} min ago`;
+    return `${Math.round(minutes / 60)} h ago`;
 };
 
 const parseStoredGain = (stored: string | null, fallback: number) => {
@@ -111,6 +145,7 @@ export function CustomPlayer({
     sponsorSegments,
     storyboard,
     chapters,
+    onQualityReport,
 }: CustomPlayerProps) {
     // === REFS ===
     const videoRef = useRef<HTMLVideoElement>(null);
@@ -147,6 +182,11 @@ export function CustomPlayer({
     // The pointer is over the control bar: never fade underneath it.
     const pointerOverControlsRef = useRef(false);
     const [showStats, setShowStats] = useState(false);
+    // What auto quality will open the next video on. Read while the overlay
+    // is on screen: a viewer stuck on a low rendition needs to see whether a
+    // bad measurement from an earlier session is what keeps putting them
+    // there — it is the one input to the decision that outlives the page.
+    const [remembered, setRemembered] = useState<{ bps: number; ageMs: number } | null>(null);
     const [showSettings, setShowSettings] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -179,6 +219,10 @@ export function CustomPlayer({
     // per browser and never sent to the room.
     const [isMonoEnabled, setIsMonoEnabled] = useLocalStorageState(
         'w2g-player-mono', false, parseStoredBoolean);
+    // What auto quality optimises for. Also this viewer's own business: it
+    // describes their screen and their link, not the room's video.
+    const [qualityMode, setQualityMode] = useLocalStorageState<QualityMode>(
+        'w2g-player-quality-mode', DEFAULT_QUALITY_MODE, parseStoredQualityMode);
 
     // === HLS PLAYER HOOK ===
     const [hlsLoading, setHlsLoading] = useState(true);
@@ -207,6 +251,7 @@ export function CustomPlayer({
         videoRef,
         manifestUrl: manifestUrl ?? '',
         enabled: isMseMode,
+        qualityMode,
         autoPlay,
         initialTime,
         onError: setError,
@@ -456,6 +501,17 @@ export function CustomPlayer({
         }
     }, [isEffectivelyMuted, playbackGate, setIsMuted, setVolume]);
 
+    useEffect(() => {
+        if (!showStats) return;
+        const read = () => {
+            const stored = readRememberedEstimate();
+            setRemembered(stored && { bps: stored.bps, ageMs: Date.now() - stored.at });
+        };
+        read();
+        const timer = window.setInterval(read, PLAYER_STATS_REFRESH_MS * 5);
+        return () => window.clearInterval(timer);
+    }, [showStats]);
+
     const handleSeek = useCallback((time: number) => {
         if (videoRef.current) {
             videoRef.current.currentTime = time;
@@ -481,6 +537,47 @@ export function CustomPlayer({
     const toggleMono = useCallback(() => {
         setIsMonoEnabled(!isMonoEnabled);
     }, [isMonoEnabled, setIsMonoEnabled]);
+
+    const lastReportRef = useRef({ at: 0, signature: '' });
+    useEffect(() => {
+        if (!onQualityReport) return;
+        const report: QualityReport = isMseMode
+            ? {
+                rung: shakaPlayer.stats.height,
+                cap: shakaPlayer.stats.autoCap,
+                surface_px: Math.round(shakaPlayer.stats.surfacePx),
+                pixel_ratio: shakaPlayer.stats.pixelRatio,
+                estimate_bps: Math.round(shakaPlayer.stats.estimateBps),
+                dropped_frames: shakaPlayer.stats.droppedFrames,
+                ladder_rungs: shakaPlayer.stats.ladderRungs,
+                mode: qualityMode,
+                engine: 'mse',
+            }
+            : {
+                rung: hlsQualities.find((q) => q.index === hlsPlayer.currentLevel)?.height ?? 0,
+                cap: null,
+                surface_px: 0,
+                pixel_ratio: 0,
+                estimate_bps: Math.round(hlsPlayer.stats.bandwidth),
+                dropped_frames: 0,
+                ladder_rungs: hlsQualities.length,
+                mode: qualityMode,
+                engine: 'hls',
+            };
+        if (report.rung === 0 && report.ladder_rungs === 0) return;
+        const signature = `${report.engine}|${report.rung}|${report.cap}|${report.mode}|${report.ladder_rungs}`;
+        const now = Date.now();
+        if (signature === lastReportRef.current.signature &&
+            now - lastReportRef.current.at < QUALITY_REPORT_INTERVAL_MS) return;
+        lastReportRef.current = { at: now, signature };
+        onQualityReport(report);
+    }, [onQualityReport, isMseMode, qualityMode, shakaPlayer.stats, hlsPlayer.stats,
+        hlsPlayer.currentLevel, hlsQualities]);
+
+    const forgetRememberedBandwidth = useCallback(() => {
+        forgetBandwidth();
+        setRemembered(null);
+    }, []);
 
     // === RENDER ===
     return (
@@ -599,9 +696,49 @@ export function CustomPlayer({
                                     </span>
                                 </div>
                                 <div className="flex justify-between">
-                                    <span className="text-zinc-500">Bandwidth</span>
+                                    <span className="text-zinc-500">Auto cap</span>
+                                    <span data-testid="stat-auto-cap" className="text-right text-zinc-300">
+                                        {shakaPlayer.stats.autoCap === null
+                                            ? 'off (highest)'
+                                            : `${shakaPlayer.stats.autoCap}p · ${Math.round(shakaPlayer.stats.surfacePx)}px`}
+                                    </span>
+                                </div>
+                                {/* The measured estimate is what auto decides
+                                    on; the rendition's own bitrate below is
+                                    the consequence, and used to be shown
+                                    under this label. */}
+                                <div className="flex justify-between">
+                                    <span className="text-zinc-500">Estimate</span>
+                                    <span data-testid="stat-estimate" className="text-right text-zinc-300">
+                                        {shakaPlayer.stats.estimateIsMeasured
+                                            ? `${(shakaPlayer.stats.estimateBps / 1000000).toFixed(2)} Mbps`
+                                            : 'measuring…'}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-zinc-500">Rendition</span>
                                     <span className="text-right text-zinc-300">
                                         {(shakaPlayer.stats.bandwidth / 1000000).toFixed(2)} Mbps
+                                    </span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-zinc-500">Remembered</span>
+                                    <span className="text-right text-zinc-300">
+                                        {remembered
+                                            ? `${(remembered.bps / 1000000).toFixed(2)} Mbps · ${formatAge(remembered.ageMs)}`
+                                            : 'nothing'}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-zinc-500">Dropped</span>
+                                    <span className="text-right text-zinc-300">
+                                        {(shakaPlayer.stats.droppedFrames * 100).toFixed(1)} %
+                                    </span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-zinc-500">Ladder</span>
+                                    <span className="text-right text-zinc-300">
+                                        {shakaPlayer.stats.ladderRungs} rungs
                                     </span>
                                 </div>
                                 <div className="flex justify-between">
@@ -649,6 +786,15 @@ export function CustomPlayer({
                                 {audio.monoActive ? 'Mono' : 'Stereo'}
                             </span>
                         </div>
+                        {isMseMode && (
+                            <button
+                                type="button"
+                                onClick={forgetRememberedBandwidth}
+                                className="w-full mt-1 rounded-md border border-white/10 px-2 py-1 text-[10px] text-zinc-400 hover:bg-white/5 hover:text-white transition-colors focus-visible:outline-2 focus-visible:outline-[color:var(--accent-primary)]"
+                            >
+                                Forget remembered bandwidth
+                            </button>
+                        )}
                     </div>
                 </div>
             )}
@@ -678,6 +824,9 @@ export function CustomPlayer({
                 onNormalizationGainChange={updateNormalizationGain}
                 monoAudio={isMonoEnabled}
                 onToggleMono={toggleMono}
+                qualityMode={isMseMode ? qualityMode : undefined}
+                onQualityModeChange={isMseMode ? setQualityMode : undefined}
+                autoHeight={isMseMode ? shakaPlayer.stats.height : undefined}
                 syncThreshold={syncThreshold}
                 onSyncThresholdChange={onSyncThresholdChange}
                 onPlayToggle={handlePlayToggle}

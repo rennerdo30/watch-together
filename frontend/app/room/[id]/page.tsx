@@ -987,6 +987,7 @@ export default function RoomPage() {
                                     // the room has already moved on.
                                     onEnd={() => sendMsg('video_ended', { original_url: videoData.original_url })}
                                     onPlaying={() => sendMsg('playback_ready', { original_url: videoData.original_url })}
+                                    onQualityReport={(report) => sendMsg('playback_quality', report)}
                                     onTimeUpdate={(time: number) => {
                                         // Update actual player time for accurate badge display
                                         setActualPlayerTime(time);

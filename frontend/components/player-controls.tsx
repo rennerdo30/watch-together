@@ -4,6 +4,7 @@ import { useId, useRef, useState } from 'react';
 import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, Settings, Activity, PictureInPicture, Ear, Headphones } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { parseUpscaleMode, type UpscaleMode } from '@/lib/upscaling/policy';
+import { parseQualityMode, type QualityMode } from '@/lib/quality-mode';
 import { sponsorCategoryColor, sponsorCategoryLabel, type SponsorSegment } from '@/lib/sponsorblock';
 import { chapterAt, type VideoChapter } from '@/lib/chapters';
 import { storyboardFrame, type Storyboard } from '@/lib/storyboard';
@@ -40,6 +41,11 @@ interface PlayerControlsProps {
     /** Every channel folded into one, so both speakers carry the same mix. */
     monoAudio?: boolean;
     onToggleMono?: () => void;
+    /** What auto quality optimises for; absent on engines without a cap. */
+    qualityMode?: QualityMode;
+    onQualityModeChange?: (mode: QualityMode) => void;
+    /** The rung auto settled on, shown on the Auto button. */
+    autoHeight?: number;
     isLive?: boolean;
     syncThreshold?: number;
     onSyncThresholdChange?: (val: number) => void;
@@ -86,6 +92,9 @@ export function PlayerControls({
     onNormalizationGainChange,
     monoAudio,
     onToggleMono,
+    qualityMode,
+    onQualityModeChange,
+    autoHeight,
     isLive,
     syncThreshold,
     onSyncThresholdChange,
@@ -98,6 +107,7 @@ export function PlayerControls({
     onPointerOverChange,
 }: PlayerControlsProps) {
     const enhancementSelectId = useId();
+    const qualityModeSelectId = useId();
     // Where on the seek bar the pointer is, as a fraction, or null when away.
     const [hoverFraction, setHoverFraction] = useState<number | null>(null);
     const progressRef = useRef<HTMLDivElement>(null);
@@ -520,19 +530,44 @@ export function PlayerControls({
                             </div>
                         )}
 
+                        {/* What auto quality optimises for */}
+                        {onQualityModeChange && qualityMode && (
+                            <div className="px-3 py-2 border-b border-white/5 mb-2">
+                                <label htmlFor={qualityModeSelectId} className="block text-xs text-white mb-2">
+                                    Auto quality
+                                </label>
+                                <select id={qualityModeSelectId} aria-label="Auto quality"
+                                    value={qualityMode}
+                                    onChange={event => onQualityModeChange(parseQualityMode(event.target.value))}
+                                    className="w-full rounded-md border border-white/15 bg-zinc-800 px-2 py-2 text-xs text-white focus-visible:outline-2 focus-visible:outline-[color:var(--accent-primary)]">
+                                    <option value="balanced">Balanced — fits your player</option>
+                                    <option value="highest">Highest — ignore player size</option>
+                                    <option value="saver">Data saver — never sharper than shown</option>
+                                </select>
+                                <p className="mt-2 text-[10px] leading-relaxed text-zinc-400">
+                                    Balanced keeps seeks quick by not fetching more pixels than your
+                                    player shows. Highest follows your connection alone, so seeks on a
+                                    large video can take longer. Applies to this browser only.
+                                </p>
+                            </div>
+                        )}
+
                         {/* Quality Options */}
                         <button
                             type="button"
                             onClick={() => onQualityChange(-1)}
                             aria-pressed={currentQuality === -1}
                             className={cn(
-                                "w-full px-3 py-2 rounded-lg text-left text-xs font-medium transition-all",
+                                "w-full px-3 py-2 rounded-lg text-left text-xs font-medium transition-all flex items-center justify-between",
                                 currentQuality === -1
                                     ? "bg-[color:var(--accent-glow)] text-[color:var(--accent-primary)]"
                                     : "text-zinc-400 hover:bg-white/5 hover:text-white"
                             )}
                         >
-                            Auto
+                            <span>Auto</span>
+                            {currentQuality === -1 && autoHeight ? (
+                                <span data-testid="auto-rung" className="text-[10px] text-zinc-500">{autoHeight}p</span>
+                            ) : null}
                         </button>
                         {qualities.map((q) => (
                             <button

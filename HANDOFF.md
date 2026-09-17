@@ -9,7 +9,7 @@ change it in the same commit that makes it untrue. Newest state first.
 - **Production**: https://w2g.renner.dev runs `main` (see `git log -1`). Deployed
   with `./deploy/deploy.sh`; CI (backend, frontend lint/build, Playwright
   e2e, extension checks, CodeQL, container publish) green on that commit.
-- **Suites**: 588 backend tests (`cd backend && pytest`), 104 Playwright
+- **Suites**: 598 backend tests (`cd backend && pytest`), 114 Playwright
   tests (`cd frontend && npm run test:e2e`), lint 0 errors / 14 warnings.
 - **Admin panel** at `/admin`: rooms with members and a force-close, every
   cache tier with a clear action. Gated by `ADMIN_EMAILS` (set on the host
@@ -22,6 +22,7 @@ change it in the same commit that makes it untrue. Newest state first.
 
 | Commit | What | Why it mattered |
 | --- | --- | --- |
+| _this change_ | Auto quality: a viewer-chosen mode (Balanced/Highest/Data saver), a stats overlay that names the cap, the surface and the measured estimate, three sticky-low fixes, and per-viewer telemetry in the admin panel | A viewer on 1 Gbit was always on a low rendition and nothing could say why. An unmeasured surface (never-laid-out element) capped auto at the ladder's second rung and the cap outlived everything but a CSS resize; a pixel-ratio change never re-capped; the remembered bandwidth was the *last* sample, so one dip ratcheted down every later session. |
 | `5bb0246` | Mono audio: per-viewer downmix in player settings, one graph (`useAudioProcessing`) for levelling and mono | Anything panned hard to one side was lost to a viewer on one earbud or with hearing on one side. The graph used to exist only while levelling was on. |
 | `4413fc0` | Auto quality capped to the drawing surface + one rung of headroom (`ABR_LEVELS_ABOVE_SURFACE`), following resizes | A seek buffered ~5 s: auto had picked 2160p AV1 for a laptop-sized player, whose 13–28 MB segments take seconds each; nothing shows after a seek until one lands. |
 | `a43b7e7` | Proxy refuses bare (unranged) GETs for large googlevideo files | A download manager on one viewer's Chrome pulled every rendition in full — 17 of 18.4 GB served — and starved real segment fetches. See *Performance* below. |
@@ -64,7 +65,11 @@ Measured on 2026-09-15 from the nginx media log (`./deploy/host-status.sh
   (4 s) is the other lever, deliberately small already.
 - **Nothing logs durations**: resolve (yt-dlp), manifest build (index
   probes), and first-segment time are not measured anywhere, so
-  "paste → playing" cannot be broken down from production data yet.
+  "paste → playing" cannot be broken down from production data yet. Per
+  *transfer* this is now covered: every proxy sample carries the identity,
+  the tier that answered (upstream/memory/disk) and the throughput, and the
+  admin panel lists them — so "what was this viewer actually served?" is
+  answerable even though "how long did the resolve take?" still is not.
 
 **Ideas, in the order worth doing them**
 
@@ -82,11 +87,9 @@ Measured on 2026-09-15 from the nginx media log (`./deploy/host-status.sh
    again ~60 s before the current video ends if the entry is older than the
    index cache TTL; refresh the signed URLs at the same point if the cached
    format is near its TTL. The advance then hits caches all the way.
-4. **Overlap segment round trips.** Each Shaka segment costs a full
-   viewer→Cloudflare→tunnel→origin→CDN round trip (hundreds of ms from
-   Japan); segments are fetched one at a time per stream. Try Shaka's
-   `streaming.segmentPrefetchLimit` (2–4) so the next fetches are in flight
-   while one completes. Measure with (1) before and after.
+4. ~~**Overlap segment round trips.**~~ Done: `segmentPrefetchLimit: 2`
+   (`SHAKA_SEGMENT_PREFETCH_LIMIT`). Whether it moved anything is still
+   unmeasured — that needs (1).
 5. **Live streams**: a re-resolve rotates the playlist URL and restarts
    hls.js; keep an eye on the 5-minute live TTL versus token lifetimes.
 

@@ -51,6 +51,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Auto quality is now a choice, and it explains itself**: player settings
+  gained an *Auto quality* mode — Balanced (the cap above, unchanged and
+  still the default), Highest (follow the connection alone, ignoring the
+  player's size) and Data saver (never sharper than the player can show).
+  A viewer watching in a small window on a fast line can now take the other
+  side of that trade; the mode lives in their browser and is never sent to
+  the room. The Auto button names the rung auto settled on, and the
+  statistics overlay reports the cap with the surface it was computed from,
+  the *measured* bandwidth estimate separately from the rendition's declared
+  bitrate, what is remembered from earlier sessions and how old it is, the
+  dropped-frame ratio, and how many rungs this viewer's manifest offered.
+  "Auto is stuck on low" is now a readable screen instead of a guess.
+
+- **Per-viewer serving telemetry** for the admin panel: every proxy sample
+  carries who asked and which tier answered (upstream, memory, disk) with
+  the throughput a streamed transfer reached, and each viewer's player
+  reports what it can see of its own picture — rung, cap, drawing surface,
+  pixel ratio, bandwidth estimate, dropped frames — over the room socket.
+  The open `/api/metrics/proxy` view deliberately omits identities: it is
+  readable by any signed-in viewer.
+
 - **Mono audio**: a per-viewer switch in player settings → Mono audio that
   folds every channel into one, so both speakers carry the same mix. Anything
   panned hard to one side is no longer lost to someone listening through a
@@ -130,6 +151,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   token. Pulsing is kept only for a dropped connection and a live stream.
 
 ### Fixed
+
+- **Auto Quality Could Stick Low And Never Recover**: three ways, all
+  invisible. A player whose element had not been laid out yet measured a
+  drawing surface of zero pixels, which was treated as a very small player
+  and capped auto at the second-lowest rung of the ladder — and the cap was
+  only ever recomputed when the element's CSS box changed, so a viewer who
+  never resized their window kept it for the whole session, through manual
+  picks and back to Auto. An unmeasured surface now caps nothing. Changing
+  the device pixel ratio — dragging the window to a monitor with different
+  scaling — changes no CSS box at all, so the cap stayed computed for the
+  old screen; it is now recomputed when the ratio changes. And what was
+  remembered of the connection was the *last* estimate seen while playing,
+  so a single dip discounted itself into the next session's opening guess,
+  which chose a lower rendition, whose smaller segments measured slower
+  still; the best estimate the connection reached is remembered instead.
+  The statistics overlay can also forget it outright.
+
+- **Fast Measurements Were Thrown Away And Upward Switches Were Invisible**:
+  Shaka was told to ignore any response faster than 20 ms as a browser cache
+  hit — four times its own threshold — which discarded exactly the
+  measurements of viewers close enough to the origin to be served from the
+  proxy's memory in that time. Its own default is used now. A correct upward
+  switch was also appended behind everything already buffered, which for a
+  player that buffers a minute ahead meant up to a minute before the viewer
+  saw it; a switch now clears the buffer beyond a ten-second margin. Shaka
+  also fetches two segments ahead instead of leaving the link idle for a
+  round trip between them.
 
 - **Seeks Buffered For Seconds Because Auto Picked 4K For A Laptop-Sized
   Player**: a fast connection was handed the 2160p AV1 rendition, whose

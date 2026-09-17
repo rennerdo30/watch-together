@@ -20,6 +20,7 @@ import {
   ApiError,
   type AdminCacheReport,
   type AdminOverview,
+  type AdminPlayback,
   clearAdminCache,
   closeAdminRoom,
   fetchAdminCache,
@@ -33,6 +34,21 @@ const SEGMENT_ROWS_SHOWN = 10;
 const FORMAT_URL_MAX_LENGTH = 60;
 
 const numberFormatter = new Intl.NumberFormat();
+
+/**
+ * The full picture behind a viewer's rung, for the row's tooltip: auto
+ * quality is decided in their browser, and these are its inputs.
+ */
+function describePlayback(viewer: AdminPlayback): string {
+    const parts = [
+        `mode ${viewer.mode ?? '?'} (${viewer.engine ?? '?'})`,
+        viewer.surface_px ? `surface ${viewer.surface_px}px @${viewer.pixel_ratio ?? '?'}` : 'surface unknown',
+        viewer.estimate_bps ? `estimate ${(viewer.estimate_bps / 1_000_000).toFixed(2)} Mbps` : 'estimate pending',
+        viewer.dropped_frames !== null ? `dropped ${(viewer.dropped_frames * 100).toFixed(1)}%` : 'dropped ?',
+        `${viewer.ladder_rungs ?? '?'} rungs offered`,
+    ];
+    return parts.join(' · ');
+}
 
 function formatBytes(bytes: number | null | undefined): string {
   if (bytes === null || bytes === undefined) return '—';
@@ -300,6 +316,16 @@ export default function AdminPage() {
                       </td>
                       <td className="py-2 pr-4" title={room.members.join(', ')}>
                         {numberFormatter.format(room.active_users)}
+                        {room.playback.length > 0 && (
+                          <ul className="mt-1 space-y-0.5 text-[10px] font-mono text-neutral-500">
+                            {room.playback.map((viewer) => (
+                              <li key={viewer.member} title={describePlayback(viewer)}>
+                                {viewer.member.split('@')[0]}: {viewer.rung ? `${viewer.rung}p` : '—'}
+                                {viewer.cap ? ` / cap ${viewer.cap}p` : ' / uncapped'}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
                       </td>
                       <td className="max-w-[16rem] truncate py-2 pr-4 text-neutral-300">
                         {room.current_video || '—'}
@@ -524,6 +550,50 @@ export default function AdminPage() {
                             {Object.entries(stats)
                               .map(([key, value]) => `${key} ${numberFormatter.format(value)}`)
                               .join(' · ')}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {Object.keys(cache.proxy.by_cache_tier).length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(cache.proxy.by_cache_tier).map(([tier, stats]) => (
+                    <span key={tier} className="rounded-full bg-white/5 px-3 py-1 text-xs text-neutral-300">
+                      {tier}: {numberFormatter.format(stats.requests ?? 0)} ·{' '}
+                      {formatBytes(stats.bytes_sent ?? 0)}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {cache.proxy.recent_samples.length > 0 && (
+                <div className="max-h-72 overflow-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="ui-label sticky top-0 bg-neutral-900 text-neutral-500">
+                      <tr>
+                        <th className="pb-1.5 pr-4">Viewer</th>
+                        <th className="pb-1.5 pr-4">Tier</th>
+                        <th className="pb-1.5 pr-4">Size</th>
+                        <th className="pb-1.5 pr-4">Took</th>
+                        <th className="pb-1.5 pr-4">Rate</th>
+                        <th className="pb-1.5">Outcome</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/5">
+                      {[...cache.proxy.recent_samples].reverse().map((transfer, index) => (
+                        <tr key={`${transfer.at}-${index}`}>
+                          <td className="max-w-[12rem] truncate py-1.5 pr-4 font-mono text-neutral-400">
+                            {transfer.identity ?? 'anonymous'}
+                          </td>
+                          <td className="py-1.5 pr-4 text-neutral-400">{transfer.cache_tier}</td>
+                          <td className="py-1.5 pr-4 text-neutral-300">{formatBytes(transfer.bytes_sent)}</td>
+                          <td className="py-1.5 pr-4 text-neutral-300">{Math.round(transfer.transfer_ms)} ms</td>
+                          <td className="py-1.5 pr-4 text-neutral-300">
+                            {transfer.mbps === null ? '—' : `${transfer.mbps} Mbps`}
+                          </td>
+                          <td className={`py-1.5 ${transfer.outcome === 'ok' ? 'text-neutral-400' : 'text-amber-300'}`}>
+                            {transfer.outcome}
                           </td>
                         </tr>
                       ))}

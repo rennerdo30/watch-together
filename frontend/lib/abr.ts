@@ -106,9 +106,17 @@ export function latencyAwareAbrFactory(shaka: ShakaAbrModule, onEstimate: (bps: 
  * `surfacePx` is the element height in device pixels. The floor is the
  * smallest rung that covers the surface — or the top rung when none does —
  * and `levelsAbove` rungs beyond it stay allowed for their bitrate.
- * Returns null for an empty ladder.
+ *
+ * Returns null for an empty ladder, and for a surface that has not been
+ * measured yet. A surface of zero is not a very small player: it is an
+ * element the browser has not laid out — a tab that was never painted, for
+ * instance. Treating it as a size would cap auto at the second-lowest rung
+ * of the ladder, and that cap then survives until the element's CSS box
+ * changes, which for a viewer who never resizes their window is the rest of
+ * the session.
  */
 export function autoQualityCap(heights: readonly number[], surfacePx: number, levelsAbove: number): number | null {
+    if (!Number.isFinite(surfacePx) || surfacePx <= 0) return null;
     const rungs = Array.from(new Set(heights.filter((h) => Number.isFinite(h) && h > 0))).sort((a, b) => a - b);
     if (rungs.length === 0) return null;
     const covering = rungs.findIndex((h) => h >= surfacePx);
