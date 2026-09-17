@@ -49,6 +49,16 @@ interface CustomPlayerProps {
     /** Chapters of the video, marked on the seek bar and named beside the time. */
     chapters?: VideoChapter[];
     /**
+     * A member's screen, arriving live from their browser.
+     *
+     * When present it is what the player shows: the engines stand down,
+     * the element is fed the stream directly, and there is nothing to
+     * resolve, fetch or buffer. Everything around it — volume, mute,
+     * fullscreen, the audio graph, the autoplay gate — is the same code
+     * that serves a video.
+     */
+    shareStream?: MediaStream | null;
+    /**
      * What this player can see about its own picture. Auto quality is
      * decided here, from inputs that exist nowhere else — the size the
      * video is drawn at, the pixel ratio, the measured bandwidth, the
@@ -145,6 +155,7 @@ export function CustomPlayer({
     sponsorSegments,
     storyboard,
     chapters,
+    shareStream,
     onQualityReport,
 }: CustomPlayerProps) {
     // === REFS ===
@@ -165,9 +176,11 @@ export function CustomPlayer({
     const pendingProgrammaticSeeksRef = useRef<{ time: number; at: number }[]>([]);
     const pendingProgrammaticPauseRef = useRef(false);
 
+    // A live share is its own source: no manifest, no proxy, no engine.
+    const isShareMode = !!shareStream;
     // Adaptive streams play through one media element, fed by the generated
     // manifest, so the browser muxes audio and video against a single clock.
-    const isMseMode = streamType === 'dash' && !!manifestUrl;
+    const isMseMode = !isShareMode && streamType === 'dash' && !!manifestUrl;
     const src = typeof url === 'string' ? url : url.src;
     const { hostRef: enhancementHostRef, mode: enhancementMode, setMode: setEnhancementMode, status: enhancementStatus } =
         useVideoEnhancement(mediaElement, isMseMode ? manifestUrl! : src);
@@ -231,8 +244,8 @@ export function CustomPlayer({
     const hlsPlayer = useHlsPlayer({
         videoRef,
         // HLS handles the sources MSE does not.
-        src: isMseMode ? '' : src,
-        enabled: !isMseMode,
+        src: isMseMode || isShareMode ? '' : src,
+        enabled: !isMseMode && !isShareMode,
         autoPlay,
         initialTime,
         isLive,
@@ -250,7 +263,7 @@ export function CustomPlayer({
     const shakaPlayer = useShakaPlayer({
         videoRef,
         manifestUrl: manifestUrl ?? '',
-        enabled: isMseMode,
+        enabled: isMseMode && !isShareMode,
         qualityMode,
         autoPlay,
         initialTime,
@@ -274,6 +287,25 @@ export function CustomPlayer({
     });
 
     const isBuffering = isMseMode ? shakaPlayer.isBuffering : hlsPlayer.isBuffering;
+
+    // === A LIVE SHARE IS HANDED TO THE ELEMENT DIRECTLY ===
+    // `srcObject` is the whole playback path for a share: the browser
+    // renders what arrives, with none of the buffering that makes a video
+    // smooth and would make this late.
+    useEffect(() => {
+        const video = videoRef.current;
+        if (!video) return;
+        if (shareStream) {
+            if (video.srcObject !== shareStream) {
+                video.srcObject = shareStream;
+                void startPlayback(video).then(setPlaybackGate);
+            }
+            return;
+        }
+        if (video.srcObject) {
+            video.srcObject = null;
+        }
+    }, [shareStream, mediaElement]);
 
     // === KEEP MEDIA AND CONTROLS ON ONE VOLUME STATE ===
     // A queue transition remounts the player and creates a new media element at
@@ -596,7 +628,7 @@ export function CustomPlayer({
                 poster={poster}
                 className="w-full h-full object-contain"
                 playsInline
-                data-stream-type={isMseMode ? 'mse' : 'hls'}
+                data-stream-type={isShareMode ? 'share' : isMseMode ? 'mse' : 'hls'}
                 onClick={() => {
                     if (isLive) return;
                     // The click that woke the faded controls only reveals them.

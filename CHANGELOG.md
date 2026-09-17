@@ -51,6 +51,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Share your screen with the room**: a member can put their own gameplay
+  on the room's player, live. The picture travels browser to browser — this
+  server relays only the handshake — which is both the lowest latency
+  available and the reason it suits a handful of friends: every viewer
+  costs the sharer another copy of the stream. Pick a window in the
+  browser's own picker, with its sound; the video that was playing pauses
+  and returns afterwards. One member shares at a time, anyone may start,
+  and a sharer who closes their laptop ends it for everyone rather than
+  leaving a frozen frame. Quality is a choice (1080p60, 1440p30, 720p30)
+  with its upload cost stated, and the dialog says plainly that viewers
+  connect directly and can therefore see the sharer's IP address. A relay
+  for networks that refuse a direct path is a deployment setting
+  (`WEBRTC_TURN_URL` and friends) rather than a code change.
+
 - **The room prepares what it is about to need**: both of its jumps are
   known before they happen, and both used to land in an empty buffer on
   bytes nobody had fetched. A SponsorBlock skip now has its destination

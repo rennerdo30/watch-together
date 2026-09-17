@@ -49,6 +49,13 @@ class ConnectionManager:
         self._state_lock = asyncio.Lock()
         # Per-room locks for more granular locking
         self._room_locks: Dict[str, asyncio.Lock] = {}
+        # Map room_id -> the member sharing their screen right now.
+        #
+        # Deliberately not part of `room_states`: that dict is copied to
+        # SQLite on every change, and a share cannot outlive the process
+        # that carries its signalling. A restart leaves no peers, so a
+        # remembered share would only describe something that is gone.
+        self.live_shares: Dict[str, dict] = {}
 
     def member_emails(self, room_id: str) -> List[str]:
         """Identities connected to a room right now, in join order, without duplicates or guests.
@@ -94,6 +101,79 @@ class ConnectionManager:
         }
         websocket.playback_quality = kept
         return kept
+
+    def peers(self, room_id: str) -> List[dict]:
+        """Every browser connected to a room, in join order."""
+        return [
+            {
+                "connection_id": getattr(ws, "connection_id", ""),
+                "email": getattr(ws, "user_email", GUEST_IDENTITY),
+            }
+            for ws in self.active_connections.get(room_id, [])
+            if getattr(ws, "connection_id", None)
+        ]
+
+    async def send_to_connection(self, room_id: str, connection_id: str, message: dict) -> bool:
+        """Deliver a message to one browser in one room.
+
+        The room is part of the address on purpose: signalling carries one
+        member's payload to another, and a connection id from somewhere else
+        must not be reachable with it.
+        """
+        for ws in list(self.active_connections.get(room_id, [])):
+            if getattr(ws, "connection_id", None) != connection_id:
+                continue
+            try:
+                await ws.send_json(message)
+                return True
+            except Exception as exc:
+                logger.warning(f"Failed to deliver to {connection_id} in {room_id}: {exc}")
+                await self.disconnect(ws, room_id)
+                return False
+        return False
+
+    def share_of(self, room_id: str) -> Optional[dict]:
+        """What the room is watching live from one of its own members."""
+        return self.live_shares.get(room_id)
+
+    def start_share(self, room_id: str, websocket: WebSocket, title: str,
+                    quality: str) -> Optional[dict]:
+        """Claim the room's share slot, or None when someone else holds it.
+
+        One at a time: the player shows one thing, and a second stream would
+        have nowhere to go.
+        """
+        connection_id = getattr(websocket, "connection_id", None)
+        if not connection_id:
+            return None
+        current = self.live_shares.get(room_id)
+        if current and current["connection_id"] != connection_id:
+            if any(getattr(ws, "connection_id", None) == current["connection_id"]
+                   for ws in self.active_connections.get(room_id, [])):
+                return None
+            # The holder is gone without a goodbye; the slot is free.
+        share = {
+            "connection_id": connection_id,
+            "email": getattr(websocket, "user_email", GUEST_IDENTITY),
+            "title": title,
+            "quality": quality,
+            "started_at": time.time(),
+        }
+        self.live_shares[room_id] = share
+        return share
+
+    def stop_share(self, room_id: str, websocket: WebSocket) -> Optional[dict]:
+        """End the share. Its owner may, and so may the room's admin."""
+        share = self.live_shares.get(room_id)
+        if not share:
+            return None
+        connection_id = getattr(websocket, "connection_id", None)
+        email = getattr(websocket, "user_email", None)
+        is_owner = share["connection_id"] == connection_id
+        is_admin = self.room_states.get(room_id, {}).get("roles", {}).get(email) == "admin"
+        if not (is_owner or is_admin):
+            return None
+        return self.live_shares.pop(room_id, None)
 
     def _get_room_lock(self, room_id: str) -> asyncio.Lock:
         """Get or create a lock for a specific room."""
@@ -258,6 +338,12 @@ class ConnectionManager:
                 elapsed = time.time() - state.get("last_sync_time", time.time())
                 state["timestamp"] = state.get("timestamp", 0) + elapsed
 
+        # Who is connected, by connection rather than by person: signalling
+        # addresses browsers, and one member can have several.
+        state["peers"] = self.peers(room_id)
+        # What is being shared right now, if anything.
+        state["live_share"] = self.live_shares.get(room_id)
+
         # Don't send internal tracking info to clients
         state.pop("last_sync_time", None)
         state.pop("sponsor_video", None)
@@ -382,6 +468,10 @@ class ConnectionManager:
             # Append connection inside lock to prevent race condition
             self.active_connections[room_id].append(websocket)
             setattr(websocket, "user_email", user_email)
+            # Peers address each other by connection, not by person: the
+            # same member in two tabs is two browsers, each needing its own
+            # stream.
+            setattr(websocket, "connection_id", uuid.uuid4().hex)
 
         await self._save_room_state(room_id)
 
@@ -392,6 +482,7 @@ class ConnectionManager:
         # Send adjusted current room state to the new user
         sync_payload = self.get_sync_payload(room_id)
         sync_payload["your_email"] = user_email
+        sync_payload["your_connection_id"] = getattr(websocket, "connection_id", "")
         await websocket.send_json({
             "type": "sync",
             "payload": sync_payload
@@ -408,6 +499,16 @@ class ConnectionManager:
         if room_id in self.active_connections:
             if websocket in self.active_connections[room_id]:
                 self.active_connections[room_id].remove(websocket)
+
+            # A sharer who closes their laptop must not leave the room
+            # watching a player that will never receive another frame.
+            share = self.live_shares.get(room_id)
+            if share and share["connection_id"] == getattr(websocket, "connection_id", None):
+                del self.live_shares[room_id]
+                await self.broadcast({
+                    "type": "share_ended",
+                    "payload": {"reason": "disconnected", "email": share["email"]},
+                }, room_id)
             
             # Update members list
             active_emails = [getattr(ws, "user_email", GUEST_IDENTITY) for ws in self.active_connections[room_id]]
@@ -445,6 +546,7 @@ class ConnectionManager:
                         del self.room_states[rid]
                     if rid in self._room_locks:
                         del self._room_locks[rid]
+                    self.live_shares.pop(rid, None)
                     await delete_room(rid)
                     logger.info(f"Cleaned up stale room: {rid}")
 
@@ -476,6 +578,7 @@ class ConnectionManager:
             except Exception:
                 pass
         self.active_connections.pop(room_id, None)
+        self.live_shares.pop(room_id, None)
         async with self._state_lock:
             self.room_states.pop(room_id, None)
             self._room_locks.pop(room_id, None)

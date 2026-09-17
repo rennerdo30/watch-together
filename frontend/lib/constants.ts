@@ -217,6 +217,23 @@ export const SHAKA_CACHE_LOAD_THRESHOLD_MS = 5;
 export const PLAYER_STATS_REFRESH_MS = 1000;
 
 /**
+ * What a screen share costs and looks like.
+ *
+ * Every viewer receives their own copy from the sharer's machine, so the
+ * bitrate here is spent once per viewer: four friends on `smooth` is about
+ * 32 Mbit/s of upload. Gameplay is motion, so the presets buy frame rate
+ * before resolution, and `light` exists for a thin uplink.
+ */
+export const SHARE_QUALITY_PRESETS = {
+    smooth: { label: 'Smooth — 1080p60', width: 1920, height: 1080, frameRate: 60, maxBitrateBps: 8_000_000 },
+    sharp: { label: 'Sharp — 1440p30', width: 2560, height: 1440, frameRate: 30, maxBitrateBps: 10_000_000 },
+    light: { label: 'Light — 720p30', width: 1280, height: 720, frameRate: 30, maxBitrateBps: 3_000_000 },
+} as const;
+
+export type ShareQuality = keyof typeof SHARE_QUALITY_PRESETS;
+export const DEFAULT_SHARE_QUALITY: ShareQuality = 'smooth';
+
+/**
  * How close to the end of a video its successor is prepared, in seconds.
  *
  * The server does this on its own beat; the client asks as well, because
