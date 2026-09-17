@@ -73,11 +73,11 @@ services:
       BROWSER_ADMIN_PASSWORD: ${BROWSER_ADMIN_PASSWORD:-}
       BROWSER_PUBLIC_IP: ${BROWSER_PUBLIC_IP:-}
       BROWSER_UDP_PORTS: ${BROWSER_UDP_PORTS:-}
-      # A TURN relay, shared with screen sharing: the same three values serve
-      # both, and either one alone is enough to make the browser usable.
+      # Whether a TURN relay exists for neko's media at all. The relay's
+      # credentials reach the container through BROWSER_ICE_SERVERS; nothing
+      # else reads these, because screen sharing is carried by the backend
+      # itself and no browser is handed ICE servers any more.
       WEBRTC_TURN_URL: ${WEBRTC_TURN_URL:-}
-      WEBRTC_TURN_USERNAME: ${WEBRTC_TURN_USERNAME:-}
-      WEBRTC_TURN_CREDENTIAL: ${WEBRTC_TURN_CREDENTIAL:-}
     volumes:
       # SQLite database and the segment cache. Cookies are never on it.
       - backend_data:/app/data

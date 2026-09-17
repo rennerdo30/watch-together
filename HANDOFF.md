@@ -57,7 +57,8 @@ thresholds: `backend/services/playback_quality.py`.
 | --- | --- | --- |
 | `3c53078` | Per-viewer telemetry in the backend log (one INFO line per change, with a verdict), `host-status.sh --quality`, and a bounded history the admin panel shows | The reports existed but only a browser signed in to Access could read them, and only while the viewer was connected — from the host every admin call is a 401, by design. See *Reading per-viewer telemetry from the host* above. |
 | `c5b7a16` | Shared browser: a neko container in the room's player, opened and closed over the room socket, sessions minted server-side | The first thing the tunnel cannot carry. Media is WebRTC, the origin publishes nothing, so it is opt-in and reports *why* it is unavailable rather than offering a button — see *Shared browser* below. |
-| `72c2de6` | Screen sharing: a member's gameplay on the room's player, peer to peer, signalling over the room socket | The first thing a room can watch that this server does not fetch. Media never touches the origin, so it works behind the tunnel with no open port — and is bounded to a few viewers, since the sharer sends one copy each. |
+| _pending_ | Screen sharing carried by the server: `MediaRecorder` up `/ws/share/{room}`, a copy per viewer down, Media Source Extensions at the other end. The peer-to-peer transport, its signalling and `/api/webrtc/ice` are deleted | Peer to peer only worked when the two networks found each other, which behind this tunnel is a coin toss. The relay works from anywhere, at ~365 ms measured instead of ~200 ms, and at the server's bandwidth per viewer. See *Screen sharing* below. |
+| `72c2de6` | Screen sharing: a member's gameplay on the room's player, peer to peer, signalling over the room socket | The first thing a room could watch that this server did not fetch — and the transport above replaced it. |
 | _pending_ | Prewarming the next queue entry works: the deadline in a signed URL is read before it is fetched (`services/stream_expiry.py`), a queued video whose URLs have under `STREAM_URL_MIN_LIFETIME_SECONDS` left is re-resolved once through the coalesced resolve path, one that still cannot be prepared is left alone for `PREWARM_RETRY_AFTER_SECONDS`, and a refused speculative probe is a debug line | `a1a0a16` shipped it failing 100% in production: 126 `Probe of … returned 403` and nine × `Prepared 0/14 representations` for one advance. A queue entry keeps the resolve it was added with; past its `expire` every probe of it is refused, and it was re-probed on all nine heartbeats of the warming window. |
 | `a1a0a16` | Prewarming: a skip's destination warmed at the right byte offset (new subsegment table from the `sidx`), the next queue entry probed and warmed near the end of the current video, from both server and client; player buffers 3 min | Every jump the room makes is scheduled, and each landed in an empty buffer on bytes nobody had fetched. **The next-entry half never worked as shipped** — see the row above. |
 | `2f1ce07` | Auto quality: a viewer-chosen mode (Balanced/Highest/Data saver), a stats overlay that names the cap, the surface and the measured estimate, three sticky-low fixes, and per-viewer telemetry in the admin panel | A viewer on 1 Gbit was always on a low rendition and nothing could say why. An unmeasured surface (never-laid-out element) capped auto at the ladder's second rung and the cap outlived everything but a CSS resize; a pixel-ratio change never re-capped; the remembered bandwidth was the *last* sample, so one dip ratcheted down every later session. |
@@ -73,21 +74,41 @@ thresholds: `backend/services/playback_quality.py`.
 
 Earlier history: `CHANGELOG.md` (kept per change) and `git log`.
 
-## Screen sharing: what the tests cannot prove
+## Screen sharing: the server carries it, and what that costs
 
-`frontend/e2e/screen-share.spec.ts` stubs only the screen picker; the
-handshake, the peer connection and the stream arriving on the viewer's
-element are real. It deliberately stops short of asserting that frames
-flow, because a sandboxed runner blocks UDP between two browsers on the
-same host: candidates are gathered on both sides and every connectivity
-check fails. If you strengthen that test, do it on a machine where local
-peer-to-peer works, and expect `--disable-features=WebRtcHideLocalIpsWithMdns`
-(already set in the spec) to be necessary but not sufficient.
+The media goes through this process, on `/ws/share/{room}`: `MediaRecorder`
+in the sharer's browser, a WebSocket up, a copy per viewer down, Media
+Source Extensions at the other end. The peer-to-peer transport is gone —
+the origin publishes no ports and the tunnel carries HTTP and WebSocket
+only, so a direct path worked only when two networks happened to find each
+other.
 
-Peer-to-peer also means the sharer's uplink carries one copy per viewer,
-and that viewers see each other's IP addresses. `WEBRTC_TURN_URL` /
-`WEBRTC_TURN_USERNAME` / `WEBRTC_TURN_CREDENTIAL` add a relay without code
-changes (it hides addresses and rescues strict NATs, at a bandwidth cost).
+What to keep in mind when touching it:
+
+- **It is fully testable now.** `frontend/e2e/screen-share.spec.ts` stubs
+  the screen picker and asserts real playback — `readyState`, `videoWidth`,
+  an advancing clock — plus the delay, measured from a pixel changing on
+  the sharer's canvas to the same pixel decoded by a viewer. Locally that
+  is ~365 ms; the floor is `SHARE_TIMESLICE_MS`, because nothing can be
+  relayed before its chunk is complete.
+- **A viewer may only be started at a cluster.** `services/webm.py` finds
+  them. Starting one at an arbitrary chunk boundary fails permanently in
+  Chromium (`CHUNK_DEMUXER_ERROR_APPEND_FAILED`) about one join in eight —
+  that was measured, not reasoned about. The same rule is what a viewer
+  that fell behind is restarted with.
+- **The bandwidth is the server's.** One 8 Mbit/s capture and five viewers
+  is 40 Mbit/s of upload from a single Python worker that also runs the
+  segment proxy. `SHARE_RELAY_MAX_VIEWERS` and `SHARE_RELAY_MAX_ROOMS` are
+  the ceilings; the quality presets are the other half of the bill.
+- **What is not proven by any test**: behaviour on a genuinely slow viewer
+  connection. The drop policy is driven directly in
+  `backend/tests/test_share_relay.py` (a viewer whose queue is never
+  drained), but no test throttles a real browser. If a viewer reports
+  freezing, look for `Restarting … on the share in …` at INFO, which is one
+  line per dropped backlog.
+
+`WEBRTC_TURN_URL` survives for the shared browser alone; no browser is ever
+handed ICE servers any more.
 
 ## Shared browser: what the tests cannot prove
 

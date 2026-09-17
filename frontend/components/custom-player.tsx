@@ -13,7 +13,10 @@ import type { VideoChapter } from '@/lib/chapters';
 import { useLocalStorageState, parseStoredBoolean } from '@/lib/hooks/useLocalStorageState';
 import { DEFAULT_QUALITY_MODE, parseQualityMode, type QualityMode } from '@/lib/quality-mode';
 import { forgetBandwidth, readRememberedEstimate } from '@/lib/bandwidth-memory';
-import { PLAYER_STATS_REFRESH_MS, QUALITY_REPORT_INTERVAL_MS } from '@/lib/constants';
+import {
+    PLAYER_STATS_REFRESH_MS, QUALITY_REPORT_INTERVAL_MS,
+    SHARE_LIVE_EDGE_CHECK_MS, SHARE_LIVE_EDGE_MAX_SECONDS,
+} from '@/lib/constants';
 import { useVideoEnhancement } from './player/hooks/useVideoEnhancement';
 
 interface CustomPlayerProps {
@@ -49,15 +52,20 @@ interface CustomPlayerProps {
     /** Chapters of the video, marked on the seek bar and named beside the time. */
     chapters?: VideoChapter[];
     /**
-     * A member's screen, arriving live from their browser.
+     * A member's screen, live.
      *
-     * When present it is what the player shows: the engines stand down,
-     * the element is fed the stream directly, and there is nothing to
-     * resolve, fetch or buffer. Everything around it — volume, mute,
-     * fullscreen, the audio graph, the autoplay gate — is the same code
-     * that serves a video.
+     * Two shapes, one seam, because the sharer and the room are watching
+     * the same picture by different routes. The sharer holds the capture
+     * itself — a `MediaStream`, which goes on `srcObject` with no encoding,
+     * no server and no delay. Everyone else is watching what the server
+     * relayed, which arrives as container chunks and therefore as a
+     * `MediaSource`: a string, which goes on `src`.
+     *
+     * Either way the engines stand down and there is nothing to resolve or
+     * proxy, and everything around it — volume, mute, fullscreen, the audio
+     * graph, the autoplay gate — is the same code that serves a video.
      */
-    shareStream?: MediaStream | null;
+    shareSource?: MediaStream | string | null;
     /**
      * What this player can see about its own picture. Auto quality is
      * decided here, from inputs that exist nowhere else — the size the
@@ -155,7 +163,7 @@ export function CustomPlayer({
     sponsorSegments,
     storyboard,
     chapters,
-    shareStream,
+    shareSource,
     onQualityReport,
 }: CustomPlayerProps) {
     // === REFS ===
@@ -177,7 +185,7 @@ export function CustomPlayer({
     const pendingProgrammaticPauseRef = useRef(false);
 
     // A live share is its own source: no manifest, no proxy, no engine.
-    const isShareMode = !!shareStream;
+    const isShareMode = !!shareSource;
     // Adaptive streams play through one media element, fed by the generated
     // manifest, so the browser muxes audio and video against a single clock.
     const isMseMode = !isShareMode && streamType === 'dash' && !!manifestUrl;
@@ -289,23 +297,55 @@ export function CustomPlayer({
     const isBuffering = isMseMode ? shakaPlayer.isBuffering : hlsPlayer.isBuffering;
 
     // === A LIVE SHARE IS HANDED TO THE ELEMENT DIRECTLY ===
-    // `srcObject` is the whole playback path for a share: the browser
-    // renders what arrives, with none of the buffering that makes a video
-    // smooth and would make this late.
+    // No engine, no manifest, no proxy: either the capture itself on
+    // `srcObject`, or the relayed stream's `MediaSource` on `src`.
     useEffect(() => {
         const video = videoRef.current;
         if (!video) return;
-        if (shareStream) {
-            if (video.srcObject !== shareStream) {
-                video.srcObject = shareStream;
+        if (shareSource instanceof MediaStream) {
+            if (video.srcObject !== shareSource) {
+                video.removeAttribute('src');
+                video.srcObject = shareSource;
                 void startPlayback(video).then(setPlaybackGate);
             }
             return;
         }
-        if (video.srcObject) {
+        if (typeof shareSource === 'string') {
+            if (video.src === shareSource) return;
             video.srcObject = null;
+            video.src = shareSource;
+            // Nothing is decodable the instant the object URL is set: the
+            // first chunk still has to arrive and be appended. The listener
+            // is removed on the way out, because a source that is replaced
+            // before it ever loaded — a resync does exactly that — would
+            // otherwise leave one behind for every attempt.
+            const start = () => { void startPlayback(video).then(setPlaybackGate); };
+            video.addEventListener('loadeddata', start, { once: true });
+            return () => video.removeEventListener('loadeddata', start);
         }
-    }, [shareStream, mediaElement]);
+        if (video.srcObject) video.srcObject = null;
+    }, [shareSource, mediaElement]);
+
+    // === A SHARE IS ONLY WORTH WATCHING LIVE ===
+    // Every stall leaves the element playing at 1x from wherever it stopped,
+    // so delay accumulates and never comes back on its own. Past
+    // SHARE_LIVE_EDGE_MAX_SECONDS behind the newest buffered frame, the
+    // viewer is simply moved forward — a visible jump, and better than
+    // watching a conversation that finished half a minute ago.
+    useEffect(() => {
+        if (typeof shareSource !== 'string') return;
+        const video = videoRef.current;
+        if (!video) return;
+        const interval = setInterval(() => {
+            const buffered = video.buffered;
+            if (!buffered.length) return;
+            const edge = buffered.end(buffered.length - 1);
+            if (edge - video.currentTime > SHARE_LIVE_EDGE_MAX_SECONDS) {
+                video.currentTime = edge;
+            }
+        }, SHARE_LIVE_EDGE_CHECK_MS);
+        return () => clearInterval(interval);
+    }, [shareSource, mediaElement]);
 
     // === KEEP MEDIA AND CONTROLS ON ONE VOLUME STATE ===
     // A queue transition remounts the player and creates a new media element at

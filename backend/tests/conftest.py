@@ -123,6 +123,25 @@ def empty_cookie_store():
 
 
 @pytest.fixture(autouse=True)
+def no_share_is_left_relaying():
+    """A share one test started must not hold a relay slot in the next.
+
+    The relay carries at most SHARE_RELAY_MAX_ROOMS shares at once, so a
+    leaked one would make a later test's share be refused for reasons that
+    have nothing to do with it.
+    """
+    from services.share_relay import relay
+
+    def clear():
+        for entry in relay.snapshot():
+            relay.end(entry["room_id"])
+
+    clear()
+    yield
+    clear()
+
+
+@pytest.fixture(autouse=True)
 def empty_playback_history():
     """One test's viewers never show up in another's telemetry."""
     from services.playback_quality import history
