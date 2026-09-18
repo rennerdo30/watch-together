@@ -1,14 +1,16 @@
 'use client';
 
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
-import Hls from 'hls.js';
+import Hls, { type LevelDetails } from 'hls.js';
 
 import { startPlayback, type PlaybackStart } from '@/lib/playback';
+import { liveSyncTargetSeconds } from '@/lib/live-latency';
 import {
     HLS_BACK_BUFFER_SECONDS,
     HLS_BUFFER_LENGTH_SECONDS,
     HLS_BUFFER_SIZE_BYTES,
     HLS_MAX_BUFFER_LENGTH_SECONDS,
+    LIVE_SYNC_MAX_PLAYBACK_RATE,
 } from '@/lib/constants';
 
 export interface UseHlsPlayerOptions {
@@ -235,13 +237,25 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
             const hls = new Hls({
                 enableWorker: true,
                 lowLatencyMode: isLive,
+                // Nothing this player is handed carries HLS interstitials —
+                // yt-dlp resolves a plain media playlist — and hls.js's
+                // interstitial controller answers `startLoad(position)` by
+                // restarting the primary stream at the position *it* last
+                // resolved, which silently undoes the live alignment below.
+                enableInterstitialPlayback: false,
                 // How far ahead playback is carried without the network;
                 // see the constants for what bounds it.
                 backBufferLength: HLS_BACK_BUFFER_SECONDS,
                 maxBufferLength: HLS_BUFFER_LENGTH_SECONDS,
                 maxMaxBufferLength: HLS_MAX_BUFFER_LENGTH_SECONDS,
                 maxBufferSize: HLS_BUFFER_SIZE_BYTES,
-                liveSyncDurationCount: 4,       // Sync 4 segments behind live edge (was 3)
+                // How far behind the edge to play is not configured here: it
+                // is derived from the playlist once one has been read, below.
+                // hls.js only trims latency by playing slightly fast while
+                // low-latency mode is on — its latency controller ignores the
+                // rate outright when it is off — so the flag earns its place
+                // even on playlists without LL-HLS parts.
+                maxLiveSyncPlaybackRate: LIVE_SYNC_MAX_PLAYBACK_RATE,
                 // Quality selection
                 startLevel: -1,                 // Auto-select initial quality
                 abrBandWidthFactor: 0.9,        // Conservative quality selection
@@ -280,6 +294,46 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
                 }, RETRY_COOLDOWN_MS);
             };
             recoverStalledLiveRef.current = () => scheduleRecovery(() => hls.loadSource(src));
+
+            // === HOW FAR BEHIND THE LIVE EDGE TO PLAY ===
+            // Only the playlist knows: `#EXT-X-TARGETDURATION` is an upper
+            // bound (Twitch declares 6 for 2-second segments), so the target
+            // comes from the segment durations and the window they span, and
+            // is re-derived whenever the playlist changes — a stream that
+            // switches segment length keeps a sensible cushion.
+            let appliedLiveSync = 0;
+            let liveSyncAligned = false;
+            const applyLiveSyncTarget = (details: LevelDetails) => {
+                if (!details.live) return;
+                const target = liveSyncTargetSeconds({
+                    segmentDurations: details.fragments.map((fragment) => fragment.duration),
+                    targetDuration: details.targetduration,
+                    windowDuration: details.totalduration,
+                });
+                if (target === appliedLiveSync) return;
+                appliedLiveSync = target;
+                // The setter, not `config.liveSyncDuration`: it is what makes
+                // the latency controller prefer this over the playlist's own
+                // HOLD-BACK and over the duration-count default.
+                hls.targetLatency = target;
+                console.log(
+                    `[HLS] Live sync target ${target.toFixed(1)}s behind the edge ` +
+                    `(${details.fragments.length} segments, declared target ${details.targetduration}s, ` +
+                    `window ${details.totalduration.toFixed(1)}s)`
+                );
+                // hls.js had already chosen where to start — from the
+                // declared target duration — before this first playlist
+                // reached us: its own handler for the event runs first, and
+                // the starting fragment is picked only once. Restart the load
+                // at the derived position while nothing is buffered and the
+                // element has not moved, so a viewer sees nothing of it.
+                if (liveSyncAligned) return;
+                liveSyncAligned = true;
+                const syncPosition = hls.liveSyncPosition;
+                if (syncPosition !== null) hls.startLoad(syncPosition);
+            };
+            hls.on(Hls.Events.LEVEL_LOADED, (_, data) => applyLiveSyncTarget(data.details));
+            hls.on(Hls.Events.LEVEL_UPDATED, (_, data) => applyLiveSyncTarget(data.details));
 
             hls.loadSource(src);
             hls.attachMedia(video);
