@@ -9,7 +9,7 @@ change it in the same commit that makes it untrue. Newest state first.
 - **Production**: https://w2g.renner.dev runs `main` (see `git log -1`). Deployed
   with `./deploy/deploy.sh`; CI (backend, frontend lint/build, Playwright
   e2e, extension checks, CodeQL, container publish) green on that commit.
-- **Suites**: 757 backend tests (`cd backend && pytest`), 125 Playwright
+- **Suites**: 757 backend tests (`cd backend && pytest`), 129 Playwright
   tests (`cd frontend && npm run test:e2e`), lint 0 errors / 14 warnings.
 - **Admin panel** at `/admin`: rooms with members and a force-close, every
   cache tier with a clear action. Gated by `ADMIN_EMAILS` (set on the host
@@ -55,6 +55,7 @@ thresholds: `backend/services/playback_quality.py`.
 
 | Commit | What | Why it mattered |
 | --- | --- | --- |
+| _pending_ | Live HLS latency derived from the playlist (`frontend/lib/live-latency.ts`) instead of counting declared target durations; catch-up by playback rate; hls.js interstitials off | A Twitch stream sat 24s behind the edge of a 30s window and stalled whenever a playlist refresh was late. See *Live HLS latency* below. |
 | `3c53078` | Per-viewer telemetry in the backend log (one INFO line per change, with a verdict), `host-status.sh --quality`, and a bounded history the admin panel shows | The reports existed but only a browser signed in to Access could read them, and only while the viewer was connected — from the host every admin call is a 401, by design. See *Reading per-viewer telemetry from the host* above. |
 | `c5b7a16` | Shared browser: a neko container in the room's player, opened and closed over the room socket, sessions minted server-side | The first thing the tunnel cannot carry. Media is WebRTC, the origin publishes nothing, so it is opt-in and reports *why* it is unavailable rather than offering a button — see *Shared browser* below. |
 | _pending_ | Screen sharing carried by the server: `MediaRecorder` up `/ws/share/{room}`, a copy per viewer down, Media Source Extensions at the other end. The peer-to-peer transport, its signalling and `/api/webrtc/ice` are deleted | Peer to peer only worked when the two networks found each other, which behind this tunnel is a coin toss. The relay works from anywhere, at ~365 ms measured instead of ~200 ms, and at the server's bandwidth per viewer. See *Screen sharing* below. |
@@ -135,6 +136,44 @@ response, and that a room with no media path says so.
   open from outside; with TURN, check neko gathers a relay candidate — the
   frontend ICE list alone is the plausible mistake, and it looks fine until
   nobody sees anything.
+
+## Live HLS latency: the declared target duration is a lie
+
+`#EXT-X-TARGETDURATION` is an upper bound, not a measurement. Twitch declares
+6 and ships `#EXTINF:2.000` segments, 15 of them — a 30s window. hls.js's
+`liveSyncDurationCount` counts the *declared* number, so 4 put the playhead
+24s behind the live edge with 6s of window left: one late playlist refresh
+and the playhead was off the back, hls.js seeked, and the drift started over.
+The two symptoms (20s behind, repeated stalls) were one cause.
+
+`lib/live-latency.ts` derives the target from the playlist instead — the
+median real segment duration × `LIVE_SYNC_SEGMENT_COUNT`, floored at
+`LIVE_SYNC_MIN_SECONDS`, capped at `LIVE_SYNC_MAX_WINDOW_FRACTION` of
+`totalduration`. Twitch: 6s. YouTube live (5s segments): 15s. Re-derived on
+every playlist update, so a stream that changes segment length follows.
+
+Three things are worth knowing before touching this again:
+
+- **hls.js picks the starting fragment before you hear about the playlist.**
+  Its own `LEVEL_LOADED` handlers run first and choose the start position
+  from the config as it stands, so setting the target from that event is not
+  enough: the hook also calls `hls.startLoad(hls.liveSyncPosition)` once per
+  live source, while nothing is buffered and the element has not moved.
+- **`enableInterstitialPlayback: false` is load-bearing.** With interstitials
+  on, `hls.startLoad(position)` is intercepted by the interstitial controller,
+  which restarts the primary stream at the position *it* last resolved — the
+  alignment above was silently undone, and the fix looked like it did nothing
+  (the playlist logged the new target; the player still loaded the old
+  fragment). Nothing this player is handed carries HLS interstitials.
+- **`maxLiveSyncPlaybackRate` only works while `lowLatencyMode` is on.**
+  hls.js's latency controller returns early when it is off, so the flag stays
+  on for live even though neither Twitch nor YouTube advertises LL-HLS parts
+  or blocking reloads. With parts absent, that is all the flag does here.
+
+The e2e proof is in `frontend/e2e/hls-auto-quality.spec.ts`: the arithmetic
+is pinned as a pure function, and two live fixtures (Twitch-shaped and
+YouTube-shaped) assert *which segment* the player asks for first — the only
+observable that says where it decided to start.
 
 ## Performance: findings and open ideas
 
