@@ -120,6 +120,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A Twitch Stream Stalled Repeatedly, 20 Seconds Behind Live**: one cause,
+  not two. hls.js was told to sit four *declared* target durations behind the
+  edge, and a declared target is an upper bound: Twitch declares
+  `#EXT-X-TARGETDURATION:6` and ships 2-second segments, so the playhead
+  parked 24s back inside a 30s sliding window. Six seconds of headroom meant
+  a playlist refresh arriving late dropped the playhead off the back of the
+  window, hls.js seeked to recover — the stall — and the drift began again.
+  The target is now derived from the segments the playlist actually lists
+  (`frontend/lib/live-latency.ts`): three real segments, never below
+  `LIVE_SYNC_MIN_SECONDS`, never past `LIVE_SYNC_MAX_WINDOW_FRACTION` of the
+  window. Twitch gets 6s behind the edge with 24s of window to spare;
+  YouTube live, whose segments are 5s, gets 15s — a fixed number of seconds
+  could not have served both. hls.js now also trims residual latency by
+  playing up to `LIVE_SYNC_MAX_PLAYBACK_RATE` (1.05×) instead of seeking, and
+  its interstitial controller is off: it answers `startLoad(position)` by
+  restarting at the position it last resolved itself, which silently undid
+  the alignment.
 - **The Extension Kept Disappearing From Chrome**: it states its own
   identity now — a `key` in the Chrome manifest and a `browser_specific_settings`
   id for Firefox. Without one, a browser invents an identity: Chrome derives
