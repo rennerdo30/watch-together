@@ -81,6 +81,52 @@ export const HLS_BUFFER_SIZE_BYTES = 200 * 1000 * 1000;
 export const HLS_BACK_BUFFER_SECONDS = 120;
 
 /**
+ * How far behind the live edge a live HLS stream is played.
+ *
+ * hls.js counts this in *declared* target durations
+ * (`liveSyncDurationCount × #EXT-X-TARGETDURATION`), and a declared target is
+ * an upper bound, not a measurement: Twitch declares 6 and ships 2-second
+ * segments, so four of them parked the playhead 24s behind the edge inside a
+ * 30s sliding window. Six seconds of headroom is nothing — one late playlist
+ * refresh dropped the playhead off the back of the window, hls.js jumped to
+ * recover (a visible stall), and the drift started again. The target is
+ * therefore derived from the segments the playlist actually contains; see
+ * `lib/live-latency`.
+ *
+ * - `LIVE_SYNC_SEGMENT_COUNT`: three real segments. A player needs the
+ *   segment it is playing plus the next one already in hand; the third is the
+ *   one a late refresh is allowed to cost. It is also the distance from the
+ *   edge that HLS itself guarantees is playable (RFC 8216 §6.3.3).
+ * - `LIVE_SYNC_MIN_SECONDS`: a floor, because three segments of a
+ *   one-second stream is three seconds — less than a single round trip to
+ *   this origin and back for a viewer on another continent.
+ * - `LIVE_SYNC_MAX_WINDOW_FRACTION`: a ceiling measured against the sliding
+ *   window (`totalduration`), which is the failure this fixes: at 24s of 30s
+ *   the playhead sat in the last fifth of the window. Keeping it inside the
+ *   first 40% leaves the majority of the window as the cushion it is for.
+ *
+ * Twitch (2s segments, target 6, 30s window): 3 × 2 = 6s, floor and ceiling
+ * (12s) both idle — 6s behind, 24s of window to spare.
+ * YouTube live (5s segments, 60s window): 3 × 5 = 15s, ceiling 24s idle.
+ * A fixed number could not serve both; a 5s-segment stream held 8s from the
+ * edge has barely one segment of slack.
+ */
+export const LIVE_SYNC_SEGMENT_COUNT = 3;
+export const LIVE_SYNC_MIN_SECONDS = 4;
+export const LIVE_SYNC_MAX_WINDOW_FRACTION = 0.4;
+
+/**
+ * How fast a live stream may be played to trim latency back to the target.
+ *
+ * hls.js otherwise closes the gap by seeking, which is a visible stall; five
+ * percent is inaudible and unwatchable-for. It only takes effect while
+ * `lowLatencyMode` is on — hls.js's latency controller ignores the rate
+ * entirely when it is off — which is why live playback keeps that flag even
+ * though neither Twitch nor YouTube advertises LL-HLS parts.
+ */
+export const LIVE_SYNC_MAX_PLAYBACK_RATE = 1.05;
+
+/**
  * How much must be buffered before playback starts or resumes.
  *
  * This is paid in full on every seek: the buffer is empty at the new
