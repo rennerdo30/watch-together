@@ -54,6 +54,13 @@ export interface ShakaQualityLevel {
     index: number;
 }
 
+export interface ShakaAudioTrack {
+    index: number;
+    language: string;
+    label: string;
+    isOriginal: boolean;
+}
+
 export interface ShakaStats {
     /** Declared bitrate of the active variant, in bits per second. */
     bandwidth: number;
@@ -145,10 +152,13 @@ export interface UseShakaPlayerReturn {
     isLoading: boolean;
     isBuffering: boolean;
     qualities: ShakaQualityLevel[];
+    audioTracks: ShakaAudioTrack[];
+    currentAudioTrack: number;
     /** Selected track id, or -1 when quality is chosen automatically. */
     currentQuality: number;
     stats: ShakaStats;
     setQuality: (index: number) => void;
+    setAudioTrack: (index: number) => void;
     isSupported: boolean;
 }
 
@@ -185,6 +195,21 @@ interface ShakaVariantTrack {
     bandwidth?: number | null;
     videoCodec?: string | null;
     audioCodec?: string | null;
+}
+
+interface ShakaVideoTrack {
+    active: boolean;
+    height?: number | null;
+    width?: number | null;
+    bandwidth?: number | null;
+}
+
+interface ShakaAudioTrackInternal {
+    active: boolean;
+    language: string;
+    label?: string | null;
+    roles: string[];
+    primary: boolean;
 }
 
 interface ShakaBufferingEvent {
@@ -245,7 +270,10 @@ interface ShakaPlayerInstance {
     configure(config: Record<string, unknown>): void;
     getConfiguration(): { abr: { restrictions: { maxHeight: number } } } & Record<string, unknown>;
     getVariantTracks(): ShakaVariantTrack[];
-    selectVariantTrack(track: ShakaVariantTrack, clearBuffer?: boolean): void;
+    getVideoTracks(): ShakaVideoTrack[];
+    selectVideoTrack(track: ShakaVideoTrack, clearBuffer?: boolean): void;
+    getAudioTracks(): ShakaAudioTrackInternal[];
+    selectAudioTrack(track: ShakaAudioTrackInternal): void;
     addEventListener(type: string, listener: (event: Event) => void): void;
     removeEventListener(type: string, listener: (event: Event) => void): void;
 }
@@ -319,7 +347,10 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
     const [isLoading, setIsLoading] = useState(false);
     const [isBuffering, setIsBuffering] = useState(false);
     const [qualities, setQualities] = useState<ShakaQualityLevel[]>([]);
+    const [audioTracks, setAudioTracks] = useState<ShakaAudioTrack[]>([]);
+    const [currentAudioTrack, setCurrentAudioTrack] = useState(-1);
     const [currentQuality, setCurrentQuality] = useState(AUTO_QUALITY);
+    const manualHeightRef = useRef<number | null>(null);
     const [stats, setStats] = useState<ShakaStats>(EMPTY_STATS);
     const [isSupported, setIsSupported] = useState(true);
 
@@ -331,8 +362,9 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
 
     const readTracks = useCallback((instance: ShakaPlayerInstance) => {
         const variants = instance.getVariantTracks();
+        const videoTracks = instance.getVideoTracks();
         const seen = new Map<number, ShakaQualityLevel>();
-        for (const track of variants) {
+        for (const [index, track] of videoTracks.entries()) {
             if (!track.height) continue;
             const existing = seen.get(track.height);
             const bandwidth = track.bandwidth ?? 0;
@@ -341,12 +373,24 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
                     height: track.height,
                     width: track.width ?? 0,
                     bitrate: bandwidth,
-                    index: track.id,
+                    index,
                 });
             }
         }
         const levels = Array.from(seen.values()).sort((a, b) => b.height - a.height);
         setQualities(levels);
+        setCurrentQuality(manualHeightRef.current === null
+            ? AUTO_QUALITY
+            : levels.find((level) => level.height === manualHeightRef.current)?.index ?? AUTO_QUALITY);
+
+        const availableAudio = instance.getAudioTracks();
+        setAudioTracks(availableAudio.map((track, index) => ({
+            index,
+            language: track.language,
+            label: track.label ?? '',
+            isOriginal: track.roles.includes('main') || track.primary,
+        })));
+        setCurrentAudioTrack(availableAudio.findIndex((track) => track.active));
 
         const active = variants.find((track) => track.active);
         setStats((previous) => ({
@@ -519,6 +563,7 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
             created.addEventListener('buffering', onBuffering);
             created.addEventListener('trackschanged', onTracksChanged);
             created.addEventListener('adaptation', onTracksChanged);
+            created.addEventListener('variantchanged', onTracksChanged);
             created.addEventListener('manifestparsed', onManifestParsed);
             // Persist only fresh measurements, never Shaka's opening guess.
             let lastSavedAt = 0;
@@ -610,6 +655,7 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
                 instance.removeEventListener('buffering', onBuffering);
                 instance.removeEventListener('trackschanged', onTracksChanged);
                 instance.removeEventListener('adaptation', onTracksChanged);
+                instance.removeEventListener('variantchanged', onTracksChanged);
                 instance.removeEventListener('manifestparsed', onManifestParsed);
                 instance.destroy().catch(() => {
                     // Destroying an already-torn-down player is not an error.
@@ -636,6 +682,9 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
         callbackRefs.current.onLoadingChange?.(true);
         setIsBuffering(false);
         setQualities([]);
+        setAudioTracks([]);
+        setCurrentAudioTrack(-1);
+        manualHeightRef.current = null;
         setCurrentQuality(AUTO_QUALITY);
         setStats((previous) => ({
             ...EMPTY_STATS,
@@ -793,26 +842,45 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
         if (!player) return;
 
         if (index === AUTO_QUALITY) {
+            manualHeightRef.current = null;
             player.configure({ abr: { enabled: true } });
             setCurrentQuality(AUTO_QUALITY);
             return;
         }
 
-        const track = player.getVariantTracks().find((t) => t.id === index);
+        const track = player.getVideoTracks()[index];
         if (!track) return;
 
+        manualHeightRef.current = track.height ?? null;
         player.configure({ abr: { enabled: false } });
-        player.selectVariantTrack(track, /* clearBuffer */ true);
+        player.selectVideoTrack(track, /* clearBuffer */ true);
         setCurrentQuality(index);
     }, [player]);
+
+    const setAudioTrack = useCallback((index: number) => {
+        if (!player) return;
+        const track = player.getAudioTracks()[index];
+        if (!track) return;
+        player.selectAudioTrack(track);
+        // Shaka's audio choice can change the video rendition. Keep a manual
+        // resolution within the new audio set; automatic ABR remains enabled.
+        if (manualHeightRef.current !== null) {
+            const videoTrack = player.getVideoTracks().find((item) => item.height === manualHeightRef.current);
+            if (videoTrack) player.selectVideoTrack(videoTrack, /* clearBuffer */ true);
+        }
+        readTracks(player);
+    }, [player, readTracks]);
 
     return {
         isLoading,
         isBuffering,
         qualities,
+        audioTracks,
+        currentAudioTrack,
         currentQuality,
         stats,
         setQuality,
+        setAudioTrack,
         isSupported,
     };
 }

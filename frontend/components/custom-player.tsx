@@ -997,6 +997,8 @@ export function CustomPlayer({
                 isFullscreen={isFullscreen}
                 currentQuality={currentQuality}
                 qualities={qualities}
+                audioTracks={isMseMode ? shakaPlayer.audioTracks : []}
+                currentAudioTrack={isMseMode ? shakaPlayer.currentAudioTrack : -1}
                 seekableForDVR={isLive ? seekableRange : undefined}
                 visible={showControls || !isPlaying || showSettings}
                 onPointerOverChange={(over) => { pointerOverControlsRef.current = over; }}
@@ -1022,6 +1024,7 @@ export function CustomPlayer({
                 onSettingsToggle={() => setShowSettings(!showSettings)}
                 onStatsToggle={() => setShowStats(!showStats)}
                 onQualityChange={handleQualityChange}
+                onAudioTrackChange={isMseMode ? shakaPlayer.setAudioTrack : undefined}
                 onSeek={handleSeek}
                 onSeekHoverRest={handleSeekHoverRest}
                 isLive={isLive}

@@ -392,7 +392,7 @@ MANIFEST_INDEX_CACHE_TTL_SECONDS = 7200  # Byte ranges are stable per rendition
 MANIFEST_INDEX_CACHE_MAX_ENTRIES = 500
 MANIFEST_MIN_BANDWIDTH = 1000  # Floor so a manifest never declares 0 bps
 MANIFEST_MAX_VIDEO_REPRESENTATIONS = 24  # Room for a full ladder per codec family
-MANIFEST_MAX_AUDIO_REPRESENTATIONS = 2
+MANIFEST_MAX_AUDIO_REPRESENTATIONS = 64  # One best rendition per language and role
 
 # Identity of a WebSocket member the deployment could not authenticate.
 # Guests never own cookies and are never a cookie source for a room.

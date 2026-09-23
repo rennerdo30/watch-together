@@ -9,6 +9,7 @@ import { sponsorCategoryColor, sponsorCategoryLabel, type SponsorSegment } from 
 import { chapterAt, type VideoChapter } from '@/lib/chapters';
 import { storyboardFrame, type Storyboard } from '@/lib/storyboard';
 import { HOVER_PREWARM_DELAY_MS } from '@/lib/constants';
+import type { ShakaAudioTrack } from './player/hooks';
 
 
 interface PlayerControlsProps {
@@ -23,6 +24,8 @@ interface PlayerControlsProps {
     isFullscreen: boolean;
     currentQuality: number;
     qualities: { height: number; index: number; bitrate: number; vcodec?: string }[];
+    audioTracks?: ShakaAudioTrack[];
+    currentAudioTrack?: number;
     seekableForDVR?: { start: number; end: number };
     visible: boolean;
     className?: string;
@@ -34,6 +37,7 @@ interface PlayerControlsProps {
     onSettingsToggle: () => void;
     onStatsToggle: () => void;
     onQualityChange: (index: number) => void;
+    onAudioTrackChange?: (index: number) => void;
     onSeek: (time: number) => void;
     /**
      * The pointer has rested on the seek bar for `HOVER_PREWARM_DELAY_MS`,
@@ -80,6 +84,8 @@ export function PlayerControls({
     isFullscreen,
     currentQuality,
     qualities,
+    audioTracks = [],
+    currentAudioTrack = -1,
     seekableForDVR,
     visible,
     className,
@@ -91,6 +97,7 @@ export function PlayerControls({
     onSettingsToggle,
     onStatsToggle,
     onQualityChange,
+    onAudioTrackChange,
     onSeek,
     onSeekHoverRest,
     normalizationActive,
@@ -115,6 +122,7 @@ export function PlayerControls({
 }: PlayerControlsProps) {
     const enhancementSelectId = useId();
     const qualityModeSelectId = useId();
+    const audioTrackSelectId = useId();
     // Where on the seek bar the pointer is, as a fraction, or null when away.
     const [hoverFraction, setHoverFraction] = useState<number | null>(null);
     const progressRef = useRef<HTMLDivElement>(null);
@@ -461,6 +469,29 @@ export function PlayerControls({
                     </div>
 
                     <div className="p-2 min-h-0 overflow-y-auto">
+                        {onAudioTrackChange && audioTracks.length > 1 && (
+                            <div className="px-3 py-2 border-b border-white/5 mb-2">
+                                <label htmlFor={audioTrackSelectId} className="block text-xs text-white mb-2">
+                                    Audio track
+                                </label>
+                                <select
+                                    id={audioTrackSelectId}
+                                    aria-label="Audio track"
+                                    value={currentAudioTrack}
+                                    onChange={(event) => onAudioTrackChange(Number(event.target.value))}
+                                    className="w-full rounded-md border border-white/15 bg-zinc-800 px-2 py-2 text-xs text-white focus-visible:outline-2 focus-visible:outline-[color:var(--accent-primary)]"
+                                >
+                                    {audioTracks.map((track) => (
+                                        <option key={track.index} value={track.index}>
+                                            {track.label || `${track.language || 'Unknown language'}${track.isOriginal ? ' · Original' : ''}`}
+                                        </option>
+                                    ))}
+                                </select>
+                                <p className="mt-2 text-[10px] leading-relaxed text-zinc-400">
+                                    Your audio choice applies to this video only.
+                                </p>
+                            </div>
+                        )}
                         {onEnhancementModeChange && (
                             <div className="px-3 py-2 border-b border-white/5 mb-2">
                                 <label htmlFor={enhancementSelectId} className="flex items-center justify-between text-xs text-white mb-2">
