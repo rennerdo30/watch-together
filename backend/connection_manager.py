@@ -808,6 +808,35 @@ class ConnectionManager:
         await self._save_room_state(room_id)
         return queue, placeholder
 
+    async def queue_playlist_urls(self, room_id: str, requester: str,
+                                  urls: list[str]) -> tuple[list[dict], int, list, int]:
+        """Commit selected playlist videos in order with one room-state save."""
+        async with self._get_room_lock(room_id):
+            state = self.room_states.get(room_id)
+            if state is None:
+                raise KeyError(room_id)
+            if state.get("roles", {}).get(requester) not in ("admin", "moderator"):
+                raise PermissionError("Room admin or moderator required")
+            queue = state["queue"]
+            known = {queue_video_identity(entry["original_url"]) for entry in queue
+                     if isinstance(entry.get("original_url"), str)}
+            added = []
+            skipped = 0
+            for url in urls:
+                identity = queue_video_identity(url)
+                if identity in known:
+                    skipped += 1
+                    continue
+                known.add(identity)
+                entry = {"original_url": url, "title": url, "pending": True,
+                         "added_by": requester}
+                queue.append(entry)
+                added.append(entry)
+            if added:
+                self._resync_playing_index(state)
+                await self._save_room_state(room_id)
+            return added, skipped, queue, state.get("playing_index", -1)
+
     async def resolve_pending(self, room_id: str, url: str, resolved: dict) -> Optional[dict]:
         """Fill a queued placeholder with its resolve, in place.
 
