@@ -76,7 +76,10 @@ backend/
 │   ├── manifest.py           # DASH manifest generation for adaptive streams
 │   ├── mp4_index.py          # Fragmented-MP4 box scanning (init/index ranges)
 │   ├── metrics.py            # Per-transfer proxy metrics
-│   ├── prefetcher.py         # Segment prefetching
+│   ├── prefetcher.py         # Exact-subsegment read-ahead + HLS segment prefetch
+│   ├── prewarm.py            # Warming starts and jumps: skips, the next entry, /api/prewarm
+│   ├── inflight.py           # Spans being fetched now: a second request waits instead of refetching
+│   ├── startup_timing.py     # Resolve / manifest / player-start timings (log + admin ring)
 │   ├── share_relay.py        # Screen sharing: per-room fan-out, retained header, per-viewer queues
 │   ├── webm.py               # Where a WebM stream can be picked up from (cluster boundaries)
 │   ├── sponsorblock.py       # SponsorBlock lookup + server-side room-wide skipping
@@ -96,7 +99,9 @@ frontend/
 │   └── player/hooks/         # useShakaPlayer, useHlsPlayer, useAudioNormalization
 └── lib/
     ├── api.ts               # Backend API client
-    ├── abr.ts               # Latency-aware bandwidth sampling for Shaka
+    ├── abr.ts               # Latency-aware bandwidth sampling, surface cap, opening-rung plan
+    ├── prewarm.ts           # prewarmPosition: announce a start/jump to /api/prewarm
+    ├── playback-timing.ts   # One playback_timing report per start
     └── hooks/               # Custom React hooks (useRoomSettings, etc.)
 ```
 
@@ -142,6 +147,23 @@ docker compose up -d --build
    later fetch of those URLs (manifest probes, proxied segments) carries **that**
    member's cookies whoever asks — the URLs are bound to the session that fetched them
 4. Manifests are rewritten to proxy all segments through `/api/proxy`
+5. Concurrent resolves are shared per (URL, whose cookies) — a paste-time
+   speculative resolve, the click and the manifest request are one extraction.
+   *Queueing* never resolves on the client: `queue_add {url}` puts a placeholder
+   (`pending: true`) in the queue at once and the server resolves it behind it
+   (`resolve_failed` to the sender on failure). There is one resolve path; a queue
+   advance goes through it too, off the sender's socket loop.
+
+### Warming (paste to playing)
+Every warm fetches **exact subsegment spans** read from the rendition's `sidx`
+(`SegmentTable` in `services/mp4_index.py`), cached under the key the proxy looks up
+for a player's request of precisely those bytes — the memory cache only answers a
+request one entry fully covers, so a guessed or block-aligned span answers nothing.
+Read-ahead follows each request; skips, the next queue entry (on the rungs the room
+is playing) and player-announced starts/jumps (`/api/prewarm`) are warmed ahead of
+time; the manifest probe's bytes answer every rendition's init/index request. A
+request for a span someone is already fetching waits for that fetch
+(`services/inflight.py`). Timings: `./deploy/host-status.sh --startup`.
 
 ### Playback
 yt-dlp returns adaptive streams as **separate** fragmented-MP4 files with no manifest,

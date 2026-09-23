@@ -55,6 +55,25 @@ MEMORY_CACHE_MAX_ITEM_PERCENT = 0.25  # Don't cache items > 25% of max size
 PREFETCH_VIDEO_COUNT = 3  # Number of video segments to prefetch
 PREFETCH_AUDIO_COUNT = 5  # Number of audio segments to prefetch (more critical)
 PREFETCH_SESSION_TTL = 300  # 5 minutes - cleanup inactive prefetch sessions
+# Read-ahead of a playing DASH stream: how many subsegments after the one a
+# viewer just requested are fetched into memory. Video subsegments run about
+# five seconds, audio about ten.
+PREFETCH_AHEAD_VIDEO_SUBSEGMENTS = 2
+PREFETCH_AHEAD_AUDIO_SUBSEGMENTS = 1
+# Concurrent read-ahead fetches across the instance, kept apart from the
+# warms of jumps and starts so neither starves the other.
+PREFETCH_READ_AHEAD_CONCURRENCY = 4
+# Ceiling on span warms waiting or running at once.
+PREFETCH_MAX_PENDING_SPANS = 32
+# How long a request waits for someone else's fetch of the same bytes before
+# fetching them itself. Joining is almost always faster — that fetch started
+# earlier — but a stuck one must not hold a viewer for long.
+INFLIGHT_JOIN_TIMEOUT_SECONDS = 4
+# How long a registered fetch counts as under way at most. A streamed
+# response that never started (its viewer left first) cannot release its
+# registration; past this it is ignored and dropped. Short, because until
+# then a request for those bytes waits INFLIGHT_JOIN_TIMEOUT_SECONDS first.
+INFLIGHT_MAX_AGE_SECONDS = 30
 
 # --- Sharing a screen with the room ----------------------------------------
 # The media travels through this process: the sharer's browser encodes its
@@ -212,10 +231,32 @@ BROWSER_BUSY_LIVE_SHARE = "live_share"
 # cover fetching a few megabytes from the CDN, short enough that the bytes
 # are still in the memory cache when the skip fires.
 PREWARM_SKIP_LEAD_SECONDS = 20
-# How much of the destination to warm, per stream. A video subsegment of a
-# high rendition runs to a few megabytes; audio is far smaller.
-PREWARM_VIDEO_BYTES = 4 * 1024 * 1024
-PREWARM_AUDIO_BYTES = 1 * 1024 * 1024
+# How many subsegments to warm at a position, per stream: the one serving
+# it and the one after, which is what a player needs before it resumes
+# (SHAKA_REBUFFER_GOAL_SECONDS on the frontend) at YouTube's ~5 s video
+# subsegments. Warmed as exact spans read from the rendition's index, so
+# the player's request for each is answered verbatim from memory.
+PREWARM_POSITION_SUBSEGMENTS = 2
+# The rendition warmed for a start nobody has reported a rung for yet: the
+# tallest at or below this height. Most viewers' players land here.
+PREWARM_DEFAULT_HEIGHT = 1080
+# Video codec families in the order the player prefers them (the frontend's
+# SHAKA_PREFERRED_VIDEO_CODECS), for picking which ladder a start opens on.
+PREWARM_CODEC_PREFERENCE = ("av01", "vp09", "avc1")
+# Concurrent speculative fetches for warming jumps and starts. Demand
+# requests never wait on these.
+PREWARM_CONCURRENCY = 4
+# Announced warms (/api/prewarm: a load, a hover on the seek bar or a queue
+# row) a member may request per minute. The player debounces them; this
+# bounds a misbehaving client.
+PREWARM_RATE_LIMIT_PER_MINUTE = 120
+# Longest URL a member may queue or ask to warm.
+QUEUE_URL_MAX_LENGTH = 2048
+# Latest position /api/prewarm accepts, in seconds (a day; longer is not a video).
+PREWARM_MAX_POSITION_SECONDS = 86_400
+# How many unresolvable queued entries one advance moves past before it
+# stops the room instead.
+QUEUE_UNRESOLVABLE_SKIP_LIMIT = 3
 # How close to the end of a video the next queue entry is prepared: its
 # manifest is built (which probes every rendition) and its opening bytes are
 # warmed, so the advance hits caches all the way down.
@@ -471,6 +512,10 @@ PLAYBACK_QUALITY_ESTIMATE_CHANGE_RATIO = 0.25  # Bandwidth shift worth a log lin
 PLAYBACK_QUALITY_DROPPED_CHANGE = 0.02  # Dropped-frame shift worth a log line
 PLAYBACK_QUALITY_DROPPED_TROUBLE = 0.05  # Above this, the decoder is the problem
 ADMIN_PLAYBACK_HISTORY_LIMIT = 50  # Recent reports the admin overview returns
+# Resolve, manifest and player-startup timings kept for the admin panel (per
+# kind), and how many of each the overview returns. See services/startup_timing.
+STARTUP_TIMING_HISTORY_CAPACITY = 200
+ADMIN_STARTUP_TIMING_LIMIT = 50
 
 # Ensure directories exist
 for directory in [CACHE_DIR, "data", YTDLP_CACHE_DIR]:

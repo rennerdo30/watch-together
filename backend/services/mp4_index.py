@@ -164,17 +164,45 @@ class SegmentTable:
     starts: Tuple[float, ...]
     #: Total duration the index covers, in seconds.
     duration: float
+    #: Length of each subsegment in bytes. A player asks for exactly
+    #: `offsets[i]` .. `offsets[i] + sizes[i] - 1`, so these are the spans a
+    #: warm has to fetch for its bytes to answer that request verbatim.
+    sizes: Tuple[int, ...]
 
-    def offset_at(self, seconds: float) -> Optional[int]:
-        """Byte offset of the subsegment covering `seconds`.
+    def index_at(self, seconds: float) -> Optional[int]:
+        """Which subsegment covers `seconds`.
 
         A position past the end has no subsegment; a position before the
         start belongs to the first one.
         """
         if not self.offsets or seconds < 0 or seconds >= self.duration:
             return None
-        position = bisect.bisect_right(self.starts, seconds) - 1
-        return self.offsets[max(0, position)]
+        return max(0, bisect.bisect_right(self.starts, seconds) - 1)
+
+    def offset_at(self, seconds: float) -> Optional[int]:
+        """Byte offset of the subsegment covering `seconds`."""
+        position = self.index_at(seconds)
+        return None if position is None else self.offsets[position]
+
+    def index_of_offset(self, offset: int) -> Optional[int]:
+        """Which subsegment the byte at `offset` belongs to.
+
+        Bytes before the first subsegment (the init segment and the index)
+        belong to none: a request for those is a probe, not playback.
+        """
+        if not self.offsets or offset < self.offsets[0]:
+            return None
+        position = bisect.bisect_right(self.offsets, offset) - 1
+        if offset >= self.offsets[position] + self.sizes[position]:
+            return None
+        return position
+
+    def span(self, position: int) -> Optional[Tuple[int, int]]:
+        """Inclusive byte range of one subsegment, as a player requests it."""
+        if not 0 <= position < len(self.offsets):
+            return None
+        start = self.offsets[position]
+        return start, start + self.sizes[position] - 1
 
 
 def parse_segment_table(data: bytes, index: Mp4Index) -> Optional[SegmentTable]:
@@ -216,6 +244,7 @@ def parse_segment_table(data: bytes, index: Mp4Index) -> Optional[SegmentTable]:
 
     offsets = []
     starts = []
+    sizes = []
     # The first subsegment begins where the index box ends, plus whatever
     # the box itself declares.
     offset = end + first_offset
@@ -225,6 +254,7 @@ def parse_segment_table(data: bytes, index: Mp4Index) -> Optional[SegmentTable]:
         cursor += _REFERENCE_ENTRY
         offsets.append(offset)
         starts.append(ticks / timescale)
+        sizes.append(raw_size & _SIZE_MASK)
         offset += raw_size & _SIZE_MASK
         ticks += raw_duration
 
@@ -232,4 +262,5 @@ def parse_segment_table(data: bytes, index: Mp4Index) -> Optional[SegmentTable]:
         offsets=tuple(offsets),
         starts=tuple(starts),
         duration=ticks / timescale,
+        sizes=tuple(sizes),
     )

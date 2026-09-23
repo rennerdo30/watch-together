@@ -189,7 +189,7 @@ class TestResolveCachesItsResult:
         from services.mp4_index import Mp4Index
 
         async def fake_build(client_, duration_seconds, video_formats, audio_formats,
-                             proxy_base, headers=None):
+                             proxy_base, headers=None, **_):
             assert duration_seconds == FAKE_INFO["duration"]
             assert video_formats and audio_formats
             return "<MPD/>"
@@ -226,7 +226,7 @@ class TestManifestResolvesOnDemand:
         import main as main_module
 
         async def fake_build(client_, duration_seconds, video_formats, audio_formats,
-                             proxy_base, headers=None):
+                             proxy_base, headers=None, **_):
             return "<MPD/>"
 
         monkeypatch.setattr(main_module, "build_manifest_for_formats", fake_build)
@@ -309,7 +309,7 @@ class TestManifestResolvesOnDemand:
         served = []
 
         async def fake_build(client_, duration_seconds, video_formats, audio_formats,
-                             proxy_base, headers=None):
+                             proxy_base, headers=None, **_):
             served.extend(fmt["url"] for fmt in video_formats + audio_formats)
             return "<MPD/>"
 
@@ -766,7 +766,7 @@ class TestRoomMembersLendCookies:
     def test_the_manifest_endpoint_lends_the_same_way(self, app_client, extraction, monkeypatch):
         import main as main_module
 
-        async def fake_build(client_, duration_seconds, video_formats, audio_formats, proxy_base, headers=None):
+        async def fake_build(client_, duration_seconds, video_formats, audio_formats, proxy_base, headers=None, **_):
             return "<MPD/>"
 
         monkeypatch.setattr(main_module, "build_manifest_for_formats", fake_build)
@@ -796,34 +796,38 @@ class TestRoomMembersLendCookies:
             text = (BACKEND_ROOT / source).read_text(encoding="utf-8")
             assert "'noplaylist': True" in text, f"{source} no longer forces single-video extraction"
 
-    def test_queue_playback_lends_from_the_room_too(self, app_client, monkeypatch):
-        """A queued video re-resolved when its turn comes uses the room's members."""
-        from services import resolver
+    def test_a_queued_video_is_resolved_with_the_rooms_members(self, app_client, monkeypatch):
+        """A URL queued by a member without cookies is resolved by the server
+        with the room's members as possible lenders — the same rule as a
+        resolve the member made themselves."""
+        import main as main_module
 
         seen = {}
 
         def choose(url, requester, members):
             seen["members"] = list(members)
+            seen["requester"] = requester
             return None
 
         async def no_cache(url):
             return None
 
-        monkeypatch.setattr(resolver, "choose_cookie_source", choose)
-        monkeypatch.setattr(resolver, "get_cached_format", no_cache)
+        def refuse(url, opts):
+            raise RuntimeError("no network in tests")
+
+        monkeypatch.setattr(main_module, "choose_cookie_source", choose)
+        monkeypatch.setattr(main_module, "get_cached_format", no_cache)
+        monkeypatch.setattr(main_module, "_extract_with_options", refuse)
 
         with app_client.websocket_connect(f"/ws/{self.ROOM}?user={self.LENDER}") as ws:
             ws.receive_json()
             with app_client.websocket_connect(f"/ws/{self.ROOM}?user={self.REQUESTER}") as ws2:
                 ws2.receive_json()
-                ws2.send_json({"type": "queue_add", "payload": {"video_data": {
-                    "original_url": "https://youtu.be/queued", "stream_url": "https://cdn.example.com/q",
-                    "title": "Queued", "added_by": self.REQUESTER}}})
-                ws2.send_json({"type": "queue_play", "payload": {"index": 0}})
+                ws2.send_json({"type": "queue_add", "payload": {"url": "https://youtu.be/queued"}})
                 for _ in range(10):
-                    if seen:
+                    if ws2.receive_json().get("type") == "resolve_failed":
                         break
-                    ws2.receive_json()
+        assert seen["requester"] == self.REQUESTER
         assert self.LENDER in seen.get("members", [])
 
 

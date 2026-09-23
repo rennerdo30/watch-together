@@ -36,6 +36,15 @@ def fixture_bytes(name: str) -> bytes:
         return handle.read()
 
 
+def _ladder(video_url: str, audio_url: str = None, height: int = 1080) -> dict:
+    """A resolve with one video rung (and optionally one audio option)."""
+    video = {"available_qualities": [{"video_url": video_url, "height": height,
+                                      "vcodec": "avc1.640028"}]}
+    if audio_url:
+        video["audio_options"] = [{"audio_url": audio_url}]
+    return video
+
+
 class TestSegmentTable:
     """Where each subsegment starts, read from the index the probe already has."""
 
@@ -60,6 +69,35 @@ class TestSegmentTable:
         assert table.offset_at(1.999) == table.offsets[0]
         assert table.offset_at(2.0) == table.offsets[1]
         assert table.offset_at(5.9) == table.offsets[2]
+
+    def test_each_subsegment_span_is_exactly_what_the_index_declares(self):
+        """The spans a warm fetches must equal the player's requests byte
+        for byte; a size read wrong by one byte is a span nothing matches."""
+        data = fixture_bytes("video.mp4")
+        table = parse_segment_table(data, parse_index(data))
+        assert len(table.sizes) == len(table.offsets)
+        for i in range(len(table.offsets) - 1):
+            start, end = table.span(i)
+            assert end + 1 == table.offsets[i + 1], "subsegments are contiguous"
+        start, end = table.span(len(table.offsets) - 1)
+        # The last one ends inside the file; what follows (an `mfra` box
+        # here) is not media.
+        assert start < end < len(data)
+        assert table.span(len(table.offsets)) is None
+        assert table.span(-1) is None
+
+    def test_a_byte_belongs_to_the_subsegment_that_holds_it(self):
+        data = fixture_bytes("video.mp4")
+        table = parse_segment_table(data, parse_index(data))
+        assert table.index_of_offset(table.offsets[1]) == 1
+        assert table.index_of_offset(table.offsets[1] - 1) == 0
+        last_start, last_end = table.span(len(table.offsets) - 1)
+        assert table.index_of_offset(last_end) == len(table.offsets) - 1
+        assert table.index_of_offset(last_end + 1) is None
+        # Init segment and index are not playback.
+        assert table.index_of_offset(0) is None
+        assert table.index_of_offset(table.offsets[0] - 1) is None
+        assert table.index_of_offset(len(data)) is None
 
     def test_audio_and_video_are_indexed_apart(self):
         """Their subsegments differ in size and length; sharing one table
@@ -202,22 +240,44 @@ class TestWarmingAPosition:
             warmed.append((target, start, end, is_audio, identity))
 
         monkeypatch.setattr(prewarm, "prefetch_bytes", record)
-        prewarm.warm_position(object(), {"video_url": url}, 4.5, identity="owner@example.com")
+        prewarm.warm_position(object(), _ladder(url), 4.5, identity="owner@example.com")
         await prewarm.drain()
 
+        # The last subsegment of the fixture: one span, and nothing past it.
         assert len(warmed) == 1
         target, start, end, _is_audio, identity = warmed[0]
         assert target == url
         assert start == table.offset_at(4.5) == table.offsets[2]
-        assert end > start
         assert identity == "owner@example.com"
+
+    async def test_the_spans_warmed_are_exactly_what_a_player_requests(
+            self, probed_stream, monkeypatch):
+        """A player asks for one subsegment at a time, byte for byte as the
+        index describes it, and the proxy answers from memory only a request
+        its cached span covers. The old 4 MB spans started at the right
+        offset but rarely covered the whole of a high rung's subsegment,
+        and a span that does not cover answers nothing."""
+        url, table = probed_stream
+        warmed = []
+
+        async def record(client, target, start, end, is_audio=False, identity=None):
+            warmed.append((start, end))
+
+        monkeypatch.setattr(prewarm, "prefetch_bytes", record)
+        prewarm.warm_position(object(), _ladder(url), 0.5)
+        await prewarm.drain()
+
+        from core.config import PREWARM_POSITION_SUBSEGMENTS
+        assert warmed == [table.span(i) for i in range(PREWARM_POSITION_SUBSEGMENTS)]
+        for (start, end), size in zip(warmed, table.sizes):
+            assert end - start + 1 == size
 
     async def test_a_stream_nobody_has_probed_is_not_guessed_at(self, monkeypatch):
         """Estimating from the average bitrate downloads the wrong megabytes."""
         warmed = []
         monkeypatch.setattr(prewarm, "prefetch_bytes",
                             lambda *args, **kwargs: warmed.append(args))
-        prewarm.warm_position(object(), {"video_url": "https://cdn.test/never-probed.mp4"}, 30)
+        prewarm.warm_position(object(), _ladder("https://cdn.test/never-probed.mp4"), 30)
         await prewarm.drain()
         assert warmed == []
 
@@ -235,14 +295,14 @@ class TestWarmingAPosition:
             warmed.append((target, is_audio, end - start + 1))
 
         monkeypatch.setattr(prewarm, "prefetch_bytes", record)
-        prewarm.warm_position(object(), {"video_url": url, "audio_url": audio_url}, 2.5)
+        prewarm.warm_position(object(), _ladder(url, audio_url), 2.5)
         await prewarm.drain()
 
-        assert [entry[0] for entry in warmed] == [url, audio_url]
-        video_span, audio_span = warmed[0][2], warmed[1][2]
-        # Audio is warmed too, and more cheaply: its subsegments are smaller.
-        assert warmed[1][1] is True
-        assert audio_span < video_span
+        assert [entry[0] for entry in warmed][0] == url
+        assert warmed[-1][0] == audio_url
+        # Audio is warmed too, flagged as audio (it is evicted last).
+        assert warmed[-1][1] is True
+        assert warmed[0][1] is False
 
     async def test_speculation_is_bounded_and_deduplicated(self, probed_stream, monkeypatch):
         url, _table = probed_stream
@@ -253,7 +313,7 @@ class TestWarmingAPosition:
 
         monkeypatch.setattr(prewarm, "prefetch_bytes", slow)
         for _ in range(3):
-            prewarm.warm_position(object(), {"video_url": url}, 4.5)
+            prewarm.warm_position(object(), _ladder(url), 4.5)
         assert len(prewarm.in_flight()) == 1
         await prewarm.drain()
         assert started == [url]
@@ -336,7 +396,7 @@ class TestTheNextVideoIsPreparedAsTheCurrentOneEnds:
         prepared = []
         monkeypatch.setattr(main, "_proxy_client", object())
         monkeypatch.setattr(main.prewarm, "warm_video",
-                            lambda client, video, prepare=None, room_id="": prepared.append(
+                            lambda client, video, prepare=None, room_id="", **kwargs: prepared.append(
                                 (video, room_id)))
         main.manager.room_states["prewarm-room"] = {
             "queue": [{"original_url": "https://youtu.be/now"},
@@ -359,6 +419,28 @@ class TestTheNextVideoIsPreparedAsTheCurrentOneEnds:
         main._warm_next_video_if_close("prewarm-room", state, 600 - PREWARM_NEXT_VIDEO_SECONDS + 1)
         assert [(entry["original_url"], room) for entry, room in prepared] == [
             ("https://youtu.be/next", "prewarm-room")]
+
+    def test_it_is_warmed_on_the_rungs_the_room_watches_where_it_resumes(self, room, monkeypatch):
+        """Not the top rung: the rendition the room's players are on now,
+        which the next video's viewers will be capped to again. And from
+        the position the entry resumes at, not from its first byte."""
+        main, _prepared = room
+        calls = []
+        monkeypatch.setattr(main.prewarm, "warm_video",
+                            lambda client, video, prepare=None, room_id="", **kwargs: calls.append(kwargs))
+        state = main.manager.room_states["prewarm-room"]
+        state["video_data"]["available_qualities"] = [
+            {"video_url": "https://cdn.test/now-2160.mp4", "height": 2160, "vcodec": "av01.0.12M.08"},
+            {"video_url": "https://cdn.test/now-1080.mp4", "height": 1080, "vcodec": "av01.0.08M.08"},
+        ]
+        state["queue"][1].update({"progress": 200.0, "duration": 900})
+        prewarm.forget_active_streams()
+        prewarm.note_active_stream("https://cdn.test/now-1080.mp4")
+        try:
+            main._warm_next_video_if_close("prewarm-room", state, 590)
+        finally:
+            prewarm.forget_active_streams()
+        assert calls == [{"rungs": [(1080, "av01")], "seconds": 200.0}]
 
     def test_a_live_stream_has_no_next_video_to_prepare(self, room):
         main, prepared = room
@@ -438,6 +520,16 @@ def _resolve(deadline: float, title: str = "next") -> dict:
 
 
 NEXT_URL = "https://youtu.be/next"
+
+
+async def _no_warm(client, urls, seconds, identity):
+    return None
+
+
+def _recording_warm(into: list):
+    async def record(client, urls, seconds, identity):
+        into.append(list(urls))
+    return record
 CURRENT_URL = "https://youtu.be/now"
 
 
@@ -488,8 +580,7 @@ class TestAQueuedVideoIsNotWarmedAgainstDeadUrls:
         main, probed, resolves, fresh = prepared
         stale = _resolve(time.time() - 3600)
         monkeypatch.setattr(main, "_proxy_client", object())
-        monkeypatch.setattr(prewarm, "start_initial_prefetch",
-                            lambda video, audio, client: None)
+        monkeypatch.setattr(prewarm, "_warm_position", _no_warm)
         main.manager.room_states["prewarm-room"] = {
             "queue": [{"original_url": CURRENT_URL}, stale],
             "playing_index": 0,
@@ -610,8 +701,7 @@ class TestOneDoomedAttemptIsEnough:
         """Preparation failing means these URLs do not answer; asking for
         bytes from them repeats the same refusal one layer down."""
         fetched = []
-        monkeypatch.setattr(prewarm, "start_initial_prefetch",
-                            lambda video, audio, client: fetched.append(video))
+        monkeypatch.setattr(prewarm, "_warm_position", _recording_warm(fetched))
 
         async def cannot_prepare(video_data):
             return None
@@ -622,8 +712,7 @@ class TestOneDoomedAttemptIsEnough:
 
     async def test_a_warm_that_works_is_not_backed_off(self, monkeypatch):
         fetched = []
-        monkeypatch.setattr(prewarm, "start_initial_prefetch",
-                            lambda video, audio, client: fetched.append(video))
+        monkeypatch.setattr(prewarm, "_warm_position", _recording_warm(fetched))
         good = _resolve(time.time() + 21600)
 
         async def prepare(video_data):
@@ -640,8 +729,7 @@ class TestOneDoomedAttemptIsEnough:
         re-resolve borrows the cookies of a member connected *there*. A room
         with nobody signed in must not blacklist the video for every room."""
         fetched = []
-        monkeypatch.setattr(prewarm, "start_initial_prefetch",
-                            lambda video, audio, client: fetched.append(video))
+        monkeypatch.setattr(prewarm, "_warm_position", _recording_warm(fetched))
         video = _resolve(time.time() + 21600)
 
         async def cannot_prepare(video_data):
@@ -655,7 +743,7 @@ class TestOneDoomedAttemptIsEnough:
         prewarm.warm_video(object(), video, can_prepare, room_id="a-member-is-signed-in")
         await prewarm.drain()
 
-        assert fetched == [video["video_url"]]
+        assert len(fetched) == 1
 
     async def test_a_ladder_that_answers_nothing_backs_off_and_says_so(
             self, monkeypatch, caplog):
@@ -686,20 +774,21 @@ class TestOneDoomedAttemptIsEnough:
         assert summary and summary[0].levelno == logging.INFO
 
 
-class TestAVideoWithNoLadderIsStillWarmed:
-    """A direct file has nothing to probe, which is not the same as nothing
-    to warm: its opening bytes *are* the whole preparation. Treating "no
-    adaptive ladder" as a failure lost the warm for every direct MP4 and
-    HLS entry, and backed the video off for a quarter of an hour on top."""
+class TestAVideoWithNoLadderIsNotBackedOff:
+    """A direct file has nothing to probe and — since warms are exact
+    subsegments read from an index — nothing to warm either. The old
+    "opening bytes" warm fetched 3 MB that a media element's open-ended
+    `bytes=0-` request never matched. What still matters is that "no ladder"
+    is not treated as a failure: its resolve is kept fresh, and it is not
+    backed off for a quarter of an hour."""
 
     @pytest.fixture
     def room(self, monkeypatch):
         import main
 
-        fetched: list = []
+        warmed: list = []
         monkeypatch.setattr(main, "_proxy_client", object())
-        monkeypatch.setattr(prewarm, "start_initial_prefetch",
-                            lambda video, audio, client: fetched.append((video, audio)))
+        monkeypatch.setattr(prewarm, "_warm_position", _recording_warm(warmed))
 
         async def fake_client():
             return object()
@@ -716,20 +805,20 @@ class TestAVideoWithNoLadderIsStillWarmed:
             "playing_index": 0,
             "video_data": {"original_url": CURRENT_URL, "duration": 600},
         }
-        yield main, fetched
+        yield main, warmed
         main.manager.room_states.pop("prewarm-room", None)
 
-    async def test_its_opening_bytes_are_fetched(self, room):
-        main, fetched = room
+    async def test_no_bytes_are_guessed_at(self, room):
+        main, warmed = room
         state = main.manager.room_states["prewarm-room"]
 
         main._warm_next_video_if_close("prewarm-room", state, 580)
         await prewarm.drain()
 
-        assert fetched == [("https://cdn.test/best.mp4", None)]
+        assert warmed == []
 
     async def test_it_is_not_backed_off_as_a_failure(self, room):
-        main, fetched = room
+        main, _warmed = room
         state = main.manager.room_states["prewarm-room"]
 
         for beat in range(3):
@@ -737,7 +826,6 @@ class TestAVideoWithNoLadderIsStillWarmed:
             await prewarm.drain()
 
         assert prewarm._failed_videos == {}
-        assert len(fetched) == 3, "a healthy video stays warmable on the next beat"
 
 
 class TestSpeculationIsQuiet:
@@ -823,9 +911,11 @@ class TestWhichRenditionIsWarmed:
         yield
         prewarm.forget_active_streams()
 
-    def test_without_evidence_the_resolve_choice_is_warmed(self):
+    def test_without_evidence_the_rung_a_player_opens_on_is_warmed(self):
+        """Not the resolve's choice, which is the top rung: the players cap
+        auto quality to their surface, so a 2160p warm answered nobody."""
         assert prewarm.stream_urls(self.VIDEO) == [
-            "https://cdn.test/best.mp4", "https://cdn.test/audio-high.m4a",
+            "https://cdn.test/mid.mp4", "https://cdn.test/audio-high.m4a",
         ]
 
     def test_the_rendition_being_fetched_wins_over_the_resolve_choice(self):
@@ -857,7 +947,7 @@ class TestWhichRenditionIsWarmed:
         monkeypatch.setattr(prewarm.time, "monotonic",
                             lambda: real_monotonic() + ACTIVE_STREAM_TTL_SECONDS + 1)
 
-        assert prewarm.stream_urls(self.VIDEO)[0] == "https://cdn.test/best.mp4"
+        assert prewarm.stream_urls(self.VIDEO)[0] == "https://cdn.test/mid.mp4"
 
     def test_what_is_remembered_is_bounded(self):
         from core.config import ACTIVE_STREAM_LIMIT
@@ -868,3 +958,45 @@ class TestWhichRenditionIsWarmed:
         # The oldest went first, the newest are still there.
         assert "https://cdn.test/0.mp4" not in prewarm._active_streams
         assert f"https://cdn.test/{ACTIVE_STREAM_LIMIT + 19}.mp4" in prewarm._active_streams
+
+
+class TestChoosingTheRungAStartOpensOn:
+    """Which rendition a start is warmed on: the one a capped player picks."""
+
+    LADDER = {
+        "available_qualities": [
+            {"video_url": "https://cdn.test/av1-2160.mp4", "height": 2160, "vcodec": "av01.0.12M.08"},
+            {"video_url": "https://cdn.test/av1-1080.mp4", "height": 1080, "vcodec": "av01.0.08M.08"},
+            {"video_url": "https://cdn.test/av1-720.mp4", "height": 720, "vcodec": "av01.0.05M.08"},
+            {"video_url": "https://cdn.test/avc-1080.mp4", "height": 1080, "vcodec": "avc1.640028"},
+            {"video_url": "https://cdn.test/avc-720.mp4", "height": 720, "vcodec": "avc1.4d401f"},
+        ],
+        "audio_options": [{"audio_url": "https://cdn.test/opus.webm"},
+                          {"audio_url": "https://cdn.test/aac.m4a"}],
+    }
+
+    def test_the_tallest_rung_under_the_cap_in_the_preferred_codec(self):
+        assert prewarm.choose_renditions(self.LADDER, [(1440, None)]) == [
+            "https://cdn.test/av1-1080.mp4", "https://cdn.test/opus.webm"]
+
+    def test_a_named_codec_family_is_honoured(self):
+        """A browser without AV1 decoding plays the H.264 ladder."""
+        assert prewarm.choose_renditions(self.LADDER, [(1080, "avc1")])[0] == \
+            "https://cdn.test/avc-1080.mp4"
+
+    def test_a_family_the_ladder_lacks_falls_back_to_the_preferred_one(self):
+        assert prewarm.choose_renditions(self.LADDER, [(720, "vp09")])[0] == \
+            "https://cdn.test/av1-720.mp4"
+
+    def test_a_cap_below_every_rung_warms_the_shortest(self):
+        assert prewarm.choose_renditions(self.LADDER, [(240, "avc1")])[0] == \
+            "https://cdn.test/avc-720.mp4"
+
+    def test_no_rung_asked_for_means_the_default_height(self):
+        from core.config import PREWARM_DEFAULT_HEIGHT
+        chosen = prewarm.choose_renditions(self.LADDER, [])
+        assert PREWARM_DEFAULT_HEIGHT == 1080
+        assert chosen[0] == "https://cdn.test/av1-1080.mp4"
+
+    def test_a_video_without_a_ladder_has_nothing_to_choose(self):
+        assert prewarm.choose_renditions({"video_url": "https://cdn.test/direct.mp4"}, []) == []

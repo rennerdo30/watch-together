@@ -12,6 +12,7 @@ import pytest
 
 from connection_manager import ConnectionManager
 from fastapi.testclient import TestClient
+from queueing import enqueue
 
 
 def _video(n, **extra):
@@ -30,7 +31,7 @@ async def room():
 
 async def test_only_the_first_end_report_advances(room):
     for n in (1, 2, 3):
-        await room.add_to_queue("r", _video(n))
+        await enqueue(room, "r", _video(n))
     await room.play_from_queue("r", 0)
 
     # Three members report the end of video 1. Only the first report counts.
@@ -47,10 +48,10 @@ async def test_only_the_first_end_report_advances(room):
 
 async def test_finishing_the_last_video_starts_the_queue_from_the_front(room):
     for n in (1, 2, 3):
-        await room.add_to_queue("r", _video(n))
+        await enqueue(room, "r", _video(n))
     await room.play_from_queue("r", 0)
     # The playing video is re-queued, so it now sits last.
-    await room.add_to_queue("r", _video(1))
+    await enqueue(room, "r", _video(1))
     assert room.room_states["r"]["playing_index"] == 2
     next_v, queue, index, advanced = await room.next_video("r", _video(1)["original_url"])
     assert advanced and next_v["title"] == "Video 2" and index == 0
@@ -59,14 +60,14 @@ async def test_finishing_the_last_video_starts_the_queue_from_the_front(room):
 
 async def test_play_next_button_always_advances(room):
     for n in (1, 2):
-        await room.add_to_queue("r", _video(n))
+        await enqueue(room, "r", _video(n))
     await room.play_from_queue("r", 0)
     next_v, queue, index, advanced = await room.next_video("r", None)
     assert advanced and next_v["title"] == "Video 2" and index == 0
 
 
 async def test_a_pinned_video_stays_but_the_room_does_not_loop(room):
-    await room.add_to_queue("r", _video(1, pinned=True))
+    await enqueue(room, "r", _video(1, pinned=True))
     await room.play_from_queue("r", 0)
     next_v, queue, index, advanced = await room.next_video("r", _video(1)["original_url"])
     assert advanced and next_v is None and index == -1
@@ -76,7 +77,7 @@ async def test_a_pinned_video_stays_but_the_room_does_not_loop(room):
 
 async def test_playing_a_queued_url_moves_it_rather_than_copying_it(room):
     for n in (1, 2, 3):
-        await room.add_to_queue("r", _video(n))
+        await enqueue(room, "r", _video(n))
     await room.toggle_pin("r", 2)
     # "Play now" on video 3, which is already queued (and pinned).
     v, queue, index = await room.prepend_to_queue("r", _video(3))
@@ -84,12 +85,12 @@ async def test_playing_a_queued_url_moves_it_rather_than_copying_it(room):
     assert queue[0]["pinned"] is True and index == 0
 
     # Queueing an already-queued video moves it to the back, once.
-    queue = await room.add_to_queue("r", _video(1))
+    queue = await enqueue(room, "r", _video(1))
     assert [x["title"] for x in queue] == ["Video 3", "Video 2", "Video 1"]
     assert room.room_states["r"]["playing_index"] == 0
 
     # Re-queueing the playing video keeps the playing index on it.
-    queue = await room.add_to_queue("r", _video(3))
+    queue = await enqueue(room, "r", _video(3))
     assert [x["title"] for x in queue] == ["Video 2", "Video 1", "Video 3"]
     assert room.room_states["r"]["playing_index"] == 2
 
@@ -103,8 +104,14 @@ async def test_playing_a_queued_url_moves_it_rather_than_copying_it(room):
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    import main
     from main import app
+
+    async def resolve(url, user_agent=None, **kwargs):
+        return _video(int(url.rsplit("video", 1)[1]), stream_url="https://cdn.test/v.mp4")
+
+    monkeypatch.setattr(main, "resolve_url", resolve)
     with TestClient(app) as test_client:
         yield test_client
 
@@ -117,6 +124,16 @@ def _drain_until(ws, msg_type, limit=12):
     raise AssertionError(f"no {msg_type!r} message within {limit} messages")
 
 
+def _drain_until_resolved(ws, count, limit=20):
+    """Queue updates until `count` entries are there and none is a placeholder."""
+    for _ in range(limit):
+        update = _drain_until(ws, "queue_update", limit)
+        queue = update.get("queue", [])
+        if len(queue) == count and not any(entry.get("pending") for entry in queue):
+            return update
+    raise AssertionError(f"the queue never held {count} resolved entries")
+
+
 def test_every_member_reporting_the_end_advances_the_room_once(client):
     room = "queue-ends"
     with client.websocket_connect(f"/ws/{room}?user=a@example.com") as ws_a, \
@@ -124,9 +141,9 @@ def test_every_member_reporting_the_end_advances_the_room_once(client):
         _drain_until(ws_a, "sync")
         _drain_until(ws_b, "sync")
         for n in (1, 2, 3):
-            ws_a.send_json({"type": "queue_add", "payload": {"video_data": _video(n, stream_url="https://cdn.test/v.mp4")}})
-            _drain_until(ws_a, "queue_update")
-            _drain_until(ws_b, "queue_update")
+            ws_a.send_json({"type": "queue_add", "payload": {"url": _video(n)["original_url"]}})
+            _drain_until_resolved(ws_a, n)
+            _drain_until_resolved(ws_b, n)
         ws_a.send_json({"type": "queue_play", "payload": {"index": 0}})
         _drain_until(ws_a, "queue_update")
         _drain_until(ws_b, "queue_update")

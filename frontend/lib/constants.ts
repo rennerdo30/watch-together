@@ -400,9 +400,66 @@ export const QUALITY_REPORT_INTERVAL_MS = 30_000;
  * half the bitrate of H.264, which is the difference between playing and
  * buffering on a constrained link.
  */
-export const SHAKA_PREFERRED_VIDEO_CODECS = ['av01', 'vp09', 'avc1'];
+export const SHAKA_PREFERRED_VIDEO_CODECS = ['av01', 'vp09', 'avc1'] as const;
 
 /** Segment requests worth retrying before giving up, and the gap between them. */
 export const SHAKA_SEGMENT_RETRIES = 4;
 export const SHAKA_RETRY_BASE_DELAY_MS = 500;
 export const SHAKA_REQUEST_TIMEOUT_MS = 45_000;
+
+/**
+ * The media type of the generated manifest. Handing it to Shaka saves the
+ * request it otherwise sends to guess the type of an extension-less URL —
+ * one more round trip, a quarter of a second from Japan, before anything
+ * can start.
+ */
+export const DASH_MIME_TYPE = 'application/dash+xml';
+
+/**
+ * Shaka's `abr.bandwidthDowngradeTarget` default: a variant is only chosen
+ * while the estimate exceeds its bitrate by this margin. Used to predict the
+ * rung a load opens on (`openingPlan` in lib/abr.ts).
+ */
+export const SHAKA_BANDWIDTH_DOWNGRADE_TARGET = 0.95;
+/** A typical audio track's bitrate, added to a video rung when predicting. */
+export const OPENING_PLAN_AUDIO_BPS = 128_000;
+
+/**
+ * Asking the server to warm the bytes at one position of one video
+ * (`prewarmPosition` in lib/prewarm.ts). The same request repeated within
+ * this window is dropped: a pointer resting on the same spot, or a load and
+ * its own preload, would otherwise ask twice for the same segment.
+ */
+export const PREWARM_POSITION_DEDUPE_MS = 5_000;
+/**
+ * How long the pointer must rest on the seek bar or a queue row before the
+ * position under it is warmed. A pointer passing over on its way elsewhere
+ * is not an intention to watch there.
+ */
+export const HOVER_PREWARM_DELAY_MS = 300;
+
+/**
+ * Resolving a pasted link before the viewer clicks. The debounce keeps a
+ * link being typed out from being resolved at every keystroke; a speculative
+ * result older than the reuse window is asked for again (the server answers
+ * that from its cache).
+ */
+export const SPECULATIVE_RESOLVE_DEBOUNCE_MS = 400;
+export const SPECULATIVE_RESOLVE_MAX_AGE_MS = 60_000;
+
+/**
+ * How long after a video's first frame its startup report waits, counting
+ * stalls, before it is sent (`lib/playback-timing.ts`). A video change sends
+ * it early.
+ */
+export const PLAYBACK_TIMING_STALL_WINDOW_MS = 30_000;
+
+/**
+ * When a queued video resumes where the room left it, in seconds: not for
+ * the first few (not worth it), and not in the last stretch (a replay starts
+ * over). The server decides (`ConnectionManager.RESUME_MIN_SECONDS` and
+ * `RESUME_END_GUARD_SECONDS`); these must match it, because the player
+ * preloads the position it expects the server to announce.
+ */
+export const RESUME_MIN_SECONDS = 5;
+export const RESUME_END_GUARD_SECONDS = 15;

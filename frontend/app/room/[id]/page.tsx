@@ -9,7 +9,12 @@ import {
     Crown, Shield, User as UserIcon, ChevronDown, Lock, Copy, Check, Infinity, Sun, ExternalLink, Scissors, Puzzle,
     MonitorUp, MonitorStop, Globe
 } from 'lucide-react';
-import { prewarmVideo } from '@/lib/prewarm';
+import { prewarmPosition, prewarmVideo } from '@/lib/prewarm';
+import { StartupTimer, type PlaybackEngine } from '@/lib/playback-timing';
+import { resumePosition } from '@/lib/playback';
+import { autoQualityCap, openingPlan } from '@/lib/abr';
+import { readOpeningEstimate } from '@/lib/bandwidth-memory';
+import { capHeadroom, parseQualityMode, QUALITY_MODE_STORAGE_KEY } from '@/lib/quality-mode';
 import { captureScreen, shareUnsupportedReason, stopStream } from '@/lib/share/screen-capture';
 import { type LiveShare } from '@/lib/share/relay';
 import {
@@ -19,14 +24,15 @@ import {
 import { useSharePublisher } from '@/lib/share/useSharePublisher';
 import { useShareViewer } from '@/lib/share/useShareViewer';
 import { ResolveResponse, dashManifestUrl, resolveUrl, getExtensionToken, regenerateExtensionToken, ExtensionToken, getUserSettings, updateUserSettings, getCookies, forgetCookies, extensionDownloadUrl, type CookieStatus, type UserSettings } from '@/lib/api';
-import { CustomPlayer } from '@/components/custom-player';
+import { CustomPlayer, type PrewarmRequest, type StartupMark } from '@/components/custom-player';
+import type { ShakaPreloadTarget } from '@/components/player/hooks';
 import { chapterAt, formatChapterTime } from '@/lib/chapters';
 import { LiveChat } from '@/components/live-chat';
 import { RoomLog } from '@/components/room-log';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { THEMES, DEFAULT_THEME, getThemeById, loadCustomTheme, saveCustomTheme, createCustomTheme } from '@/lib/themes';
 import { ColorModeToggle } from '@/components/color-mode-toggle';
-import { displayHost, displayName } from '@/lib/utils';
+import { displayHost, displayName, looksLikeUrl } from '@/lib/utils';
 import {
     DEFAULT_SPONSORBLOCK_SETTINGS,
     SPONSORBLOCK_CATEGORIES,
@@ -49,8 +55,11 @@ import {
     FONT_SIZE_MAX,
     FONT_SIZE_MIN,
     DEFAULT_SHARE_QUALITY,
+    PLAYBACK_TIMING_STALL_WINDOW_MS,
     PREWARM_NEXT_VIDEO_SECONDS,
     SHARE_QUALITY_PRESETS,
+    SPECULATIVE_RESOLVE_DEBOUNCE_MS,
+    SPECULATIVE_RESOLVE_MAX_AGE_MS,
     SIDEBAR_DEFAULT_WIDTH,
     type ShareQuality,
     SIDEBAR_MAX_WIDTH,
@@ -111,6 +120,11 @@ interface WsMessage {
 const ROOM_CLOSED_WS_CODE = 4001;
 const ROOM_CLOSED_REDIRECT_DELAY_MS = 2000;
 
+/** Which engine plays a resolved video; see CustomPlayer. */
+const isHlsUrl = (url: string) => url.includes('.m3u8') || url.includes('playlist') || url.includes('manifest');
+const playbackEngineOf = (video: ResolveResponse): PlaybackEngine =>
+    video.stream_type === 'dash' ? 'mse' : isHlsUrl(video.stream_url ?? '') ? 'hls' : 'direct';
+
 const getErrorMessage = (error: unknown, fallback: string): string => {
     if (error instanceof Error) return error.message;
     return fallback;
@@ -126,9 +140,6 @@ export default function RoomPage() {
     const [playingIndex, setPlayingIndex] = useState<number>(-1);
     const [inputUrl, setInputUrl] = useState('');
     const [loading, setLoading] = useState(false);
-    // Resolving for the queue is a sidebar affair: the video that is playing
-    // must stay visible while it happens.
-    const [queueing, setQueueing] = useState(false);
     const [members, setMembers] = useState<{ email: string }[]>([]);
     const [roles, setRoles] = useState<Record<string, string>>({});
     const [currentUser, setCurrentUser] = useState<string>("");
@@ -475,6 +486,48 @@ export default function RoomPage() {
     // these callbacks stable and free of declaration order.
     const sendMsgRef = useRef<(type: string, payload?: unknown) => void>(() => { });
 
+    // === HOW LONG EACH VIDEO TOOK TO START (lib/playback-timing.ts) ===
+    // Everything here is reached from the socket handler, which keeps the
+    // render it was created in, so it lives in refs.
+    const startupTimerRef = useRef<StartupTimer | null>(null);
+    const startupReportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // The resolve this viewer waited for before announcing a video, so the
+    // report of that video's start can include it.
+    const initiatedResolveRef = useRef<{ url: string; ms: number } | null>(null);
+    const sendStartupTiming = () => {
+        if (startupReportTimerRef.current !== null) clearTimeout(startupReportTimerRef.current);
+        startupReportTimerRef.current = null;
+        const report = startupTimerRef.current?.takeReport();
+        if (report) sendMsgRef.current('playback_timing', report);
+    };
+    const beginStartupTiming = (video: ResolveResponse | null | undefined) => {
+        // The video being replaced reports what it has, stalls so far included.
+        sendStartupTiming();
+        startupTimerRef.current = null;
+        if (!video?.original_url) return;
+        const initiated = initiatedResolveRef.current;
+        initiatedResolveRef.current = null;
+        startupTimerRef.current = new StartupTimer(
+            video.original_url, playbackEngineOf(video), performance.now(),
+            initiated?.url === video.original_url ? initiated.ms : undefined);
+    };
+    const handleStartupMark = (mark: StartupMark) => {
+        const timer = startupTimerRef.current;
+        if (!timer || (mark.originalUrl && mark.originalUrl !== timer.originalUrl)) return;
+        const now = performance.now();
+        switch (mark.kind) {
+            case 'manifest': timer.markManifest(now, mark.preloaded); break;
+            case 'first-frame':
+                timer.markFirstFrame(now, mark.height);
+                if (startupReportTimerRef.current === null) {
+                    startupReportTimerRef.current = setTimeout(sendStartupTiming, PLAYBACK_TIMING_STALL_WINDOW_MS);
+                }
+                break;
+            case 'playing': timer.markPlaying(now); break;
+            case 'stall': timer.markStall(now); break;
+        }
+    };
+
     const publisher = useSharePublisher({
         origin: BACKEND_ORIGIN,
         roomId,
@@ -591,6 +644,7 @@ export default function RoomPage() {
                     const isSameVideo = current?.original_url === syncVideoData.original_url;
 
                     if (!current || !isSameVideo) {
+                        beginStartupTiming(syncVideoData);
                         // New video or first load: Re-resolve for fresh stream URLs
                         if (syncVideoData.original_url) {
                             console.log('[Room] Sync: Re-resolving video for fresh stream URLs...');
@@ -662,9 +716,8 @@ export default function RoomPage() {
                 // the server carries that on the video as `progress` — while a
                 // live stream has no position to return to.
                 const nextVideo = payload.video_data;
-                const resumeAt = nextVideo && !nextVideo.is_live && typeof nextVideo.progress === 'number'
-                    ? nextVideo.progress
-                    : 0;
+                beginStartupTiming(nextVideo);
+                const resumeAt = resumePosition(nextVideo);
                 setSyncState(prev => ({ ...prev, timestamp: resumeAt, isPlaying: !!nextVideo }));
                 setActualPlayerTime(resumeAt);
                 setSponsorSegments({ videoUrl: nextVideo?.original_url ?? null, segments: [] });
@@ -752,6 +805,13 @@ export default function RoomPage() {
                 setTimeout(() => router.push('/'), ROOM_CLOSED_REDIRECT_DELAY_MS);
                 break;
             }
+            case 'resolve_failed':
+                // Only the member who added the link hears of it; for
+                // everyone else the pending row simply goes away.
+                toast.error(typeof payload.detail === 'string' && payload.detail
+                    ? `Could not add to the queue: ${payload.detail}`
+                    : 'Could not add that link to the queue');
+                break;
             case 'error':
                 // The server refuses quietly otherwise, and a click that
                 // does nothing visible reads as a broken button.
@@ -875,12 +935,48 @@ export default function RoomPage() {
             ? ` (using ${displayName(data.resolved_by)}'s cookies)`
             : '';
 
+    // === RESOLVING A PASTED LINK BEFORE THE CLICK ===
+    // A resolve is the longest single wait in starting a video, and it does
+    // not depend on the click: a link that looks complete is resolved while
+    // the viewer reaches for the button, and the click joins that resolve —
+    // still in flight, or already answered. The server coalesces identical
+    // resolves and caches the answer, so a queue add of the same link lands
+    // on it too.
+    const speculativeResolveRef = useRef<{ url: string; at: number; result: Promise<ResolveResponse> } | null>(null);
+    const resolveForRoom = useCallback((url: string): Promise<ResolveResponse> => {
+        const earlier = speculativeResolveRef.current;
+        if (earlier && earlier.url === url && Date.now() - earlier.at < SPECULATIVE_RESOLVE_MAX_AGE_MS) {
+            return earlier.result;
+        }
+        const entry = { url, at: Date.now(), result: resolveUrl(url, { room: roomId }) };
+        speculativeResolveRef.current = entry;
+        // A failed resolve is not kept: the click asks again and reports it.
+        entry.result.catch(() => {
+            if (speculativeResolveRef.current === entry) speculativeResolveRef.current = null;
+        });
+        return entry.result;
+    }, [roomId]);
+    useEffect(() => {
+        const url = inputUrl.trim();
+        if (!looksLikeUrl(url)) return;
+        const timer = setTimeout(() => {
+            // Speculation: its errors are the click's to report, not this.
+            resolveForRoom(url).catch(() => { });
+        }, SPECULATIVE_RESOLVE_DEBOUNCE_MS);
+        return () => clearTimeout(timer);
+    }, [inputUrl, resolveForRoom]);
+
     const handleLoadNow = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!inputUrl || loading) return;
+        const url = inputUrl.trim();
+        if (!url || loading) return;
         setLoading(true);
+        const clickedAt = performance.now();
         try {
-            const data = await resolveUrl(inputUrl, { room: roomId });
+            const data = await resolveForRoom(url);
+            // What this viewer waited for, from the click: a resolve the
+            // paste already started counts only for what was left of it.
+            initiatedResolveRef.current = { url: data.original_url, ms: performance.now() - clickedAt };
             sendMsg('set_video', { video_data: data });
             setInputUrl('');
             toast.success(`Playing: ${data.title}${lentBy(data)}`);
@@ -890,18 +986,16 @@ export default function RoomPage() {
         } finally { setLoading(false); }
     };
 
-    const handleAddToQueue = async () => {
-        if (!inputUrl || loading || queueing) return;
-        setQueueing(true);
-        try {
-            const data = await resolveUrl(inputUrl, { room: roomId });
-            sendMsg('queue_add', { video_data: data });
-            setInputUrl('');
-            toast.success(`Added to queue: ${data.title}${lentBy(data)}`);
-        } catch (err: unknown) {
-            console.error(err);
-            toast.error(getErrorMessage(err, 'Failed to resolve video'));
-        } finally { setQueueing(false); }
+    // The link goes to the server as it is. The server shows it in the queue
+    // at once, as a pending row, and resolves it there; waiting here for the
+    // resolve first kept the viewer staring at a busy button for the length
+    // of an extraction.
+    const handleAddToQueue = () => {
+        const url = inputUrl.trim();
+        if (!url || loading) return;
+        sendMsg('queue_add', { url });
+        setInputUrl('');
+        toast('Adding to queue…');
     };
 
     // A live stream outlives its signed playlist URL: the CDN starts
@@ -947,8 +1041,7 @@ export default function RoomPage() {
         const proxiedUrl = useProxy ? `/api/proxy?url=${encodeURIComponent(rawUrl)}` : rawUrl;
 
         // Help hls.js identify HLS streams by providing explicit MIME type
-        const isHls = rawUrl.includes('.m3u8') || rawUrl.includes('playlist') || rawUrl.includes('manifest');
-        if (isHls) {
+        if (isHlsUrl(rawUrl)) {
             return { src: proxiedUrl, type: 'application/x-mpegurl' };
         }
         return proxiedUrl;
@@ -970,20 +1063,67 @@ export default function RoomPage() {
         return remaining[playingIndex >= 0 && playingIndex < remaining.length ? playingIndex : 0];
     };
 
-    // Ask for the next video while the current one finishes. The server
-    // prepares it on its own beat too; this covers what that beat cannot
-    // see, and costs one request that usually answers from a warm cache.
+    // === PREPARING THE NEXT VIDEO WHILE THIS ONE FINISHES ===
+    // An adaptive video plays through one Shaka player that outlives it, and
+    // that player preloads the next entry itself — manifest, segment index,
+    // first segments — so the advance starts from bytes already in the page.
+    // Any other player has nothing to preload with; for those, the server is
+    // asked to prepare the entry (see prewarmVideo), which it also does on
+    // its own beat. Nothing here is prepared for an entry the server is
+    // still resolving.
+    const playsThroughShaka = videoData?.stream_type === 'dash' && !!videoData.original_url && !liveShare && !sharedBrowser;
+    const nearTheEnd = !!videoData?.duration && !videoData.is_live &&
+        videoData.duration - actualPlayerTime <= PREWARM_NEXT_VIDEO_SECONDS;
+    const upcoming = upcomingEntry();
+    // The server announces an advance as a queue update first and the video
+    // itself a moment later. In between, the queue already names the entry
+    // on its way in; it is still the one to keep prepared, or the preload
+    // would be thrown away just before it is used.
+    const arriving = playingIndex >= 0 && playingIndex < queue.length &&
+        queue[playingIndex].original_url !== videoData?.original_url
+        ? queue[playingIndex]
+        : undefined;
+    const candidate = arriving ?? (nearTheEnd ? upcoming : undefined);
+    const nextToPrepare = candidate && !candidate.pending ? candidate : undefined;
+    const preloadNext: ShakaPreloadTarget | null =
+        playsThroughShaka && nextToPrepare?.stream_type === 'dash' && !nextToPrepare.is_live
+            ? {
+                originalUrl: nextToPrepare.original_url,
+                manifestUrl: dashManifestUrl(nextToPrepare.original_url, roomId),
+                startTime: resumePosition(nextToPrepare),
+                ladder: nextToPrepare.available_qualities ?? [],
+            }
+            : null;
+    const serverPrewarmUrl = !playsThroughShaka ? nextToPrepare?.original_url : undefined;
+    const serverPrewarmType = !playsThroughShaka ? nextToPrepare?.stream_type : undefined;
     useEffect(() => {
-        const duration = videoData?.duration;
-        if (!duration || videoData?.is_live) return;
-        if (duration - actualPlayerTime > PREWARM_NEXT_VIDEO_SECONDS) return;
-        const upcoming = upcomingEntry();
-        if (!upcoming) return;
-        void prewarmVideo(upcoming.original_url, roomId, upcoming.stream_type);
-        // `actualPlayerTime` ticks with playback; prewarmVideo itself only
-        // acts once per video, so this stays a single request.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [actualPlayerTime, videoData, queue, playingIndex, roomId]);
+        // prewarmVideo acts once per video, so a position that ticks with
+        // playback stays a single request.
+        if (serverPrewarmUrl) void prewarmVideo(serverPrewarmUrl, roomId, serverPrewarmType);
+    }, [serverPrewarmUrl, serverPrewarmType, roomId]);
+
+    const warmPosition = (request: PrewarmRequest) =>
+        prewarmPosition(request.originalUrl, roomId, request.seconds, request.height, request.codec);
+
+    // A pointer resting on a queue row is a viewer about to pick it: the
+    // server gets a head start on the bytes it would open on.
+    const warmQueueEntry = (index: number) => {
+        const entry = queue[index];
+        if (!entry || entry.pending || index === playingIndex || entry.stream_type !== 'dash' || entry.is_live) return;
+        const ladder = entry.available_qualities ?? [];
+        const video = playerRef.current?.getVideoElement();
+        let mode = parseQualityMode(null);
+        try {
+            mode = parseQualityMode(localStorage.getItem(QUALITY_MODE_STORAGE_KEY));
+        } catch {
+            // Storage can be disabled; the default mode is fine.
+        }
+        const headroom = capHeadroom(mode);
+        const surface = video ? video.clientHeight * (window.devicePixelRatio || 1) : 0;
+        const cap = headroom === null ? null : autoQualityCap(ladder.map((rung) => rung.height), surface, headroom);
+        const plan = openingPlan(ladder, cap, readOpeningEstimate());
+        if (plan) prewarmPosition(entry.original_url, roomId, resumePosition(entry), plan.height, plan.codec);
+    };
 
     const getManifestUrl = () => {
         if (!videoData || videoData.stream_type !== 'dash') return undefined;
@@ -1216,7 +1356,11 @@ export default function RoomPage() {
                                     // remounted the player — reloading the
                                     // manifest and rebuffering from zero — each
                                     // time the room refreshed them.
-                                    key={`${videoData.original_url}-${useProxy}-${videoData.stream_type}`}
+                                    // An adaptive video is the exception: its
+                                    // player is kept from one video to the next
+                                    // (see useShakaPlayer), so every one of them
+                                    // shares a key.
+                                    key={playsThroughShaka ? 'mse' : `${videoData.original_url}-${useProxy}-${videoData.stream_type}`}
                                     url={getFinalVideoUrl()}
                                     isLive={videoData.is_live}
                                     onSourceExpired={handleSourceExpired}
@@ -1226,6 +1370,10 @@ export default function RoomPage() {
                                     // DASH-specific props
                                     streamType={videoData.stream_type}
                                     manifestUrl={getManifestUrl()}
+                                    originalUrl={videoData.original_url}
+                                    preloadNext={preloadNext}
+                                    onPrewarm={warmPosition}
+                                    onStartupMark={handleStartupMark}
                                     videoUrl={getDashUrls()?.videoUrl}
                                     audioUrl={getDashUrls()?.audioUrl}
                                     availableQualities={getDashUrls()?.availableQualities}
@@ -1443,7 +1591,7 @@ export default function RoomPage() {
                         </div>
                         <button
                             type="submit"
-                            disabled={loading || queueing || !inputUrl}
+                            disabled={loading || !inputUrl}
                             aria-busy={loading}
                             className={`px-4 h-9 ${activeTheme.text} font-medium rounded-lg text-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 ${activeTheme.accent} shadow-lg hover:brightness-110`}
                         >
@@ -1453,11 +1601,10 @@ export default function RoomPage() {
                         <button
                             type="button"
                             onClick={handleAddToQueue}
-                            disabled={loading || queueing || !inputUrl}
-                            aria-busy={queueing}
+                            disabled={loading || !inputUrl}
                             className={`px-4 h-9 bg-neutral-800/50 hover:bg-neutral-800 text-neutral-100 font-medium rounded-lg text-sm border ${activeTheme.border} disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors`}
                         >
-                            {queueing ? <Loader2 aria-hidden="true" className="animate-spin w-3 h-3" /> : <Plus aria-hidden="true" className="w-3 h-3" />}
+                            <Plus aria-hidden="true" className="w-3 h-3" />
                             Queue
                         </button>
                         {amSharing ? (
@@ -1804,6 +1951,7 @@ export default function RoomPage() {
                                                     }}
                                                     onRemove={(i) => sendMsg('queue_remove', { index: i })}
                                                     onPin={(i) => sendMsg('queue_pin', { index: i })}
+                                                    onHoverRest={warmQueueEntry}
                                                 />
                                             ))}
                                         </SortableContext>

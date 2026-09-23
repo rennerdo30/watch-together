@@ -26,6 +26,7 @@ from services.database import get_all_cached_formats, clear_format_cache
 from services.metrics import proxy_metrics
 from services import user_cookies
 from services.playback_quality import history as playback_history, verdict as playback_verdict
+from services.startup_timing import history as startup_history
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,9 @@ async def admin_overview(request: Request, response: Response):
         # The same lines are in the backend log; this is the browser's copy.
         "playback_history": playback_history.snapshot(
             limit=config.ADMIN_PLAYBACK_HISTORY_LIMIT),
+        # How long resolves, manifests and player starts take, with medians
+        # and 90th percentiles; the same events are INFO lines in the log.
+        "startup_timing": startup_history.snapshot(limit=config.ADMIN_STARTUP_TIMING_LIMIT),
     }
 
 

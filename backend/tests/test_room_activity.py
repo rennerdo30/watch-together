@@ -23,11 +23,22 @@ def _drain_until(ws, msg_type: str, limit: int = 20) -> dict:
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    import main
     from main import app
 
+    # Queued by address and resolved by the server; the extraction is
+    # replaced so no test touches yt-dlp or the network.
+    async def resolve(url, user_agent=None, **kwargs):
+        return _video(int(url.rsplit("-", 1)[1]))
+
+    monkeypatch.setattr(main, "resolve_url", resolve)
     with TestClient(app) as test_client:
         yield test_client
+
+
+def _queue(ws, number: int) -> None:
+    ws.send_json({"type": "queue_add", "payload": {"url": _video(number)["original_url"]}})
 
 
 def test_queue_actions_are_attributed_and_reconnect_in_sync(client):
@@ -37,7 +48,7 @@ def test_queue_actions_are_attributed_and_reconnect_in_sync(client):
         with client.websocket_connect(f"/ws/{room}?user=sam@example.com") as sam:
             _drain_until(sam, "sync")
 
-            alex.send_json({"type": "queue_add", "payload": {"video_data": _video(1)}})
+            _queue(alex, 1)
             added = _drain_until(sam, "activity")["activity"]
             assert added["action"] == "queue_added"
             assert added["actor"] == "alex@example.com"
@@ -64,7 +75,7 @@ def test_playback_actions_include_actor_and_system_transitions(client):
     with client.websocket_connect(f"/ws/{room}?user=alex@example.com") as ws:
         _drain_until(ws, "sync")
         for number in (1, 2):
-            ws.send_json({"type": "queue_add", "payload": {"video_data": _video(number)}})
+            _queue(ws, number)
             _drain_until(ws, "activity")
 
         ws.send_json({"type": "queue_play", "payload": {"index": 0}})

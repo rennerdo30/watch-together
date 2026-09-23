@@ -44,7 +44,6 @@ async def test_prefetched_prefix_answers_smaller_player_ranges(monkeypatch):
     data = bytes(range(256)) * 16
     await memory_cache.put(get_segment_cache_key(url, 0, 4095), data,
                            'video/mp4', content_range='bytes 0-4095/10000')
-    monkeypatch.setattr(main, 'validate_proxy_url', lambda url: None)
     upstream = AsyncMock(side_effect=AssertionError('prefetched bytes must be reused'))
     monkeypatch.setattr(main, 'open_upstream_stream', upstream)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app),
@@ -103,7 +102,7 @@ async def test_cached_subranges_never_cross_users_or_accept_truncation():
     assert await cache.get_range(url, 0, 2, 'alice') is None
 
 
-async def test_initial_prefetch_uses_owner_and_fast_googlevideo_ranges(monkeypatch):
+async def test_span_warm_uses_owner_and_fast_googlevideo_ranges(monkeypatch):
     from services import prefetcher, stream_owner
     url = ('https://rr1.googlevideo.com/videoplayback?itag=137&clen=10000000'
            '&id=performance-prefetch&lmt=1')
@@ -118,7 +117,7 @@ async def test_initial_prefetch_uses_owner_and_fast_googlevideo_ranges(monkeypat
     # Patch the existing cookie provider so both old and new code run.
     monkeypatch.setattr('services.user_cookies.get_cookie_header', lambda identity, url: 'session=alice' if identity == 'alice' else None)
     async with httpx.AsyncClient() as client:
-        await prefetcher.prefetch_initial_segments(url, None, client)
+        await prefetcher.prefetch_bytes(client, url, 0, 3 * 1024 * 1024 - 1)
     assert seen[0][1].get('Cookie') == 'session=alice'
     assert 'range=' in seen[0][0] and 'Range' not in seen[0][1]
     # A truncated prefetch cannot poison a later ranged response.
@@ -151,14 +150,22 @@ async def test_hls_prefetch_can_refill_evicted_segments(monkeypatch):
         await memory_cache.clear()
 
 
-async def test_refresh_uses_cached_stream_url_and_owner(monkeypatch):
-    from services import resolver
-    cached = {'stream_url': 'https://example.com/fresh.m3u8', 'resolved_by': 'alice'}
-    monkeypatch.setattr(resolver, 'get_cached_format', AsyncMock(return_value=cached))
-    result = await resolver.refresh_video_url({'original_url': 'https://example.com/video',
-                                               'stream_url': 'https://example.com/expired.m3u8'})
+async def test_advancing_uses_the_cached_resolve_and_its_owner(monkeypatch):
+    """The queue advance refreshes an entry through the one resolve path."""
+    import main
+    import time as time_module
+    cached = {'original_url': 'https://example.com/video',
+              'stream_url': 'https://example.com/fresh.m3u8', 'resolved_by': 'alice',
+              'video_url': f'https://example.com/v?expire={int(time_module.time()) + 3600}'}
+    monkeypatch.setattr(main, 'get_cached_format', AsyncMock(return_value=cached))
+    monkeypatch.setattr(main, 'resolve_url', AsyncMock(side_effect=AssertionError('cache is fresh')))
+    entry = {'original_url': 'https://example.com/video',
+             'stream_url': 'https://example.com/expired.m3u8', 'added_by': 'bob'}
+    result = await main._refresh_entry(entry, 'room', 'bob@example.com')
+    assert result is entry
     assert result['stream_url'] == cached['stream_url']
     assert result['resolved_by'] == 'alice'
+    assert result['added_by'] == 'bob'
 
 
 async def test_refreshed_live_cache_starts_a_new_age():
@@ -214,24 +221,42 @@ async def test_ready_reports_cannot_restart_an_already_running_clock(monkeypatch
     assert manager.get_sync_payload('r')['timestamp'] >= 8
 
 
-async def test_read_ahead_deduplicates_bursts_and_aligns_reusable_blocks(monkeypatch):
-    from services import prefetcher
+async def test_read_ahead_warms_the_next_subsegments_exactly(monkeypatch):
+    """Read-ahead fetches the player's next requests byte for byte.
+
+    It used to fetch aligned 3 MB blocks. The memory cache only answers a
+    request that one cached entry fully covers, so a subsegment straddling
+    a block boundary — always, at 1440p and above — never hit.
+    """
+    from services import manifest, prefetcher
+    from services.cache import stream_identity
+    from services.mp4_index import SegmentTable
     calls = []
 
     async def warm(client, url, start, end, **kwargs):
-        calls.append((start, end))
+        calls.append((start, end, kwargs.get('read_ahead')))
         await asyncio.sleep(0)
 
+    table = SegmentTable(offsets=(1000, 5_001_000, 9_001_000, 13_001_000),
+                         starts=(0.0, 5.0, 10.0, 15.0), duration=20.0,
+                         sizes=(5_000_000, 4_000_000, 4_000_000, 4_000_000))
+    url = 'https://rr1.googlevideo.com/videoplayback?clen=17001000&itag=137&id=read-ahead&lmt=1'
+    monkeypatch.setitem(manifest._segment_tables, stream_identity(url), table)
     monkeypatch.setattr(prefetcher, 'prefetch_bytes', warm)
-    url = 'https://rr1.googlevideo.com/videoplayback?clen=10000000&itag=137&id=read-ahead&lmt=1'
     async with httpx.AsyncClient() as client:
-        for end in range(100000, 100010):
-            prefetcher.prefetch_ahead(client, url, end)
-        tasks = list(prefetcher._read_ahead_tasks.values())
-        assert len(tasks) == 1
-        await asyncio.gather(*tasks)
-    block = 3 * 1024 * 1024
-    assert calls == [(0, block - 1), (block, 2 * block - 1)]
+        for _ in range(5):  # A burst of requests for subsegment 0 starts one warm per span.
+            prefetcher.prefetch_ahead(client, url, 1000)
+        assert len(prefetcher._span_tasks) == 2
+        await prefetcher.drain_span_warms()
+    assert calls == [(5_001_000, 9_000_999, True), (9_001_000, 13_000_999, True)]
+
+
+async def test_read_ahead_never_guesses_without_an_index(monkeypatch):
+    from services import prefetcher
+    monkeypatch.setattr(prefetcher, 'prefetch_bytes', AsyncMock(side_effect=AssertionError('guessed')))
+    async with httpx.AsyncClient() as client:
+        prefetcher.prefetch_ahead(client, 'https://rr1.googlevideo.com/videoplayback?clen=9&itag=1&lmt=2', 0)
+    assert not prefetcher._span_tasks
 
 
 async def test_hls_prefetch_is_parallel_and_keeps_cookie_identity(monkeypatch):
@@ -267,26 +292,26 @@ async def test_hls_prefetch_is_parallel_and_keeps_cookie_identity(monkeypatch):
         await memory_cache.clear()
 
 
-async def test_fresh_queue_resolution_updates_playback_metadata(monkeypatch):
-    from services import resolver
+async def test_an_expired_queue_entry_is_re_resolved_on_advance(monkeypatch):
+    import main
+    fresh = {'original_url': 'https://example.com/fresh-queue', 'stream_type': 'dash',
+             'duration': 120, 'is_live': False, 'stream_url': 'https://cdn.example.com/new',
+             'resolved_by': None}
+    resolves = []
 
-    class Extractor:
-        def __init__(self, opts):
-            pass
-        def __enter__(self):
-            return self
-        def __exit__(self, *args):
-            pass
-        def extract_info(self, url, download=False):
-            return FAKE_INFO
+    async def resolve(url, user_agent=None, **kwargs):
+        resolves.append((url, kwargs.get('refresh'), kwargs.get('room_id')))
+        return fresh
 
-    monkeypatch.setattr(resolver, 'get_cached_format', AsyncMock(return_value=None))
-    monkeypatch.setattr(resolver.yt_dlp, 'YoutubeDL', Extractor)
-    saved = AsyncMock()
-    monkeypatch.setattr(resolver, 'cache_format', saved)
-    result = await resolver.refresh_video_url({'original_url': 'https://example.com/fresh-queue',
-                                               'stream_type': 'hls', 'duration': 0, 'is_live': True})
+    monkeypatch.setattr(main, 'get_cached_format', AsyncMock(return_value=None))
+    monkeypatch.setattr(main, 'resolve_url', resolve)
+    entry = {'original_url': 'https://example.com/fresh-queue', 'stream_type': 'hls',
+             'stream_url': 'https://cdn.example.com/old?expire=1600000000', 'is_live': True,
+             'pinned': True, 'progress': 30.0, 'pending': True}
+    result = await main._refresh_entry(entry, 'room-x', 'a@example.com')
+    assert resolves == [('https://example.com/fresh-queue', True, 'room-x')]
     assert result['stream_type'] == 'dash'
     assert result['duration'] == 120
     assert result['is_live'] is False
-    assert saved.call_args.args[1]['stream_url'] == result['stream_url']
+    assert result['pinned'] is True and result['progress'] == 30.0
+    assert 'pending' not in result

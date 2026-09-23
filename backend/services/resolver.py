@@ -1,20 +1,14 @@
 """
 Video URL resolution service using yt-dlp.
 """
-import os
-import asyncio
 import logging
-from typing import Iterable, Optional
+from typing import Optional
 from urllib.parse import urlparse, parse_qs
-import yt_dlp
 
 from core.config import (
     DEFAULT_USER_AGENT, POT_PROVIDER_EXTRACTOR_ARGS,
     QUALITY_LADDER_SIZE, STORYBOARD_PREFERRED_FRAME_WIDTH, YTDLP_CACHE_DIR,
 )
-from services.database import cache_format, get_cached_format
-from services.stream_owner import RESOLVED_BY_KEY, remember as remember_stream_owner
-from services.user_cookies import choose_cookie_source, cookie_file
 
 logger = logging.getLogger(__name__)
 
@@ -370,128 +364,3 @@ def _build_resolve_response(url: str, info: dict, stream_info: dict) -> dict:
         response["audio_options"] = stream_info.get("audio_options", [])
 
     return response
-
-
-async def refresh_video_url(video_data: dict, user_agent: str = None, user_email: str = None,
-                            members: Iterable[str] = ()) -> dict:
-    """
-    Re-resolves the stream URL using a multi-strategy fallback system to beat age restrictions.
-
-    `members` are the room's connected identities: whoever added the video
-    is tried first, then any member signed in to the video's site, so a
-    queue entry still plays when the person who queued it has left.
-    """
-    if not video_data or not video_data.get("original_url"):
-        return video_data
-
-    original_url = video_data["original_url"]
-    added_by = video_data.get("added_by")
-
-    # 1. Check memory cache first
-    cached = await get_cached_format(original_url)
-    if cached:
-        room_fields = {key: video_data[key] for key in ('original_url', 'added_by', 'pinned', 'progress') if key in video_data}
-        video_data.clear()
-        video_data.update(cached)
-        video_data.update(room_fields)
-        remember_stream_owner(video_data)
-        return video_data
-
-    logger.info(f"Refreshing stream URL for: {original_url} (User: {user_email}, Added by: {added_by})")
-
-    # 2. Resolve Cookies (requester -> adder -> any room member signed in to the site -> anonymous)
-    candidates = [added_by] if isinstance(added_by, str) else []
-    candidates.extend(members)
-    cookie_owner = choose_cookie_source(original_url, user_email, candidates)
-
-    # The cookie file exists only while the strategies run.
-    async with cookie_file(cookie_owner) as cookie_path:
-        # 3. Define strategies.
-        #
-        # These vary only the cookie source. They used to pin YouTube player
-        # clients (web, mweb, tv_embedded, ios, tv) and try them in turn, but
-        # every one of those lists now returns storyboard images and no media:
-        # YouTube requires per-client tokens that a pinned list does not carry.
-        # yt-dlp keeps its own default client selection current, which resolves
-        # the same videos at full quality, so the choice is left to it.
-        strategies = [
-            {
-                "name": "requester_cookies" if cookie_path else "anonymous",
-                "desc": "Default clients, with whatever cookies were found",
-                "cookiefile": cookie_path,
-                "owner": cookie_owner,
-            },
-        ]
-
-        # Retrying without cookies is worth it: an expired or wrong-account
-        # cookie file makes YouTube refuse a video that plays fine anonymously.
-        if cookie_path:
-            strategies.append({
-                "name": "anonymous",
-                "desc": "Default clients, no cookies",
-                "cookiefile": None,
-                "owner": None,
-            })
-
-        info = None
-        last_error = None
-        resolved_by = None
-
-        cache_dir = os.path.join("data", "yt_dlp_cache")
-
-        # 4. Execute Strategies
-        for strat in strategies:
-            logger.info(f"Attempting resolution strategy: {strat['name']}")
-        
-            ydl_opts = build_ydl_opts(strat.get("cookiefile"), user_agent, cache_dir=cache_dir)
-
-            try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    # Extract info without downloading
-                    # Run in thread executor to avoid blocking event loop
-                    info = await asyncio.to_thread(ydl.extract_info, original_url, download=False)
-                
-                    # Validation: Did we actually get formats?
-                    if not info.get('formats'):
-                        raise ValueError("No formats found")
-                
-                    # Validation: Avoid storyboard-only results (tiny duration or specific format IDs)
-                    formats = info.get('formats', [])
-                    valid_video = any(f.get('height') and f.get('height') >= 360 for f in formats)
-                
-                    if not valid_video:
-                        logger.warning(f"Strategy {strat['name']} returned only low-quality/storyboard formats.")
-                        # Don't fail yet, maybe it's just a 240p video, but treat as suspicious
-                        # But if it's the only one that works, we might have to take it.
-                        # For now, let's continue to try better strategies if this one sucks.
-                        # Exception: if it's the last strategy, we'll take what we can get.
-                        if strat != strategies[-1]:
-                             continue
-                    else:
-                        logger.info(f"Strategy {strat['name']} SUCCESS!")
-                        resolved_by = strat["owner"]
-                        break  # We got good data, stop trying
-
-            except Exception as e:
-                logger.warning(f"Strategy {strat['name']} failed: {str(e)}")
-                last_error = e
-                continue
-
-    # 5. Process Results
-    if not info:
-        logger.error(f"All resolution strategies failed. Last error: {last_error}")
-        return video_data
-
-    # Extract best URL using your existing logic
-    stream_data = _extract_stream_url(info)
-
-    if stream_data:
-        room_fields = {key: video_data[key] for key in ('added_by', 'pinned', 'progress') if key in video_data}
-        video_data.clear()
-        video_data.update(_build_resolve_response(original_url, info, stream_data))
-        video_data.update(room_fields)
-        video_data[RESOLVED_BY_KEY] = resolved_by
-        remember_stream_owner(video_data)
-        await cache_format(original_url, video_data)
-
-    return video_data

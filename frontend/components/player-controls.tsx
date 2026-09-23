@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, Settings, Activity, PictureInPicture, Ear, Headphones } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { parseUpscaleMode, type UpscaleMode } from '@/lib/upscaling/policy';
@@ -8,6 +8,7 @@ import { parseQualityMode, type QualityMode } from '@/lib/quality-mode';
 import { sponsorCategoryColor, sponsorCategoryLabel, type SponsorSegment } from '@/lib/sponsorblock';
 import { chapterAt, type VideoChapter } from '@/lib/chapters';
 import { storyboardFrame, type Storyboard } from '@/lib/storyboard';
+import { HOVER_PREWARM_DELAY_MS } from '@/lib/constants';
 
 
 interface PlayerControlsProps {
@@ -34,6 +35,11 @@ interface PlayerControlsProps {
     onStatsToggle: () => void;
     onQualityChange: (index: number) => void;
     onSeek: (time: number) => void;
+    /**
+     * The pointer has rested on the seek bar for `HOVER_PREWARM_DELAY_MS`,
+     * at this time. A pointer only passing over says nothing.
+     */
+    onSeekHoverRest?: (time: number) => void;
     normalizationActive?: boolean;
     onToggleNormalization?: () => void;
     normalizationGain?: number;
@@ -86,6 +92,7 @@ export function PlayerControls({
     onStatsToggle,
     onQualityChange,
     onSeek,
+    onSeekHoverRest,
     normalizationActive,
     onToggleNormalization,
     normalizationGain,
@@ -112,10 +119,33 @@ export function PlayerControls({
     const [hoverFraction, setHoverFraction] = useState<number | null>(null);
     const progressRef = useRef<HTMLDivElement>(null);
 
+    const hoverRestTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const clearHoverRest = () => {
+        if (hoverRestTimer.current !== null) clearTimeout(hoverRestTimer.current);
+        hoverRestTimer.current = null;
+    };
+    useEffect(() => clearHoverRest, []);
+
+    const displayDuration = seekableForDVR ? seekableForDVR.end - seekableForDVR.start : (duration || 0);
+
     const updateHover = (clientX: number) => {
         const rect = progressRef.current?.getBoundingClientRect();
         if (!rect || rect.width === 0) return;
-        setHoverFraction(Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)));
+        const fraction = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+        setHoverFraction(fraction);
+        // Every movement restarts the wait: only a pointer that stops counts.
+        clearHoverRest();
+        if (!onSeekHoverRest || displayDuration <= 0) return;
+        const time = (seekableForDVR?.start ?? 0) + fraction * displayDuration;
+        hoverRestTimer.current = setTimeout(() => {
+            hoverRestTimer.current = null;
+            onSeekHoverRest(time);
+        }, HOVER_PREWARM_DELAY_MS);
+    };
+
+    const leaveHover = () => {
+        clearHoverRest();
+        setHoverFraction(null);
     };
 
     const formatTime = (seconds: number) => {
@@ -131,7 +161,6 @@ export function PlayerControls({
         onSeek(parseFloat(e.target.value));
     };
 
-    const displayDuration = seekableForDVR ? seekableForDVR.end - seekableForDVR.start : (duration || 0);
     const displayCurrentTime = seekableForDVR ? currentTime - seekableForDVR.start : currentTime;
     const progress = displayDuration > 0 ? (displayCurrentTime / displayDuration) * 100 : 0;
     const currentChapter = chapterAt(chapters, currentTime);
@@ -158,7 +187,7 @@ export function PlayerControls({
                         ref={progressRef}
                         className="group/progress relative h-4 w-full mb-2 cursor-pointer"
                         onPointerMove={(e) => updateHover(e.clientX)}
-                        onPointerLeave={() => setHoverFraction(null)}
+                        onPointerLeave={leaveHover}
                     >
                         {/* Hover preview: the storyboard frame and time at the pointer */}
                         {hoverFraction !== null && displayDuration > 0 && (() => {

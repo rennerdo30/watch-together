@@ -760,19 +760,72 @@ class ConnectionManager:
                 return queue.pop(i)
         return None
 
-    async def add_to_queue(self, room_id: str, video_data: dict):
-        if room_id in self.room_states:
-            state = self.room_states[room_id]
-            queue = state["queue"]
-            existing = self._take_existing(queue, video_data)
-            if existing is not None:
-                # Re-queued: the one entry moves to the back and keeps its pin.
-                video_data = {**existing, **video_data, "pinned": existing.get("pinned", False)}
-            queue.append(video_data)
+    async def queue_url(self, room_id: str, url: str, added_by: str):
+        """Queue a video by its address, before anything is known about it.
+
+        Returns (queue, pending): `pending` is the placeholder entry the
+        caller must now resolve, or None when the address was already queued
+        and resolved — it moves to the back keeping everything it had, like
+        any re-queue.
+        """
+        state = self.room_states.get(room_id)
+        if state is None:
+            return [], None
+        queue = state["queue"]
+        existing = self._take_existing(queue, {"original_url": url})
+        if existing is not None:
+            existing["added_by"] = added_by
+            queue.append(existing)
             self._resync_playing_index(state)
             await self._save_room_state(room_id)
-            return queue
-        return []
+            return queue, existing if existing.get("pending") else None
+        placeholder = {"original_url": url, "title": url, "pending": True, "added_by": added_by}
+        queue.append(placeholder)
+        self._resync_playing_index(state)
+        await self._save_room_state(room_id)
+        return queue, placeholder
+
+    async def resolve_pending(self, room_id: str, url: str, resolved: dict) -> Optional[dict]:
+        """Fill a queued placeholder with its resolve, in place.
+
+        The room's own fields (who added it, the pin, saved progress) are
+        kept. Returns the entry, or None if it has left the queue meanwhile.
+        An entry that stopped being a placeholder — someone played it, which
+        resolves it on the way — is returned as it is.
+        """
+        state = self.room_states.get(room_id)
+        if state is None:
+            return None
+        for entry in state["queue"]:
+            if entry.get("original_url") != url:
+                continue
+            if entry.get("pending"):
+                kept = {key: entry[key] for key in ("original_url", "added_by", "pinned", "progress")
+                        if key in entry}
+                entry.clear()
+                entry.update(resolved)
+                entry.update(kept)
+                await self._save_room_state(room_id)
+            return entry
+        return None
+
+    async def drop_pending(self, room_id: str, url: str) -> bool:
+        """Remove a placeholder that could not be resolved. True if one was removed.
+
+        The placeholder the room is currently on stays: removing the playing
+        entry is refused everywhere else too, and the advance handles it.
+        """
+        state = self.room_states.get(room_id)
+        if state is None:
+            return False
+        current = state.get("video_data")
+        for index, entry in enumerate(state["queue"]):
+            if entry.get("original_url") == url and entry.get("pending") and entry is not current:
+                state["queue"].pop(index)
+                self._resync_playing_index(state)
+                await self._save_room_state(room_id)
+                return True
+        return False
 
     @staticmethod
     def _resync_playing_index(state: dict) -> None:

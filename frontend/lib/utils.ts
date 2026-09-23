@@ -22,3 +22,11 @@ export function displayHost(url: string): string {
         return url;
     }
 }
+
+/**
+ * Whether typed text is worth resolving yet: an http(s) address with a
+ * dotted host. Anything less is a link still being typed.
+ */
+export function looksLikeUrl(text: string): boolean {
+    return /^https?:\/\/[^\s/?#]+\.[^\s/?#]+(?:[/?#]\S*)?$/i.test(text.trim());
+}

@@ -10,6 +10,7 @@ Most logic has been extracted to:
 """
 import os
 import asyncio
+import contextlib
 import time
 import json
 import logging
@@ -32,7 +33,9 @@ from core.config import (
     MAX_CACHEABLE_FILE_BYTES, FORMAT_CACHE_TTL_SECONDS,
     METRICS_DEFAULT_SAMPLE_LIMIT, POT_PROVIDER_EXTRACTOR_ARGS,
     PREWARM_NEXT_VIDEO_SECONDS, STREAM_URL_MIN_LIFETIME_SECONDS,
-    STREAM_URL_SERVE_MIN_SECONDS, DEFAULT_USER_AGENT,
+    PREWARM_CODEC_PREFERENCE, PREWARM_DEFAULT_HEIGHT, PREWARM_RATE_LIMIT_PER_MINUTE,
+    QUEUE_URL_MAX_LENGTH, QUEUE_UNRESOLVABLE_SKIP_LIMIT, PREWARM_MAX_POSITION_SECONDS,
+    STREAM_URL_SERVE_MIN_SECONDS, DEFAULT_USER_AGENT, INFLIGHT_JOIN_TIMEOUT_SECONDS,
     SHARE_TITLE_MAX_LENGTH, SHARE_QUALITY_MAX_LENGTH,
     SHARE_CHUNK_MAX_BYTES, SHARE_CONTROL_FORMAT, SHARE_CONTROL_MAX_BYTES,
     SHARE_CLOSE_PROTOCOL, SHARE_CLOSE_NOT_AUTHORIZED, SHARE_CLOSE_NO_SHARE,
@@ -51,11 +54,12 @@ from services.cache import (
 )
 from services.prefetcher import (
     get_or_create_session, notify_segment_for_url,
-    start_initial_prefetch, prefetch_cleanup_task, prefetch_ahead, shutdown_prefetch,
+    prefetch_cleanup_task, prefetch_ahead, shutdown_prefetch,
 )
+from services import inflight
 from services.gvs_range import rewrite_range, is_whole_file_grab
 from services.upstream import (
-    UnsafeUpstreamError, pin_url, request_kwargs,
+    UnsafeUpstreamError, request_kwargs,
     open_upstream_stream, resolve_upstream,
 )
 from services.user_cookies import choose_cookie_source, cookie_file, get_cookie_header
@@ -67,7 +71,8 @@ from services.metrics import (
     TIER_MEMORY, TIER_DISK,
 )
 from services.database import init_database, cache_format, get_cached_format
-from services.resolver import refresh_video_url, _extract_stream_url, _build_resolve_response
+from services.resolver import _extract_stream_url, _build_resolve_response
+from core.rate_limit import check_rate_limit
 from api.routes.cookies import router as cookies_router
 from api.routes.rooms import router as rooms_router
 from api.routes.tokens import router as tokens_router
@@ -81,6 +86,7 @@ from services.watch_history import reporter as history_reporter
 from services import stream_owner
 from services import stream_expiry
 from services import shared_browser
+from services import startup_timing
 from services.share_relay import RelayRefused, relay as share_relay
 
 # Room-wide SponsorBlock skipping; armed from the WebSocket handler below.
@@ -164,19 +170,6 @@ async def fetch_upstream_body(client, url: str, headers: dict):
         return response
     finally:
         await response.aclose()
-
-
-def validate_proxy_url(url: str) -> None:
-    """Validate that a proxy URL is safe to fetch.
-
-    Every host is checked, including well-known CDNs: hostname suffixes
-    prove nothing when an attacker can own a subdomain of an allowlisted
-    domain. Raises HTTPException on failure.
-    """
-    try:
-        pin_url(url)
-    except UnsafeUpstreamError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ============================================================================
@@ -302,10 +295,142 @@ def _warm_next_video_if_close(room_id: str, state: dict, position: float) -> Non
     if upcoming:
         # The room is what makes a re-resolve possible for a video nobody
         # requested: its connected members are who can lend the cookies. It
-        # also scopes the backoff, for the same reason.
+        # also scopes the backoff, for the same reason. The start is warmed
+        # on the rungs the room is watching now, where it will resume.
         prewarm.warm_video(_proxy_client, upcoming,
                            partial(_prepare_queued_video, room_id=room_id),
-                           room_id=room_id)
+                           room_id=room_id,
+                           rungs=prewarm.playing_rungs(video),
+                           seconds=manager._resume_position(upcoming))
+
+
+async def _refresh_entry(entry: dict, room_id: str, user_email: Optional[str]) -> dict:
+    """Give a queue entry stream URLs that play now, in place.
+
+    The same path every other resolve takes: the cached resolve when its
+    signed URLs are still alive, otherwise a coalesced re-resolve with the
+    room's cookies. An entry that could not be refreshed is returned as it
+    was; the player re-resolves on its own when the CDN refuses it.
+    """
+    url = entry.get("original_url")
+    if not url:
+        return entry
+    cached = await get_cached_format(url)
+    known = cached or (entry if entry.get("stream_url") else None)
+    try:
+        if known is None:
+            # Nothing stale to replace — a placeholder still being resolved,
+            # typically. A plain resolve joins that extraction; a refresh
+            # would start a second one of the same URL beside it.
+            source = await resolve_url(url, room_id=room_id, user_email=user_email)
+        else:
+            source = await _playable_source(url, known, room_id,
+                                            min_lifetime=STREAM_URL_SERVE_MIN_SECONDS,
+                                            user_email=user_email)
+    except HTTPException as exc:
+        logger.info("Could not refresh %s for room %s: %s", url, room_id, exc.detail)
+        source = None
+    if source is None or source is entry:
+        return entry
+    room_fields = {key: entry[key] for key in ("original_url", "added_by", "pinned", "progress")
+                   if key in entry}
+    entry.clear()
+    entry.update(source)
+    entry.update(room_fields)
+    entry.pop("pending", None)
+    stream_owner.remember(entry)
+    return entry
+
+
+async def _start_entry(room_id: str, entry: dict, user_email: Optional[str],
+                       _skipped: int = 0) -> None:
+    """Hand the room the entry it just moved to, with URLs that play.
+
+    Runs off the sender's socket loop: a refresh can be a yt-dlp run, and the
+    sender's next messages must not queue behind it. By the time it is done
+    the room may have moved on again, in which case nothing is announced.
+
+    A queued placeholder that still cannot be resolved has nothing a player
+    could load, so the room moves past it (a bounded number of times) rather
+    than being handed an address with no stream.
+    """
+    await _refresh_entry(entry, room_id, user_email)
+    if manager.room_states.get(room_id, {}).get("video_data") is not entry:
+        return
+    if entry.get("pending"):
+        logger.info("Skipping %s in room %s: it could not be resolved", entry.get("original_url"), room_id)
+        next_v, queue, playing_index, advanced = await manager.next_video(
+            room_id, entry.get("original_url"))
+        if not advanced:
+            return
+        await manager.broadcast({"type": "queue_update", "payload": {
+            "queue": queue, "playing_index": playing_index}}, room_id)
+        if next_v and _skipped < QUEUE_UNRESOLVABLE_SKIP_LIMIT:
+            await _start_entry(room_id, next_v, user_email, _skipped + 1)
+            return
+        entry = None
+    await manager.broadcast({"type": "set_video", "payload": {"video_data": entry}}, room_id)
+    sponsor_skipper.video_changed(room_id)
+    history_reporter.video_changed(room_id)
+
+
+# Queue entries being resolved in the background, by room and URL.
+_queued_resolves: set = set()
+
+
+def _is_queueable_url(url) -> bool:
+    return (isinstance(url, str) and 0 < len(url) <= QUEUE_URL_MAX_LENGTH
+            and url.startswith(("https://", "http://")))
+
+
+async def _resolve_queued(room_id: str, url: str, user_email: Optional[str],
+                          websocket: Optional[WebSocket] = None,
+                          user_agent: Optional[str] = None) -> None:
+    """Resolve a queued URL behind its placeholder, then fill it in.
+
+    The sender no longer waits on yt-dlp to queue something: the room shows
+    the entry at once and it becomes playable when this finishes. On
+    failure the placeholder goes and the sender (if still connected) is told
+    why. The ladder is probed straight away, so the manifest is free when
+    the entry is reached.
+    """
+    key = (room_id, url)
+    if key in _queued_resolves:
+        return
+    _queued_resolves.add(key)
+    try:
+        try:
+            data = await resolve_url(url, user_agent, room_id=room_id, user_email=user_email)
+        except HTTPException as exc:
+            detail = str(exc.detail)
+        except Exception as exc:
+            logger.warning("Resolving queued %s failed: %s", url, str(exc)[:150])
+            detail = "Could not resolve a playable stream URL."
+        else:
+            entry = await manager.resolve_pending(room_id, url, data)
+            if entry is None:
+                return  # Removed while it resolved.
+            state = manager.room_states.get(room_id, {})
+            await manager.broadcast({"type": "queue_update", "payload": {
+                "queue": state.get("queue", []), "playing_index": state.get("playing_index", -1)}}, room_id)
+            await publish_room_activity(room_id, "queue_added", user_email, entry)
+            try:
+                await _prepare_queued_video(entry, room_id)
+            except Exception as exc:  # Speculation; the advance probes again.
+                logger.debug("Probing queued %s failed: %s", url, exc)
+            return
+        if await manager.drop_pending(room_id, url):
+            state = manager.room_states.get(room_id, {})
+            await manager.broadcast({"type": "queue_update", "payload": {
+                "queue": state.get("queue", []), "playing_index": state.get("playing_index", -1)}}, room_id)
+        if websocket is not None:
+            try:
+                await websocket.send_json({"type": "resolve_failed",
+                                           "payload": {"url": url, "detail": detail}})
+            except Exception:
+                pass  # The sender left; the placeholder going is the answer.
+    finally:
+        _queued_resolves.discard(key)
 
 
 async def sync_heartbeat_task():
@@ -518,17 +643,29 @@ async def resolve_video(request: Request, url: str, user_agent: str = None, *,
 
 async def resolve_url(url: str, user_agent: str = None, *, refresh: bool = False,
                       room_id: str = "", user_email: Optional[str] = None) -> dict:
-    """Share expensive extraction among concurrent requests by the same user.
+    """Share one extraction among everyone who needs the same answer.
 
     Takes the identity rather than the request, because not every resolve
     has one: the heartbeat re-resolves a queued video whose signed URLs the
     CDN no longer serves, on nobody's behalf, and the room's own members
     lend the cookies for it.
+
+    Two requests need the same answer when they are for the same URL and
+    would run with the same cookies — not when they come from the same
+    person with the same user agent. A paste-time speculative resolve, the
+    click that follows it, the manifest request and the heartbeat's warm
+    are one extraction, not four. A request that would accept a cached
+    answer also joins a refresh already under way, whose answer is fresher
+    still; a refresh never joins a plain resolve, which may return exactly
+    the stale entry it is meant to replace.
     """
-    key = (url, user_email, user_agent, refresh, room_id)
-    task = _resolve_tasks.get(key)
+    cookie_owner = choose_cookie_source(url, user_email, manager.member_emails(room_id))
+    task = None if refresh else _resolve_tasks.get((url, cookie_owner, True))
+    key = (url, cookie_owner, refresh)
+    task = task or _resolve_tasks.get(key)
     if task is None:
-        task = asyncio.create_task(_resolve_video(user_email, url, user_agent, refresh=refresh, room_id=room_id))
+        task = asyncio.create_task(_resolve_video(user_email, url, user_agent, refresh=refresh,
+                                                  cookie_owner=cookie_owner))
         _resolve_tasks[key] = task
         def finished(done: asyncio.Task) -> None:
             _resolve_tasks.pop(key, None)
@@ -539,7 +676,7 @@ async def resolve_url(url: str, user_agent: str = None, *, refresh: bool = False
 
 
 async def _resolve_video(user_email: Optional[str], url: str, user_agent: str = None, *,
-                         refresh: bool = False, room_id: str = "") -> dict:
+                         refresh: bool = False, cookie_owner: Optional[str] = None) -> dict:
     """Resolve a URL to playable streams and cache the result.
 
     Shared by `/api/resolve` and `/api/dash-manifest`: the manifest cannot
@@ -547,10 +684,12 @@ async def _resolve_video(user_email: Optional[str], url: str, user_agent: str = 
     resolved first turns an expired cache entry or a restarted backend into
     a dead end for anything already in a room's queue.
 
-    `room_id` names the room the video is for. Most members never install
-    the extension, so the requester usually has no cookies; a member of that
-    room who is signed in to the video's site lends theirs instead.
+    `cookie_owner` is whose cookies the extraction runs with, chosen by the
+    caller from the requester and the room (see `choose_cookie_source`):
+    most members never install the extension, so the requester usually has
+    none, and a member of the room signed in to the site lends theirs.
     """
+    started = time.monotonic()
     # Serve a fresh resolution from the cache before extracting. Extraction
     # costs seconds of yt-dlp work per call, and the room multiplies calls:
     # the sender resolves once to paste, then the set_video broadcast makes
@@ -560,11 +699,11 @@ async def _resolve_video(user_email: Optional[str], url: str, user_agent: str = 
     cached = None if refresh else await get_cached_format(url)
     if cached and cached.get("stream_url"):
         logger.info(f"Resolve cache hit: {url} (User: {user_email or 'anonymous'})")
+        startup_timing.record_resolve(url, (time.monotonic() - started) * 1000,
+                                      startup_timing.RESOLVE_CACHED)
         return cached
 
     logger.info(f"Resolving URL: {url} (User: {user_email or 'anonymous'})")
-
-    cookie_owner = choose_cookie_source(url, user_email, manager.member_emails(room_id))
 
     os.makedirs(YTDLP_CACHE_DIR, exist_ok=True)
 
@@ -615,9 +754,12 @@ async def _resolve_video(user_email: Optional[str], url: str, user_agent: str = 
         ]
 
         last_error = None
-        for label, ydl_opts in attempts:
+        for attempt, (label, ydl_opts) in enumerate(attempts, start=1):
             try:
+                attempt_started = time.monotonic()
                 info = await asyncio.to_thread(_extract_with_options, url, ydl_opts)
+                logger.info("%s took %.0f ms for %s", label,
+                            (time.monotonic() - attempt_started) * 1000, url)
                 stream_info = _extract_stream_url(info)
 
                 if stream_info and stream_info.get('url'):
@@ -634,6 +776,9 @@ async def _resolve_video(user_email: Optional[str], url: str, user_agent: str = 
                         await cache_format(url, response)
                     except Exception as exc:
                         logger.warning(f"Could not cache resolved format: {exc}")
+                    startup_timing.record_resolve(
+                        url, (time.monotonic() - started) * 1000, startup_timing.RESOLVE_EXTRACTED,
+                        attempts=attempt, lent_by=cookie_owner if cookie_owner != user_email else None)
                     return response
 
                 logger.info(f"{label}: no playable formats")
@@ -641,6 +786,8 @@ async def _resolve_video(user_email: Optional[str], url: str, user_agent: str = 
                 last_error = str(e)
                 logger.info(f"{label} failed: {last_error[:150]}")
 
+    startup_timing.record_resolve(url, (time.monotonic() - started) * 1000,
+                                  startup_timing.RESOLVE_FAILED, attempts=len(attempts))
     if last_error and "Sign in to confirm your age" in last_error:
         raise HTTPException(
             status_code=403,
@@ -790,6 +937,7 @@ async def dash_manifest(request: Request, url: str, room: str = None):
             audio_formats=audio_formats,
             proxy_base=proxy_base,
             headers=outgoing_headers,
+            source_url=url,
         )
     except UnsafeUpstreamError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -804,6 +952,54 @@ async def dash_manifest(request: Request, url: str, room: str = None):
             "Cache-Control": "no-cache",
         },
     )
+
+
+@app.get("/api/prewarm", status_code=202)
+async def prewarm_start(
+    request: Request,
+    url: str = Query(..., max_length=QUEUE_URL_MAX_LENGTH, description="The video's original URL"),
+    room: str = Query(None),
+    t: float = Query(0.0, ge=0, le=PREWARM_MAX_POSITION_SECONDS, allow_inf_nan=False,
+                     description="Where the start or jump lands, in seconds"),
+    h: int = Query(PREWARM_DEFAULT_HEIGHT, ge=1, le=10_000, description="Tallest rung the player may open on"),
+    codec: str = Query(None, max_length=8, description="Video codec family the player will pick"),
+):
+    """Warm the bytes a start or jump a viewer is about to make will ask for.
+
+    The player announces it — a video about to load, the pointer resting on
+    the seek bar, a queue row about to be clicked — and the server probes
+    the video's ladder (coalesced with any manifest build) and fetches the
+    exact subsegments covering `t` on the rung the player will open on,
+    while the player is still on its way. Answers at once; the work is
+    speculative, bounded and deduplicated (services/prewarm).
+
+    Only videos the server itself resolved are warmed — the room's current
+    video or queue entry for `url`, or a cached resolve — so this is never a
+    way to have the server fetch an arbitrary address.
+    """
+    user_email = get_user_from_request(request)
+    if REQUIRE_AUTHENTICATION and not user_email:
+        raise HTTPException(status_code=401, detail="User identity required")
+    check_rate_limit(user_email or (request.client.host if request.client else "anonymous"),
+                     scope="prewarm", max_requests=PREWARM_RATE_LIMIT_PER_MINUTE)
+    room_id = sanitize_room_id(room)
+    if room_id and not (user_email and _is_connected_to_room(room_id, user_email)):
+        # A room's members lend their cookies to its re-resolves; someone who
+        # is not in the room does not get to trigger one.
+        room_id = ""
+    state = manager.room_states.get(room_id, {}) if room_id else {}
+    candidates = [state.get("video_data")] + list(state.get("queue", []))
+    video = next((entry for entry in candidates
+                  if isinstance(entry, dict) and entry.get("original_url") == url
+                  and not entry.get("pending")), None)
+    video = video or await get_cached_format(url)
+    if not video:
+        return {"status": "unknown"}
+    family = codec if codec in PREWARM_CODEC_PREFERENCE else None
+    prewarm.warm_video(await get_proxy_client(), video,
+                       partial(_prepare_queued_video, room_id=room_id),
+                       room_id=room_id, rungs=[(h, family)], seconds=t)
+    return {"status": "accepted"}
 
 
 @app.options("/api/proxy")
@@ -844,8 +1040,11 @@ async def proxy_stream(request: Request, url: str):
             status_code=403,
             detail="Whole-file media downloads are not served; players request byte ranges")
 
-    # SSRF protection: validate URL before proxying
-    await asyncio.to_thread(validate_proxy_url, url)
+    # SSRF protection is applied where a connection is made: every upstream
+    # fetch goes through services/upstream, which validates the host, pins
+    # the address it validated and re-validates every redirect. A request
+    # answered from cache contacts nothing, so it costs no DNS lookup — and
+    # a cached body was validated when it was fetched.
 
     # Dynamic referer based on URL domain
     from urllib.parse import urlparse
@@ -885,11 +1084,11 @@ async def proxy_stream(request: Request, url: str):
     # caller's own cookies, and never another user's: content fetched with
     # cookies is cached under that identity so it cannot be served to
     # someone else from a shared entry.
-    fetch_identity = stream_owner.owner_of(url) if stream_owner.is_known(url) else user_email
-    cookie_header = get_cookie_header(fetch_identity, url) if fetch_identity else None
-    if cookie_header:
-        outgoing_headers["Cookie"] = cookie_header
-    cache_identity = fetch_identity if cookie_header else None
+    fetcher = stream_owner.fetcher_for(url, user_email)
+    fetch_identity = fetcher.identity
+    if fetcher.cookie:
+        outgoing_headers["Cookie"] = fetcher.cookie
+    cache_identity = fetcher.cache_identity
 
     segment_client = await get_proxy_client()
 
@@ -961,14 +1160,30 @@ async def proxy_stream(request: Request, url: str):
                 url, range_start, range_end, identity=cache_identity)
             is_audio = is_audio_url(url)
             if range_header:
-                prefetch_ahead(segment_client, url, range_end, fetch_identity)
                 # Which rendition the room is on is only visible here: the
                 # player chooses it and never says so. A skip is warmed on
                 # what is being fetched, not on what the resolve preferred.
                 prewarm.note_active_stream(url)
-            mem_result = await memory_cache.get(segment_cache_key)
-            if mem_result is None and range_header and re.fullmatch(r'bytes=\d+-\d*', range_header):
-                mem_result = await memory_cache.get_range(url, range_start, range_end, cache_identity)
+                # Read ahead from the subsegment after this one. It never
+                # includes the bytes asked for here, so it cannot race this
+                # request for them.
+                prefetch_ahead(segment_client, url, range_start, fetch_identity)
+            finite_range = bool(range_header and range_end is not None
+                                and re.fullmatch(r'bytes=\d+-\d*', range_header))
+
+            async def from_memory():
+                found = await memory_cache.get(segment_cache_key)
+                if found is None and finite_range:
+                    found = await memory_cache.get_range(url, range_start, range_end, cache_identity)
+                return found
+
+            mem_result = await from_memory()
+            # A warm (or another viewer) may be fetching these very bytes
+            # right now; waiting for that is faster than fetching them again
+            # alongside it, and leaves the link to one copy.
+            if mem_result is None and finite_range and await inflight.join(
+                    url, range_start, range_end, cache_identity, INFLIGHT_JOIN_TIMEOUT_SECONDS):
+                mem_result = await from_memory()
             if mem_result:
                 data, content_type, cached_content_range = mem_result
                 logger.info(f"MEMORY HIT: {url[:60]}... ({len(data)} bytes)")
@@ -1099,228 +1314,243 @@ async def proxy_stream(request: Request, url: str):
                 except Exception as e:
                     logger.warning(f"Disk cache read error: {e}")
 
-            # Fetch from upstream
-            upstream_started = time.monotonic()
-            r, pinned = await open_upstream_stream(
-                segment_client, upstream_url, outgoing_headers)
-            upstream_ms = (time.monotonic() - upstream_started) * 1000
-            upstream_host = pinned.hostname
-            expected_bytes = int(r.headers.get("content-length", 0)) or None
+            # Fetch from upstream. From here until its bytes are in memory,
+            # another request for them waits for this one (services/inflight)
+            # rather than fetching them again. The caching stream releases it
+            # when it ends; every other way out releases it below.
+            joinable = (inflight.fetching(url, range_start, range_end, cache_identity)
+                        if range_end is not None else contextlib.nullcontext())
+            joinable.__enter__()
+            handed_off = False
+            try:
+                upstream_started = time.monotonic()
+                r, pinned = await open_upstream_stream(
+                    segment_client, upstream_url, outgoing_headers)
+                upstream_ms = (time.monotonic() - upstream_started) * 1000
+                upstream_host = pinned.hostname
+                expected_bytes = int(r.headers.get("content-length", 0)) or None
 
-            response_headers = {
-                "Access-Control-Allow-Origin": "*",
-                "Accept-Ranges": "bytes",
-                # Never let an intermediary cache or rewrite these. Segments
-                # are fetched with the caller's own cookies, so a shared cache
-                # would hand one user's authenticated content to another; and
-                # a cacheable response invites Cloudflare to fetch the whole
-                # object from the origin to satisfy a small range, which is
-                # how a 700-byte request became a 479MB origin transfer.
-                "Cache-Control": "private, no-store, no-transform",
-                # Connection is deliberately not forced closed. It used to be
-                # set to "close" to work around HTTP/2 stream errors, but
-                # those came from partial responses sent without a
-                # Content-Range, which is fixed at the source now. Closing
-                # after every response costs a fresh connection per segment,
-                # and adaptive playback is thousands of small range requests
-                # — expensive on any link, punitive on an intercontinental
-                # one.
-            }
-            for key in ["content-type", "content-length", "content-range"]:
-                if key in r.headers:
-                    response_headers[key] = r.headers[key]
+                response_headers = {
+                    "Access-Control-Allow-Origin": "*",
+                    "Accept-Ranges": "bytes",
+                    # Never let an intermediary cache or rewrite these. Segments
+                    # are fetched with the caller's own cookies, so a shared cache
+                    # would hand one user's authenticated content to another; and
+                    # a cacheable response invites Cloudflare to fetch the whole
+                    # object from the origin to satisfy a small range, which is
+                    # how a 700-byte request became a 479MB origin transfer.
+                    "Cache-Control": "private, no-store, no-transform",
+                    # Connection is deliberately not forced closed. It used to be
+                    # set to "close" to work around HTTP/2 stream errors, but
+                    # those came from partial responses sent without a
+                    # Content-Range, which is fixed at the source now. Closing
+                    # after every response costs a fresh connection per segment,
+                    # and adaptive playback is thousands of small range requests
+                    # — expensive on any link, punitive on an intercontinental
+                    # one.
+                }
+                for key in ["content-type", "content-length", "content-range"]:
+                    if key in r.headers:
+                        response_headers[key] = r.headers[key]
 
-            # A range moved into the query comes back as a 200, so the
-            # partial response this proxy owes its caller is described
-            # here. The length the origin actually sent is authoritative:
-            # a 206 whose body and Content-Range disagree is rejected.
-            # Lower-case keys throughout, matching the copy above: HTTP
-            # header names are case-insensitive but dict lookups are not,
-            # and the stored Content-Range is read back by key.
-            status_code = r.status_code
-            if media_range and r.status_code == 200:
-                sent = int(r.headers.get("content-length", 0)) or media_range.length
-                end = media_range.start + sent - 1
-                response_headers["content-range"] = (
-                    f"bytes {media_range.start}-{end}/{media_range.total}")
-                response_headers["content-length"] = str(sent)
-                status_code = 206
+                # A range moved into the query comes back as a 200, so the
+                # partial response this proxy owes its caller is described
+                # here. The length the origin actually sent is authoritative:
+                # a 206 whose body and Content-Range disagree is rejected.
+                # Lower-case keys throughout, matching the copy above: HTTP
+                # header names are case-insensitive but dict lookups are not,
+                # and the stored Content-Range is read back by key.
+                status_code = r.status_code
+                if media_range and r.status_code == 200:
+                    sent = int(r.headers.get("content-length", 0)) or media_range.length
+                    end = media_range.start + sent - 1
+                    response_headers["content-range"] = (
+                        f"bytes {media_range.start}-{end}/{media_range.total}")
+                    response_headers["content-length"] = str(sent)
+                    status_code = 206
 
-            # Check if we should cache
-            should_cache = r.status_code in (200, 206)
-            disk_ok, _ = check_disk_space()
-            if not disk_ok:
-                should_cache = False
-            content_length = int(r.headers.get("content-length", 0))
-            if content_length > MAX_CACHEABLE_FILE_BYTES:
-                should_cache = False
-            # A full cache evicts to admit new content. Refusing the write
-            # instead — which is what this did — means the first entries to
-            # arrive keep the space and everything later goes uncached.
-            if should_cache and not make_room(content_length):
-                should_cache = False
+                # Check if we should cache
+                should_cache = r.status_code in (200, 206)
+                disk_ok, _ = check_disk_space()
+                if not disk_ok:
+                    should_cache = False
+                content_length = int(r.headers.get("content-length", 0))
+                if content_length > MAX_CACHEABLE_FILE_BYTES:
+                    should_cache = False
+                # A full cache evicts to admit new content. Refusing the write
+                # instead — which is what this did — means the first entries to
+                # arrive keep the space and everything later goes uncached.
+                if should_cache and not make_room(content_length):
+                    should_cache = False
 
-            # Check for late-detected manifest (content-type based detection)
-            ctype = r.headers.get("content-type", "").lower()
-            if "mpegurl" in ctype:
-                content = await r.read()
-                text = content.decode('utf-8', errors='replace')
-                rewritten = rewrite_hls_manifest(text, url, proxy_base)
-                return Response(content=rewritten, media_type="application/vnd.apple.mpegurl")
-            elif "dash+xml" in ctype or "mpd" in ctype:
-                content = await r.read()
-                text = content.decode('utf-8', errors='replace')
-                rewritten = rewrite_dash_manifest(text, url, proxy_base)
-                return Response(content=rewritten, media_type="application/dash+xml")
+                # Check for late-detected manifest (content-type based detection)
+                ctype = r.headers.get("content-type", "").lower()
+                if "mpegurl" in ctype:
+                    content = await r.read()
+                    text = content.decode('utf-8', errors='replace')
+                    rewritten = rewrite_hls_manifest(text, url, proxy_base)
+                    return Response(content=rewritten, media_type="application/vnd.apple.mpegurl")
+                elif "dash+xml" in ctype or "mpd" in ctype:
+                    content = await r.read()
+                    text = content.decode('utf-8', errors='replace')
+                    rewritten = rewrite_dash_manifest(text, url, proxy_base)
+                    return Response(content=rewritten, media_type="application/dash+xml")
 
-            if should_cache:
-                _, cache_path = get_segment_disk_key(
-                    url, range_start, range_end, identity=cache_identity)
-                cache_meta_path = cache_path + ".meta"
+                if should_cache:
+                    _, cache_path = get_segment_disk_key(
+                        url, range_start, range_end, identity=cache_identity)
+                    cache_meta_path = cache_path + ".meta"
 
-                # make_room reserved this many bytes; a write that never
-                # lands must hand them back or seeking fills the budget with
-                # phantom reservations and caching refuses again.
-                reserved_bytes = content_length
+                    # make_room reserved this many bytes; a write that never
+                    # lands must hand them back or seeking fills the budget with
+                    # phantom reservations and caching refuses again.
+                    reserved_bytes = content_length
 
-                async def stream_and_cache():
-                    temp_path = cache_path + f".{time.time()}.tmp"
-                    total = 0
-                    chunks = []  # Collect chunks for memory cache
-                    content_type = r.headers.get("content-type", "video/mp4")
-                    transfer_started = time.monotonic()
-                    outcome = OUTCOME_OK
-                    transfer_error = None
-                    try:
-                        async with aiofiles.open(temp_path, 'wb') as f:
-                            async for chunk in r.aiter_bytes():
-                                await f.write(chunk)
-                                total += len(chunk)
-                                chunks.append(chunk)
-                                yield chunk
+                    async def stream_and_cache():
+                        temp_path = cache_path + f".{time.time()}.tmp"
+                        total = 0
+                        chunks = []  # Collect chunks for memory cache
+                        content_type = r.headers.get("content-type", "video/mp4")
+                        transfer_started = time.monotonic()
+                        outcome = OUTCOME_OK
+                        transfer_error = None
+                        try:
+                            async with aiofiles.open(temp_path, 'wb') as f:
+                                async for chunk in r.aiter_bytes():
+                                    await f.write(chunk)
+                                    total += len(chunk)
+                                    chunks.append(chunk)
+                                    yield chunk
 
-                        # A body shorter than the origin promised must not
-                        # enter the cache: its meta would claim the full
-                        # Content-Range, and a later disk hit would replay a
-                        # 206 whose body does not match — which players
-                        # reject and intermediaries turn into a 416.
-                        complete = not expected_bytes or total == expected_bytes
-                        if r.status_code in (200, 206) and complete:
-                            os.rename(temp_path, cache_path)
-                            meta = {
-                                "range_start": range_start,
-                                "range_end": range_end,
-                                "size": total,
-                                # Replayed verbatim on a hit: a 206 that cannot
-                                # state its range is rejected downstream. Read
-                                # from the response being sent, not from the
-                                # origin's headers — a range moved into the
-                                # query comes back as a 200 with no
-                                # Content-Range, and the one that matters is
-                                # the one this proxy synthesised.
-                                "content_range": response_headers.get("content-range"),
-                                "content_type": content_type,
-                                "cached_at": time.time(),
-                            }
-                            async with aiofiles.open(cache_meta_path, 'w') as f:
-                                await f.write(json.dumps(meta))
+                            # A body shorter than the origin promised must not
+                            # enter the cache: its meta would claim the full
+                            # Content-Range, and a later disk hit would replay a
+                            # 206 whose body does not match — which players
+                            # reject and intermediaries turn into a 416.
+                            complete = not expected_bytes or total == expected_bytes
+                            if r.status_code in (200, 206) and complete:
+                                os.rename(temp_path, cache_path)
+                                meta = {
+                                    "range_start": range_start,
+                                    "range_end": range_end,
+                                    "size": total,
+                                    # Replayed verbatim on a hit: a 206 that cannot
+                                    # state its range is rejected downstream. Read
+                                    # from the response being sent, not from the
+                                    # origin's headers — a range moved into the
+                                    # query comes back as a 200 with no
+                                    # Content-Range, and the one that matters is
+                                    # the one this proxy synthesised.
+                                    "content_range": response_headers.get("content-range"),
+                                    "content_type": content_type,
+                                    "cached_at": time.time(),
+                                }
+                                async with aiofiles.open(cache_meta_path, 'w') as f:
+                                    await f.write(json.dumps(meta))
 
-                            # Also add to memory cache for faster subsequent access
-                            if total < 25 * 1024 * 1024:  # Only cache segments < 25MB in memory
-                                full_data = b''.join(chunks)
-                                await memory_cache.put(
-                                    segment_cache_key,
-                                    full_data,
-                                    content_type,
-                                    is_audio=is_audio,
-                                    content_range=response_headers.get("content-range"),
-                                )
-                                logger.info(f"Added to memory cache: {url[:60]}... ({total} bytes)")
+                                # Also add to memory cache for faster subsequent access
+                                if total < 25 * 1024 * 1024:  # Only cache segments < 25MB in memory
+                                    full_data = b''.join(chunks)
+                                    await memory_cache.put(
+                                        segment_cache_key,
+                                        full_data,
+                                        content_type,
+                                        is_audio=is_audio,
+                                        content_range=response_headers.get("content-range"),
+                                    )
+                                    logger.info(f"Added to memory cache: {url[:60]}... ({total} bytes)")
 
-                                # Mark content as active
-                                url_hash = segment_cache_key.split('_')[1] if '_' in segment_cache_key else None
-                                if url_hash:
-                                    await mark_content_active(url_hash)
-                        else:
+                                    # Mark content as active
+                                    url_hash = segment_cache_key.split('_')[1] if '_' in segment_cache_key else None
+                                    if url_hash:
+                                        await mark_content_active(url_hash)
+                            else:
+                                if os.path.exists(temp_path):
+                                    os.remove(temp_path)
+                                release_room(reserved_bytes)
+                        except asyncio.CancelledError:
+                            # Only an abort if the client left mid-body. A
+                            # cancellation after full delivery is the normal end
+                            # of a streamed response.
+                            if not expected_bytes or total < expected_bytes:
+                                outcome = OUTCOME_CLIENT_ABORTED
                             if os.path.exists(temp_path):
                                 os.remove(temp_path)
-                            release_room(reserved_bytes)
-                    except asyncio.CancelledError:
-                        # Only an abort if the client left mid-body. A
-                        # cancellation after full delivery is the normal end
-                        # of a streamed response.
-                        if not expected_bytes or total < expected_bytes:
-                            outcome = OUTCOME_CLIENT_ABORTED
-                        if os.path.exists(temp_path):
-                            os.remove(temp_path)
-                            release_room(reserved_bytes)
-                        raise
-                    except Exception as e:
-                        outcome = OUTCOME_TRUNCATED
-                        transfer_error = f"{type(e).__name__}: {e}"
-                        logger.warning(f"Cache error: {e}")
-                        if os.path.exists(temp_path):
-                            os.remove(temp_path)
-                            release_room(reserved_bytes)
-                    finally:
-                        await r.aclose()
-                        if outcome == OUTCOME_OK and expected_bytes and total < expected_bytes:
+                                release_room(reserved_bytes)
+                            raise
+                        except Exception as e:
                             outcome = OUTCOME_TRUNCATED
-                            transfer_error = f"sent {total} of {expected_bytes} bytes"
-                        await proxy_metrics.record(
-                            host=upstream_host,
-                            status=r.status_code,
-                            outcome=outcome,
-                            upstream_ms=upstream_ms,
-                            transfer_ms=(time.monotonic() - transfer_started) * 1000,
-                            bytes_sent=total,
-                            range_start=range_start,
-                            expected_bytes=expected_bytes,
-                            error=transfer_error,
-                            identity=user_email,
-                        )
+                            transfer_error = f"{type(e).__name__}: {e}"
+                            logger.warning(f"Cache error: {e}")
+                            if os.path.exists(temp_path):
+                                os.remove(temp_path)
+                                release_room(reserved_bytes)
+                        finally:
+                            joinable.__exit__(None, None, None)
+                            await r.aclose()
+                            if outcome == OUTCOME_OK and expected_bytes and total < expected_bytes:
+                                outcome = OUTCOME_TRUNCATED
+                                transfer_error = f"sent {total} of {expected_bytes} bytes"
+                            await proxy_metrics.record(
+                                host=upstream_host,
+                                status=r.status_code,
+                                outcome=outcome,
+                                upstream_ms=upstream_ms,
+                                transfer_ms=(time.monotonic() - transfer_started) * 1000,
+                                bytes_sent=total,
+                                range_start=range_start,
+                                expected_bytes=expected_bytes,
+                                error=transfer_error,
+                                identity=user_email,
+                            )
 
-                return StreamingResponse(stream_and_cache(), status_code=status_code, headers=response_headers)
-            else:
-                async def stream_only():
-                    transfer_started = time.monotonic()
-                    total = 0
-                    outcome = OUTCOME_OK
-                    transfer_error = None
-                    try:
-                        async for chunk in r.aiter_bytes():
-                            total += len(chunk)
-                            yield chunk
-                    except asyncio.CancelledError:
-                        # See above: a cancellation after the last byte is a
-                        # completed response, not a failed one.
-                        if not expected_bytes or total < expected_bytes:
-                            outcome = OUTCOME_CLIENT_ABORTED
-                        raise
-                    except Exception as e:
-                        outcome = OUTCOME_TRUNCATED
-                        transfer_error = f"{type(e).__name__}: {e}"
-                        raise
-                    finally:
-                        await r.aclose()
-                        if outcome == OUTCOME_OK and expected_bytes and total < expected_bytes:
+                    handed_off = True
+                    return StreamingResponse(stream_and_cache(), status_code=status_code, headers=response_headers)
+                else:
+                    async def stream_only():
+                        transfer_started = time.monotonic()
+                        total = 0
+                        outcome = OUTCOME_OK
+                        transfer_error = None
+                        try:
+                            async for chunk in r.aiter_bytes():
+                                total += len(chunk)
+                                yield chunk
+                        except asyncio.CancelledError:
+                            # See above: a cancellation after the last byte is a
+                            # completed response, not a failed one.
+                            if not expected_bytes or total < expected_bytes:
+                                outcome = OUTCOME_CLIENT_ABORTED
+                            raise
+                        except Exception as e:
                             outcome = OUTCOME_TRUNCATED
-                            transfer_error = f"sent {total} of {expected_bytes} bytes"
-                        await proxy_metrics.record(
-                            host=upstream_host,
-                            status=r.status_code,
-                            outcome=outcome,
-                            upstream_ms=upstream_ms,
-                            transfer_ms=(time.monotonic() - transfer_started) * 1000,
-                            bytes_sent=total,
-                            range_start=range_start,
-                            expected_bytes=expected_bytes,
-                            error=transfer_error,
-                            identity=user_email,
-                        )
+                            transfer_error = f"{type(e).__name__}: {e}"
+                            raise
+                        finally:
+                            await r.aclose()
+                            if outcome == OUTCOME_OK and expected_bytes and total < expected_bytes:
+                                outcome = OUTCOME_TRUNCATED
+                                transfer_error = f"sent {total} of {expected_bytes} bytes"
+                            await proxy_metrics.record(
+                                host=upstream_host,
+                                status=r.status_code,
+                                outcome=outcome,
+                                upstream_ms=upstream_ms,
+                                transfer_ms=(time.monotonic() - transfer_started) * 1000,
+                                bytes_sent=total,
+                                range_start=range_start,
+                                expected_bytes=expected_bytes,
+                                error=transfer_error,
+                                identity=user_email,
+                            )
 
-                return StreamingResponse(stream_only(), status_code=status_code, headers=response_headers)
+                    return StreamingResponse(stream_only(), status_code=status_code, headers=response_headers)
+            finally:
+                if not handed_off:
+                    joinable.__exit__(None, None, None)
 
+    except UnsafeUpstreamError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as e:
         logger.error(f"Proxy error for {url}: {e}")
         await proxy_metrics.record(
@@ -1385,6 +1615,12 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
     # mid-video, has no segments loaded yet.
     sponsor_skipper.ensure_loaded(room_id)
     history_reporter.member_joined(room_id, user_email)
+    # A placeholder whose resolve a restart cut short would otherwise stay
+    # "resolving" for good.
+    for entry in list(manager.room_states.get(room_id, {}).get("queue", [])):
+        if entry.get("pending") and entry.get("original_url"):
+            _run_detached(_resolve_queued(room_id, entry["original_url"],
+                                          entry.get("added_by") or user_email))
     MAX_WS_MESSAGE_SIZE = 100 * 1024  # 100KB
     try:
         while True:
@@ -1454,16 +1690,6 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                             video_data, await get_cached_format(video_data["original_url"]))
                         await cache_format(video_data["original_url"], video_data, preserve_expiry=True)
 
-                    # Trigger initial prefetch for faster startup
-                    video_url = video_data.get("video_url") or video_data.get("stream_url")
-                    audio_url = video_data.get("audio_url")
-                    if video_url:
-                        start_initial_prefetch(
-                            video_url,
-                            audio_url,
-                            await get_proxy_client()
-                        )
-
                 next_v, queue, playing_index = await manager.prepend_to_queue(room_id, video_data)
                 if next_v:
                     await manager.broadcast({"type": "set_video", "payload": {"video_data": next_v}}, room_id)
@@ -1474,22 +1700,22 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     history_reporter.video_changed(room_id)
 
             elif msg_type == "queue_add":
-                video_data = payload.get("video_data")
-                if video_data:
-                    video_data["added_by"] = user_email
-                    if video_data.get("original_url"):
-                        stream_owner.sanitize_client_video(
-                            video_data, await get_cached_format(video_data["original_url"]))
-                        await cache_format(video_data["original_url"], video_data, preserve_expiry=True)
-                if video_data:
-                    start_initial_prefetch(video_data.get("video_url") or video_data.get("stream_url"),
-                                           video_data.get("audio_url"), await get_proxy_client())
-                queue = await manager.add_to_queue(room_id, video_data)
+                # Queued by address; the server resolves it behind a
+                # placeholder, so adding never waits on an extraction.
+                url = payload.get("url") if isinstance(payload, dict) else None
+                if not _is_queueable_url(url):
+                    logger.warning(f"Rejected queue_add from {user_email} in room {room_id}")
+                    continue
+                queue, pending = await manager.queue_url(room_id, url, user_email)
                 state = manager.room_states.get(room_id, {})
                 await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": state.get("playing_index", -1)}}, room_id)
-                if video_data:
-                    await publish_room_activity(
-                        room_id, "queue_added", user_email, video_data)
+                if pending is not None:
+                    _run_detached(_resolve_queued(room_id, url, user_email, websocket,
+                                                  websocket.headers.get("user-agent")))
+                else:
+                    requeued = next((e for e in queue if e.get("original_url") == url), None)
+                    if requeued:
+                        await publish_room_activity(room_id, "queue_added", user_email, requeued)
 
             elif msg_type == "queue_remove":
                 state = manager.room_states.get(room_id, {})
@@ -1541,16 +1767,11 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
 
             elif msg_type == "queue_play":
                 next_v, queue, playing_index = await manager.play_from_queue(room_id, payload.get("index"))
-                if next_v:
-                    next_v = await refresh_video_url(next_v, user_email=user_email,
-                                                     members=manager.member_emails(room_id))
-                    await manager.broadcast({"type": "set_video", "payload": {"video_data": next_v}}, room_id)
                 await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": playing_index}}, room_id)
                 if next_v:
                     await publish_room_activity(
                         room_id, "video_started", user_email, next_v)
-                sponsor_skipper.video_changed(room_id)
-                history_reporter.video_changed(room_id)
+                    _run_detached(_start_entry(room_id, next_v, user_email))
 
             elif msg_type == "video_ended":
                 # `original_url` names the video the sender's player finished;
@@ -1570,16 +1791,13 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                             ended_video,
                         )
                     if next_v:
-                        next_v = await refresh_video_url(next_v, user_email=user_email,
-                                                         members=manager.member_emails(room_id))
-                    if manager.room_states.get(room_id, {}).get("video_data") is next_v:
-                        await manager.broadcast({"type": "set_video", "payload": {"video_data": next_v}}, room_id)
-                        sponsor_skipper.video_changed(room_id)
-                        history_reporter.video_changed(room_id)
-                    if next_v:
                         await publish_room_activity(
                             room_id, "video_started", None, next_v)
+                        _run_detached(_start_entry(room_id, next_v, user_email))
                     else:
+                        await manager.broadcast({"type": "set_video", "payload": {"video_data": None}}, room_id)
+                        sponsor_skipper.video_changed(room_id)
+                        history_reporter.video_changed(room_id)
                         await publish_room_activity(
                             room_id, "playback_stopped", None)
 
@@ -1728,6 +1946,11 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         "payload": {"reason": "closed", "email": session["opened_by"]},
                     }, room_id)
                     await publish_room_activity(room_id, "browser_closed", actor=user_email)
+
+            elif msg_type == "playback_timing":
+                # Diagnostic only, like playback_quality below: how long this
+                # viewer's start took, phase by phase. See services/startup_timing.
+                startup_timing.record_start(room_id, user_email, payload)
 
             elif msg_type == "playback_quality":
                 # Diagnostic only: never broadcast, never persisted. A change

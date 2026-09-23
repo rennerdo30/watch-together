@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 import { stubAdaptiveStream } from './adaptive-fixture';
+import { emulateQueueResolution } from './queue-emulation';
 
 /**
  * Every video in a room links back to the page it was added from, so a
@@ -23,6 +24,8 @@ test('a queued video links to its original page without playing or dragging it',
   // The new tab must not reach the real site from a test run.
   await context.route(`${ORIGINAL_URL}**`, (route) =>
     route.fulfill({ status: 200, contentType: 'text/html', body: '<title>original</title>' }));
+  // The server resolves a queue add, and cannot resolve a fixture link.
+  await emulateQueueResolution(page, { addedBy: USER, resolveMs: 100 });
   await openRoom(page);
   await page.getByRole('button', { name: 'Queue', exact: true }).click();
 

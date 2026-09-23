@@ -175,10 +175,16 @@ services:
     # Cloudflare over HTTPS; it reaches 1.1.1.1 by address, so it needs no
     # resolver of its own. Pinned, not `latest`: cloudflared's proxy-dns
     # disappeared in 2026.2.0 and a floating tag crash-looped the stack.
+    #
+    # --cache answers repeated names locally. Every segment the proxy fetches
+    # on a cache miss resolves its googlevideo host first, and without a
+    # cache each of those lookups was an HTTPS round trip to Cloudflare in
+    # front of the fetch itself. --cache-optimistic answers an expired entry
+    # at once while refreshing it, so a hot name never waits again.
     image: adguard/dnsproxy:v0.84.2
     container_name: watch-together-dns
     restart: unless-stopped
-    command: -l 0.0.0.0 -p 53 -u https://1.1.1.1/dns-query -u https://1.0.0.1/dns-query
+    command: -l 0.0.0.0 -p 53 -u https://1.1.1.1/dns-query -u https://1.0.0.1/dns-query --cache --cache-optimistic
     networks:
       watch-network:
         ipv4_address: ${WT_DNS_IP:-172.28.0.53}
