@@ -1710,10 +1710,10 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 state = manager.room_states.get(room_id, {})
                 await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": state.get("playing_index", -1)}}, room_id)
                 if pending is not None:
-                    _run_detached(_resolve_queued(room_id, url, user_email, websocket,
+                    _run_detached(_resolve_queued(room_id, pending["original_url"], user_email, websocket,
                                                   websocket.headers.get("user-agent")))
                 else:
-                    requeued = next((e for e in queue if e.get("original_url") == url), None)
+                    requeued = queue[-1] if queue else None
                     if requeued:
                         await publish_room_activity(room_id, "queue_added", user_email, requeued)
 
