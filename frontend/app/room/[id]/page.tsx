@@ -24,6 +24,8 @@ import {
 import { useSharePublisher } from '@/lib/share/useSharePublisher';
 import { useShareViewer } from '@/lib/share/useShareViewer';
 import { ResolveResponse, dashManifestUrl, resolveUrl, getExtensionToken, regenerateExtensionToken, ExtensionToken, getUserSettings, updateUserSettings, getCookies, forgetCookies, extensionDownloadUrl, type CookieStatus, type UserSettings } from '@/lib/api';
+import { youtubePlaylistUrl } from '@/lib/playlist-url';
+import { PlaylistPreviewDialog } from '@/components/playlist-preview-dialog';
 import { CustomPlayer, type PrewarmRequest, type StartupMark } from '@/components/custom-player';
 import type { ShakaPreloadTarget } from '@/components/player/hooks';
 import { chapterAt, formatChapterTime } from '@/lib/chapters';
@@ -139,10 +141,13 @@ export default function RoomPage() {
     const [queue, setQueue] = useState<ResolveResponse[]>([]);
     const [playingIndex, setPlayingIndex] = useState<number>(-1);
     const [inputUrl, setInputUrl] = useState('');
+    const [playlistDialogUrl, setPlaylistDialogUrl] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
     const [members, setMembers] = useState<{ email: string }[]>([]);
     const [roles, setRoles] = useState<Record<string, string>>({});
     const [currentUser, setCurrentUser] = useState<string>("");
+    const canImportPlaylist = roles[currentUser] === 'admin' || roles[currentUser] === 'moderator';
+    const playlistInput = youtubePlaylistUrl(inputUrl.trim());
     const [connected, setConnected] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
     const [activeTheme, setActiveTheme] = useState(DEFAULT_THEME);
@@ -958,7 +963,7 @@ export default function RoomPage() {
     }, [roomId]);
     useEffect(() => {
         const url = inputUrl.trim();
-        if (!looksLikeUrl(url)) return;
+        if (!looksLikeUrl(url) || youtubePlaylistUrl(url).purePlaylist) return;
         const timer = setTimeout(() => {
             // Speculation: its errors are the click's to report, not this.
             resolveForRoom(url).catch(() => { });
@@ -970,6 +975,11 @@ export default function RoomPage() {
         e.preventDefault();
         const url = inputUrl.trim();
         if (!url || loading) return;
+        if (youtubePlaylistUrl(url).purePlaylist) {
+            if (canImportPlaylist) setPlaylistDialogUrl(url);
+            else toast.error('Only room moderators and admins can import playlists.');
+            return;
+        }
         setLoading(true);
         const clickedAt = performance.now();
         try {
@@ -993,6 +1003,11 @@ export default function RoomPage() {
     const handleAddToQueue = () => {
         const url = inputUrl.trim();
         if (!url || loading) return;
+        if (youtubePlaylistUrl(url).purePlaylist) {
+            if (canImportPlaylist) setPlaylistDialogUrl(url);
+            else toast.error('Only room moderators and admins can import playlists.');
+            return;
+        }
         sendMsg('queue_add', { url });
         setInputUrl('');
         toast('Adding to queue…');
@@ -1607,6 +1622,14 @@ export default function RoomPage() {
                             <Plus aria-hidden="true" className="w-3 h-3" />
                             Queue
                         </button>
+                        {playlistInput.hasPlaylist && canImportPlaylist && (
+                            <button type="button" disabled={loading}
+                                onClick={() => setPlaylistDialogUrl(inputUrl.trim())}
+                                className="flex h-9 items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-4 text-sm font-medium text-sky-200 hover:bg-sky-500/20 disabled:opacity-40">
+                                <ListVideo aria-hidden="true" className="h-3.5 w-3.5" />
+                                Import playlist
+                            </button>
+                        )}
                         {amSharing ? (
                             <button
                                 type="button"
@@ -1658,6 +1681,19 @@ export default function RoomPage() {
                             </button>
                         )}
                     </form>
+
+                    {playlistDialogUrl && (
+                        <PlaylistPreviewDialog
+                            roomId={roomId}
+                            url={playlistDialogUrl}
+                            onClose={() => setPlaylistDialogUrl(null)}
+                            onImported={(added, skipped) => {
+                                setPlaylistDialogUrl(null);
+                                setInputUrl('');
+                                toast.success(`Added ${added} video${added === 1 ? '' : 's'} to the queue${skipped ? `; skipped ${skipped} already queued` : ''}.`);
+                            }}
+                        />
+                    )}
 
                     {/* Whether a shared browser can be opened at all, said
                         before the button does anything. It is a deployment

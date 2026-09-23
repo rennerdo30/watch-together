@@ -16,7 +16,7 @@ import json
 import logging
 from functools import partial
 from typing import Optional
-from urllib.parse import urljoin, quote
+from urllib.parse import urljoin, quote, urlparse
 import re
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect, Request
@@ -80,6 +80,7 @@ from api.routes.extension import router as extension_router
 from api.routes.admin import router as admin_router
 from api.routes.user_settings import router as user_settings_router
 from api.routes.browser import router as browser_router
+from api.routes.playlists import router as playlists_router
 from connection_manager import manager
 from services.sponsorblock import SponsorSkipper
 from services.watch_history import reporter as history_reporter
@@ -379,8 +380,17 @@ _queued_resolves: set = set()
 
 
 def _is_queueable_url(url) -> bool:
-    return (isinstance(url, str) and 0 < len(url) <= QUEUE_URL_MAX_LENGTH
-            and url.startswith(("https://", "http://")))
+    if not (isinstance(url, str) and 0 < len(url) <= QUEUE_URL_MAX_LENGTH
+            and url.startswith(("https://", "http://"))):
+        return False
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+    except ValueError:
+        return False
+    return not (host in {"youtube.com", "www.youtube.com", "m.youtube.com",
+                         "music.youtube.com", "youtube-nocookie.com",
+                         "www.youtube-nocookie.com"} and parsed.path == "/playlist")
 
 
 async def _resolve_queued(room_id: str, url: str, user_email: Optional[str],
@@ -547,6 +557,7 @@ app.include_router(extension_router)
 app.include_router(admin_router)
 app.include_router(user_settings_router)
 app.include_router(browser_router)
+app.include_router(playlists_router)
 
 
 # ============================================================================

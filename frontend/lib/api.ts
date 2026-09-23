@@ -76,6 +76,53 @@ export interface ResolveResponse {
     audio_options?: AudioOption[];
 }
 
+export interface PlaylistPreviewEntry {
+    id: string;
+    index: number;
+    title: string;
+    thumbnail: string | null;
+    duration: number | null;
+    available: boolean;
+    reason: string | null;
+    already_queued: boolean;
+}
+
+export interface PlaylistPreview {
+    preview_id: string;
+    title: string;
+    entries: PlaylistPreviewEntry[];
+    total: number;
+    expires_at: number;
+}
+
+export interface PlaylistImportResult {
+    added: number;
+    skipped: number;
+}
+
+async function playlistPost<T>(roomId: string, action: 'preview' | 'confirm',
+    body: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+    const response = await fetch(
+        `${API_BASE_URL}/api/rooms/${encodeURIComponent(roomId)}/playlist/${action}${getUserParam()}`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body), cache: 'no-store', signal },
+    );
+    if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: null }));
+        throw new Error(typeof error.detail === 'string' ? error.detail : `Playlist request failed (${response.status})`);
+    }
+    return response.json() as Promise<T>;
+}
+
+export function previewPlaylist(roomId: string, url: string, signal?: AbortSignal): Promise<PlaylistPreview> {
+    return playlistPost(roomId, 'preview', { url }, signal);
+}
+
+export function importPlaylist(roomId: string, previewId: string,
+    selectedIds: string[]): Promise<PlaylistImportResult> {
+    return playlistPost(roomId, 'confirm', { preview_id: previewId, selected_ids: selectedIds });
+}
+
 export interface RoomSummary {
     id: string;
     active_users: number;
