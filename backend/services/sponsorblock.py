@@ -17,11 +17,9 @@ import asyncio
 import hashlib
 import json
 import logging
-import re
 import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Dict, List, Optional, Sequence, Tuple
-from urllib.parse import parse_qs, urlparse
 
 import httpx
 
@@ -39,6 +37,7 @@ from core.config import (
     SPONSORBLOCK_TIMEOUT_SECONDS,
     SPONSORBLOCK_USER_AGENT,
 )
+from services.video_identity import youtube_video_id
 
 logger = logging.getLogger(__name__)
 
@@ -52,15 +51,6 @@ SKIP_ACTION_TYPE = "skip"
 SETTINGS_KEY = "sponsorblock"
 SEGMENTS_KEY = "sponsor_segments"
 SEGMENTS_VIDEO_KEY = "sponsor_video"
-
-_YOUTUBE_HOSTS = {
-    "youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com",
-    "youtube-nocookie.com", "www.youtube-nocookie.com",
-}
-_SHORT_HOSTS = {"youtu.be", "www.youtu.be"}
-_PATH_PREFIXES = ("/shorts/", "/embed/", "/live/", "/v/")
-_VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
-
 
 class SponsorBlockError(Exception):
     """The SponsorBlock API could not be consulted."""
@@ -84,31 +74,6 @@ class Segment:
             "category": self.category,
             "uuid": self.uuid,
         }
-
-
-def youtube_video_id(url: Optional[str]) -> Optional[str]:
-    """The 11-character id of a YouTube video URL, or None for anything else."""
-    if not isinstance(url, str) or not url:
-        return None
-    try:
-        parsed = urlparse(url.strip())
-    except ValueError:
-        return None
-    host = (parsed.hostname or "").lower()
-    candidate = None
-    if host in _SHORT_HOSTS:
-        candidate = parsed.path.strip("/").split("/", 1)[0]
-    elif host in _YOUTUBE_HOSTS:
-        if parsed.path == "/watch":
-            candidate = parse_qs(parsed.query).get("v", [None])[0]
-        else:
-            for prefix in _PATH_PREFIXES:
-                if parsed.path.startswith(prefix):
-                    candidate = parsed.path[len(prefix):].split("/", 1)[0]
-                    break
-    if candidate and _VIDEO_ID.match(candidate):
-        return candidate
-    return None
 
 
 def default_settings() -> dict:

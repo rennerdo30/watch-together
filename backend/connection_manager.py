@@ -14,6 +14,7 @@ from core.config import (
 )
 from services.database import save_room, get_all_rooms, delete_room
 from services.sponsorblock import SETTINGS_KEY as SPONSORBLOCK_KEY, normalize_settings
+from services.video_identity import queue_video_identity
 from services import playback_quality
 from services.share_relay import relay as share_relay
 
@@ -745,20 +746,42 @@ class ConnectionManager:
             return True
 
     @staticmethod
-    def _take_existing(queue: list, video_data: dict) -> Optional[dict]:
+    def _take_existing(queue: list, video_data: dict,
+                       current: Optional[dict] = None) -> Optional[dict]:
         """Remove and return the queue's entry for this video, if it has one.
 
-        A video is identified by its original URL. Keeping one entry per
-        video is what lets "play now" and "queue" be repeated without the
-        queue filling up with copies that outlive the one that was watched.
+        YouTube URL shapes identify the same video by id. If an older queue
+        already has duplicates, keep the playing object where possible and
+        carry its pin and furthest saved position into the one surviving row.
         """
         url = video_data.get("original_url")
-        if not url:
+        if not isinstance(url, str) or not url:
             return None
-        for i, item in enumerate(queue):
-            if item.get("original_url") == url:
-                return queue.pop(i)
-        return None
+        identity = queue_video_identity(url)
+        matches = [item for item in queue
+                   if isinstance(item.get("original_url"), str)
+                   and queue_video_identity(item["original_url"]) == identity]
+        if not matches:
+            return None
+        existing = next((item for item in matches if item is current), None)
+        if existing is None:
+            existing = next((item for item in matches
+                             if not item.get("pending") and item.get("original_url") == url), None)
+        if existing is None:
+            existing = next((item for item in matches if not item.get("pending")), None)
+        if existing is None:
+            existing = next((item for item in matches if item.get("original_url") == url), matches[0])
+        if len(matches) > 1:
+            existing["pinned"] = any(item.get("pinned", False) for item in matches)
+            positions = [item["progress"] for item in matches
+                         if isinstance(item.get("progress"), (int, float))
+                         and not isinstance(item["progress"], bool)
+                         and math.isfinite(item["progress"])
+                         and item["progress"] >= 0]
+            if positions:
+                existing["progress"] = max(positions)
+        queue[:] = [item for item in queue if all(item is not match for match in matches)]
+        return existing
 
     async def queue_url(self, room_id: str, url: str, added_by: str):
         """Queue a video by its address, before anything is known about it.
@@ -772,7 +795,7 @@ class ConnectionManager:
         if state is None:
             return [], None
         queue = state["queue"]
-        existing = self._take_existing(queue, {"original_url": url})
+        existing = self._take_existing(queue, {"original_url": url}, state.get("video_data"))
         if existing is not None:
             existing["added_by"] = added_by
             queue.append(existing)
@@ -830,12 +853,19 @@ class ConnectionManager:
     @staticmethod
     def _resync_playing_index(state: dict) -> None:
         """Point `playing_index` at the entry of the video that is playing."""
-        current = (state.get("video_data") or {}).get("original_url")
-        if not current:
+        playing = state.get("video_data") or {}
+        current = playing.get("original_url")
+        if not isinstance(current, str) or not current:
             state["playing_index"] = -1
             return
         for i, item in enumerate(state["queue"]):
-            if item.get("original_url") == current:
+            if item is playing:
+                state["playing_index"] = i
+                return
+        identity = queue_video_identity(current)
+        for i, item in enumerate(state["queue"]):
+            if (isinstance(item.get("original_url"), str)
+                    and queue_video_identity(item["original_url"]) == identity):
                 state["playing_index"] = i
                 return
         state["playing_index"] = -1
@@ -846,9 +876,10 @@ class ConnectionManager:
             state = self.room_states[room_id]
             # Before the room moves on, keep where the outgoing video was.
             self._record_current_progress(state)
-            existing = self._take_existing(state["queue"], video_data)
+            existing = self._take_existing(state["queue"], video_data, state.get("video_data"))
             if existing is not None:
                 video_data = {**existing, **video_data, "pinned": existing.get("pinned", False)}
+            video_data.pop("pending", None)
             state["queue"].insert(0, video_data)
             state["playing_index"] = 0
             state["video_data"] = video_data
