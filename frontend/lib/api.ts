@@ -21,6 +21,11 @@ export interface AudioOption {
     audio_url: string;
     format_id: string;
     acodec: string;
+    language?: string;
+    label?: string;
+    is_original?: boolean;
+    is_default?: boolean;
+    role?: 'main' | 'alternate' | 'description';
 }
 
 import type { Storyboard } from './storyboard';

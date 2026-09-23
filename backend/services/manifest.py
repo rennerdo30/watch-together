@@ -286,6 +286,18 @@ def build_mpd(
     if not video_reps and not audio_reps:
         raise ManifestError("No playable representations")
 
+    # The selected default may have failed its index probe. A surviving
+    # alternate must then become the manifest's primary audio track.
+    if audio_reps and any(rep.get("role") for rep in audio_reps) and not any(
+        rep.get("role") == "main" for rep in audio_reps
+    ):
+        promoted = next((rep for rep in audio_reps if rep.get("role") != "description"),
+                        audio_reps[0])
+        audio_reps = [
+            {**rep, "role": "main", "is_default": True} if rep is promoted else rep
+            for rep in audio_reps
+        ]
+
     lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" '
@@ -323,12 +335,28 @@ def build_mpd(
             lines.append('      </Representation>')
         lines.append('    </AdaptationSet>')
 
-    for _family, family_reps in _group_by_codec(audio_reps, "acodec"):
+    audio_groups: Dict[Tuple[str, str, str, str], List[dict]] = {}
+    for rep in audio_reps:
+        key = (
+            _codec_family(rep.get("acodec")),
+            rep.get("language") or "und",
+            rep.get("role") or "main",
+            rep.get("label") or "",
+        )
+        audio_groups.setdefault(key, []).append(rep)
+
+    for (_family, language, role, label), family_reps in audio_groups.items():
         lines.append(
-            '    <AdaptationSet contentType="audio" mimeType="audio/mp4" '
+            f'    <AdaptationSet contentType="audio" mimeType="audio/mp4" lang={quoteattr(language)} '
             'segmentAlignment="true" startWithSAP="1" subsegmentAlignment="true" '
             'subsegmentStartsWithSAP="1">'
         )
+        lines.append(
+            '      <Role schemeIdUri="urn:mpeg:dash:role:2011" '
+            f'value={quoteattr(role)}/>'
+        )
+        if label:
+            lines.append(f'      <Label>{escape(str(label))}</Label>')
         for rep in family_reps:
             index = rep["index"]
             attrs = [
@@ -384,6 +412,11 @@ def manifest_formats(cached: dict) -> Tuple[List[dict], List[dict]]:
             "abr": option.get("abr"),
             "asr": option.get("asr"),
             "audio_channels": option.get("audio_channels"),
+            "language": option.get("language"),
+            "label": option.get("label"),
+            "is_original": option.get("is_original"),
+            "is_default": option.get("is_default"),
+            "role": option.get("role"),
         }
         for position, option in enumerate(
             (cached.get("audio_options") or [])[:MANIFEST_MAX_AUDIO_REPRESENTATIONS]

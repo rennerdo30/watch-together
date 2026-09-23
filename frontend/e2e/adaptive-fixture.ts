@@ -16,6 +16,7 @@ const PYTHON = process.env.PYTHON_BIN ?? (process.env.CI ? 'python' : '../venv/b
 
 export const FIXTURE_VIDEO_URL = 'https://cdn.test/fixtures/video.mp4';
 export const FIXTURE_AUDIO_URL = 'https://cdn.test/fixtures/audio.mp4';
+export const FIXTURE_DUB_AUDIO_URL = 'https://cdn.test/fixtures/audio-dub.mp4';
 export const FIXTURE_DURATION_SECONDS = 6;
 
 /** One video rendition of the fixture's quality ladder. */
@@ -73,12 +74,22 @@ export const DEFAULT_VIDEO_LADDER: VideoRung[] = [{ id: 'v0', height: 240, tbr: 
 export function buildManifest(
   proxyBase = 'http://localhost:3100/api/proxy?url=',
   videoLadder: VideoRung[] = DEFAULT_VIDEO_LADDER,
+  multiAudio = false,
 ): string {
   const videoReps = videoLadder.map((rung) =>
     `{'id':${JSON.stringify(rung.id)},'url':${JSON.stringify(rung.url ?? FIXTURE_VIDEO_URL)},` +
     `'width':${Math.round(rung.height * FIXTURE_ASPECT)},'height':${rung.height},` +
     `'vcodec':${JSON.stringify(FIXTURE_VCODEC)},'tbr':${rung.tbr},'fps':15,'index':video_index}`,
   );
+  const audioReps = multiAudio
+    ? `[{'id':'a-original','url':${JSON.stringify(FIXTURE_AUDIO_URL)},'acodec':'mp4a.40.2',
+         'abr':128,'asr':44100,'audio_channels':1,'index':audio_index,
+         'language':'en','label':'English original','is_original':True,'is_default':True},
+        {'id':'a-dub','url':${JSON.stringify(FIXTURE_DUB_AUDIO_URL)},'acodec':'mp4a.40.2',
+         'abr':128,'asr':44100,'audio_channels':1,'index':audio_index,
+         'language':'ja','label':'Japanese dubbed','is_original':False,'is_default':False}]`
+    : `[{'id':'a0','url':${JSON.stringify(FIXTURE_AUDIO_URL)},'acodec':'mp4a.40.2',
+         'abr':128,'asr':44100,'audio_channels':1,'index':audio_index}]`;
   const script = `
 import sys
 sys.path.insert(0, '.')
@@ -90,8 +101,7 @@ audio_index = parse_index(open('tests/fixtures/audio.mp4','rb').read(65536))
 mpd = build_mpd(
     ${FIXTURE_DURATION_SECONDS}.0,
     [${videoReps.join(',\n     ')}],
-    [{'id':'a0','url':${JSON.stringify(FIXTURE_AUDIO_URL)},'acodec':'mp4a.40.2',
-      'abr':128,'asr':44100,'audio_channels':1,'index':audio_index}],
+    ${audioReps},
     ${JSON.stringify(proxyBase)},
 )
 sys.stdout.write(mpd)
@@ -127,8 +137,9 @@ export async function stubAdaptiveStream(
   videoLadder: VideoRung[] = DEFAULT_VIDEO_LADDER,
   /** Extra fields for the resolve body, e.g. a storyboard. */
   resolveExtras: Record<string, unknown> = {},
+  multiAudio = false,
 ): Promise<string[]> {
-  const manifest = buildManifest(undefined, videoLadder);
+  const manifest = buildManifest(undefined, videoLadder, multiAudio);
   const video = readFileSync(path.join(FIXTURES, 'video.mp4'));
   const audio = readFileSync(path.join(FIXTURES, 'audio.mp4'));
   const manifestRequests: string[] = [];

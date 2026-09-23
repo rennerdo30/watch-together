@@ -2,12 +2,14 @@
 Video URL resolution service using yt-dlp.
 """
 import logging
+import re
 from typing import Optional
 from urllib.parse import urlparse, parse_qs
 
 from core.config import (
     DEFAULT_USER_AGENT, POT_PROVIDER_EXTRACTOR_ARGS,
     QUALITY_LADDER_SIZE, STORYBOARD_PREFERRED_FRAME_WIDTH, YTDLP_CACHE_DIR,
+    MANIFEST_MAX_AUDIO_REPRESENTATIONS,
 )
 
 logger = logging.getLogger(__name__)
@@ -193,6 +195,81 @@ def _is_indexable(fmt: dict) -> bool:
     return True
 
 
+def _audio_metadata(fmt: dict) -> dict:
+    """Keep yt-dlp's language and track identity independent of bitrate.
+
+    YouTube uses preference 10 for original and 5 for its selected default.
+    Its post-processing can also mark every format in the original language
+    as original, so an explicit "dubbed" label takes precedence over that
+    numeric preference.
+    """
+    note = str(fmt.get('format_note') or '')
+    note_lower = note.lower()
+    raw_language = str(fmt.get('language') or '').strip()
+    descriptive = raw_language.lower().endswith('-desc') or 'descriptive' in note_lower
+    language = raw_language[:-5] if raw_language.lower().endswith('-desc') else raw_language
+    language = language or 'und'
+    alternate = bool(re.search(r'\bdubb?ed\b|\bauto[- ]dub|\bcommentary\b', note_lower))
+    original = not alternate and not descriptive and (
+        fmt.get('language_preference') == 10 or 'original' in note_lower
+    )
+    source_default = fmt.get('language_preference') == 5 or '(default)' in note_lower
+    label = note.split(',', 1)[0].strip()
+    label = re.sub(r'\s*\(default\)', '', label, flags=re.IGNORECASE)
+    if '(original)' in label.lower():
+        label = re.sub(r'\s*\(original\)', '', label, flags=re.IGNORECASE)
+        if original and not re.search(r'\boriginal\b', label, flags=re.IGNORECASE):
+            label += ' original'
+    if not label or label.lower() in {'low', 'medium', 'high', 'audio'}:
+        label = language if language != 'und' else 'Audio'
+    return {
+        'language': language,
+        'label': label,
+        'is_original': original,
+        'is_descriptive': descriptive,
+        'source_default': source_default,
+    }
+
+
+def _select_audio_options(audio_only_formats: list) -> list:
+    """Keep the best rendition of each language and track role."""
+    tracks = {}
+    for abr, fmt in audio_only_formats:
+        metadata = _audio_metadata(fmt)
+        kind = 'description' if metadata['is_descriptive'] else \
+            'original' if metadata['is_original'] else 'alternate'
+        key = (metadata['language'].lower(), kind, metadata['label'].casefold())
+        if key not in tracks or abr > tracks[key][0]:
+            tracks[key] = (abr, fmt, metadata)
+
+    choices = list(tracks.values())
+    choices.sort(key=lambda entry: (
+        not entry[2]['is_original'],
+        not entry[2]['source_default'],
+        entry[2]['is_descriptive'],
+        -entry[0],
+    ))
+    options = []
+    for position, (_abr, fmt, metadata) in enumerate(
+        choices[:MANIFEST_MAX_AUDIO_REPRESENTATIONS]
+    ):
+        options.append({
+            'abr': fmt.get('abr'),
+            'audio_url': fmt.get('url'),
+            'format_id': fmt.get('format_id'),
+            'acodec': fmt.get('acodec'),
+            'asr': fmt.get('asr'),
+            'audio_channels': fmt.get('audio_channels'),
+            'language': metadata['language'],
+            'label': metadata['label'],
+            'is_original': metadata['is_original'],
+            'is_default': position == 0,
+            'role': 'description' if metadata['is_descriptive'] else
+                    'main' if position == 0 else 'alternate',
+        })
+    return options
+
+
 def _extract_stream_url(info: dict, prefer_dash: bool = True) -> dict:
     """
     Extract the best stream URL from yt-dlp info dict.
@@ -248,14 +325,15 @@ def _extract_stream_url(info: dict, prefer_dash: bool = True) -> dict:
     # 1. PREFER DASH for HD quality with manual quality selection
     if prefer_dash and video_only_formats and audio_only_formats:
         best_video = video_only_formats[0][1]
-        best_audio = audio_only_formats[0][1]
+        audio_options = _select_audio_options(audio_only_formats)
+        best_audio = audio_options[0]
 
         if best_video.get('height', 0) > 0:
             logger.info(f"Selected DASH: video={best_video.get('format_id')} @ {best_video.get('height')}p + audio={best_audio.get('format_id')} @ {best_audio.get('abr')}kbps")
             return {
                 'url': best_video.get('url'),
                 'video_url': best_video.get('url'),
-                'audio_url': best_audio.get('url'),
+                'audio_url': best_audio.get('audio_url'),
                 'format_id': f"{best_video.get('format_id')}+{best_audio.get('format_id')}",
                 'height': best_video.get('height'),
                 'width': best_video.get('width'),
@@ -275,15 +353,7 @@ def _extract_stream_url(info: dict, prefer_dash: bool = True) -> dict:
                     for v in _select_quality_ladder(
                         video_only_formats, QUALITY_LADDER_SIZE)
                 ],
-                'audio_options': [
-                    {
-                        'abr': a[1].get('abr'),
-                        'audio_url': a[1].get('url'),
-                        'format_id': a[1].get('format_id'),
-                        'acodec': a[1].get('acodec'),
-                    }
-                    for a in audio_only_formats[:3]
-                ]
+                'audio_options': audio_options,
             }
 
     # 2. HLS manifest
