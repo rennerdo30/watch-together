@@ -13,10 +13,7 @@ from services.cache import (
     make_room,
     release_room,
 )
-from services.resolver import (
-    refresh_video_url,
-    _extract_stream_url,
-)
+from services.resolver import _extract_stream_url
 
 __all__ = [
     "parse_range_header",
@@ -30,6 +27,5 @@ __all__ = [
     "cache_cleanup_task",
     "make_room",
     "release_room",
-    "refresh_video_url",
     "_extract_stream_url",
 ]

@@ -15,12 +15,15 @@ import httpx
 
 from services.cache import memory_cache, get_segment_cache_key, is_audio_url, mark_content_active
 from services.upstream import open_upstream_stream
-from services import stream_owner, user_cookies
+from services import inflight, stream_owner
 from services.gvs_range import rewrite_range
+from services.manifest import segment_table_for
 from core.config import (
     PREFETCH_VIDEO_COUNT,
     PREFETCH_AUDIO_COUNT,
     PREFETCH_SESSION_TTL, DEFAULT_USER_AGENT,
+    PREFETCH_AHEAD_VIDEO_SUBSEGMENTS, PREFETCH_AHEAD_AUDIO_SUBSEGMENTS,
+    PREFETCH_READ_AHEAD_CONCURRENCY, PREWARM_CONCURRENCY, PREFETCH_MAX_PENDING_SPANS,
 )
 
 logger = logging.getLogger(__name__)
@@ -109,12 +112,12 @@ class PrefetchSession:
             )
 
         async def fetch_segment(url: str) -> None:
-            owner = stream_owner.owner_of(url) if stream_owner.is_known(url) else self.identity
-            cookie = user_cookies.get_cookie_header(owner, url) if owner else None
-            cache_key = get_segment_cache_key(url, 0, None, owner if cookie else None)
+            fetcher = stream_owner.fetcher_for(url, self.identity)
+            cookie = fetcher.cookie
+            cache_key = get_segment_cache_key(url, 0, None, fetcher.cache_identity)
 
-            # Check if already in memory cache
-            if await memory_cache.get(cache_key):
+            # Check if already in memory cache (not counted: this is not a viewer)
+            if memory_cache.contains(cache_key):
                 self.prefetched.add(url)
                 return
 
@@ -127,7 +130,7 @@ class PrefetchSession:
                            "Accept-Encoding": "identity"}
                 if cookie:
                     headers['Cookie'] = cookie
-                async with _prefetch_slots:
+                async with _read_ahead_slots:
                     resp, _pinned = await open_upstream_stream(self._client, url, headers)
                     try:
                         if resp.status_code != 200 or resp.headers.get("content-encoding", "identity") != "identity":
@@ -200,100 +203,118 @@ async def notify_segment_for_url(segment_url: str, identity: Optional[str] = Non
                 break
 
 
-# Speculation is bounded across rooms; demand requests never acquire this slot.
-_prefetch_slots = asyncio.Semaphore(3)
-_read_ahead_tasks: Dict[str, asyncio.Task] = {}
-_initial_tasks: Dict[tuple, asyncio.Task] = {}
+# Speculation is bounded; demand requests never wait for a slot. Warming a
+# room's jump and reading ahead of a viewer draw from separate pools, so one
+# room's read-ahead cannot hold back another room's opening bytes.
+_read_ahead_slots = asyncio.Semaphore(PREFETCH_READ_AHEAD_CONCURRENCY)
+_warm_slots = asyncio.Semaphore(PREWARM_CONCURRENCY)
+# One task per exact span being warmed.
+_span_tasks: Dict[str, asyncio.Task] = {}
 
 
 async def prefetch_bytes(client: httpx.AsyncClient, url: str, start: int, end: int,
-                         is_audio: bool = False, identity: Optional[str] = None) -> None:
-    """Warm reusable bytes using the same session and fast range path as demand."""
-    owner = stream_owner.owner_of(url) if stream_owner.is_known(url) else identity
-    cookie = user_cookies.get_cookie_header(owner, url) if owner else None
-    cache_identity = owner if cookie else None
+                         is_audio: bool = False, identity: Optional[str] = None,
+                         read_ahead: bool = False) -> None:
+    """Fetch one exact span into the memory cache, as a viewer's request would.
+
+    The span is cached under the key the proxy looks up for a request of
+    precisely these bytes, fetched as the same identity, through the same
+    fast googlevideo range path. Nothing is fetched that is already cached
+    or already being fetched by anyone.
+    """
+    fetcher = stream_owner.fetcher_for(url, identity)
     fast_range = rewrite_range(url, start, end)
     if fast_range:
         start, end = fast_range.start, fast_range.end
-    if await memory_cache.get_range(url, start, end, cache_identity):
+    key = get_segment_cache_key(url, start, end, fetcher.cache_identity)
+
+    def already_there() -> bool:
+        return (memory_cache.contains(key)
+                or inflight.is_fetching(url, start, end, fetcher.cache_identity))
+
+    if already_there():
         return
     headers = {"Accept-Encoding": "identity", "User-Agent": DEFAULT_USER_AGENT,
                "Referer": "https://www.youtube.com/" if fast_range else f"{urlparse(url).scheme}://{urlparse(url).netloc}/"}
-    if cookie:
-        headers["Cookie"] = cookie
+    if fetcher.cookie:
+        headers["Cookie"] = fetcher.cookie
     if not fast_range:
         headers["Range"] = f"bytes={start}-{end}"
     try:
-        async with _prefetch_slots:
-            resp, _ = await open_upstream_stream(client, fast_range.url if fast_range else url, headers)
-            try:
-                if resp.status_code not in (200, 206) or resp.headers.get("content-encoding", "identity") != "identity":
+        async with (_read_ahead_slots if read_ahead else _warm_slots):
+            # The wait for a slot can be long enough for a viewer to have
+            # fetched these bytes themselves.
+            if already_there():
+                return
+            with inflight.fetching(url, start, end, fetcher.cache_identity):
+                resp, _ = await open_upstream_stream(client, fast_range.url if fast_range else url, headers)
+                try:
+                    if resp.status_code not in (200, 206) or resp.headers.get("content-encoding", "identity") != "identity":
+                        logger.debug("Prefetch of %s answered %s", url[:60], resp.status_code)
+                        return
+                    chunks = []
+                    size = 0
+                    async for chunk in resp.aiter_raw():
+                        size += len(chunk)
+                        if size > end - start + 1:
+                            return  # An origin ignoring Range must not download the whole video.
+                        chunks.append(chunk)
+                    body = b''.join(chunks)
+                finally:
+                    await resp.aclose()
+                crange = fast_range.content_range if fast_range and resp.status_code == 200 else resp.headers.get("content-range")
+                match = re.fullmatch(r'bytes (\d+)-(\d+)/(\d+|\*)', crange or '')
+                if not match or int(match[1]) != start or len(body) != int(match[2]) - start + 1:
                     return
-                chunks = []
-                size = 0
-                async for chunk in resp.aiter_raw():
-                    size += len(chunk)
-                    if size > end - start + 1:
-                        return  # An origin ignoring Range must not download the whole video.
-                    chunks.append(chunk)
-                body = b''.join(chunks)
-            finally:
-                await resp.aclose()
-        crange = fast_range.content_range if fast_range and resp.status_code == 200 else resp.headers.get("content-range")
-        match = re.fullmatch(r'bytes (\d+)-(\d+)/(\d+|\*)', crange or '')
-        if not match or int(match[1]) != start or len(body) != int(match[2]) - start + 1:
-            return
-        await memory_cache.put(get_segment_cache_key(url, start, end, cache_identity), body,
-                               resp.headers.get('content-type', 'video/mp4'),
-                               is_audio=is_audio, content_range=crange)
+                await memory_cache.put(key, body, resp.headers.get('content-type', 'video/mp4'),
+                                       is_audio=is_audio, content_range=crange)
     except Exception as exc:
         logger.debug("Prefetch failed: %s", exc)
 
 
-def prefetch_ahead(client: httpx.AsyncClient, url: str, end: Optional[int],
+def warm_span(client: httpx.AsyncClient, url: str, start: int, end: int,
+              identity: Optional[str] = None, read_ahead: bool = False) -> None:
+    """Warm one exact span in the background; one task per span, bounded."""
+    key = get_segment_cache_key(url, start, end, identity)
+    if key in _span_tasks:
+        return
+    if len(_span_tasks) >= PREFETCH_MAX_PENDING_SPANS:
+        logger.debug("Span warm skipped, %d pending", len(_span_tasks))
+        return
+    task = asyncio.create_task(prefetch_bytes(client, url, start, end, is_audio=is_audio_url(url),
+                                              identity=identity, read_ahead=read_ahead))
+    _span_tasks[key] = task
+    task.add_done_callback(lambda _: _span_tasks.pop(key, None))
+
+
+def prefetch_ahead(client: httpx.AsyncClient, url: str, start: int,
                    identity: Optional[str] = None) -> None:
-    """Warm the current and following 3 MB blocks, one task per stream."""
-    # Init/index probes are not playback positions. Warming on those starts
-    # speculative downloads for every rendition the manifest examines.
-    if end is None or end < 64 * 1024:
-        return
-    block_size = 3 * 1024 * 1024
-    start = (end // block_size) * block_size
-    span = rewrite_range(url, start, start + block_size - 1)
-    if not span:
-        return
-    key = get_segment_cache_key(url, 0, None, identity)
-    if key in _read_ahead_tasks or len(_read_ahead_tasks) >= 12:
-        return
-    async def warm() -> None:
-        # Align speculation to reusable blocks; otherwise every tiny player
-        # request downloads an almost identical 3 MB window again.
-        await prefetch_bytes(client, url, span.start, span.end,
-                             is_audio=is_audio_url(url), identity=identity)
-        following = rewrite_range(url, span.end + 1, span.end + block_size)
-        if following:
-            await prefetch_bytes(client, url, following.start, following.end,
-                                 is_audio=is_audio_url(url), identity=identity)
+    """Warm the subsegments after the one a viewer just asked for.
 
-    task = asyncio.create_task(warm())
-    _read_ahead_tasks[key] = task
-    task.add_done_callback(lambda _: _read_ahead_tasks.pop(key, None))
-
-
-def start_initial_prefetch(video_url: Optional[str], audio_url: Optional[str],
-                           client: httpx.AsyncClient) -> None:
-    """Deduplicate and bound queued-video warmups without delaying queue updates."""
-    key = (video_url, audio_url)
-    if key in _initial_tasks or len(_initial_tasks) >= 8:
+    The spans come from the rendition's own index, so each warm is exactly
+    the request the player makes next and is answered from memory verbatim.
+    A rendition whose index nobody has read is left alone rather than
+    guessed at: a guessed block rarely contains a whole subsegment, and one
+    that does not answers nothing.
+    """
+    table = segment_table_for(url)
+    if table is None:
         return
-    task = asyncio.create_task(prefetch_initial_segments(video_url, audio_url, client))
-    _initial_tasks[key] = task
-    task.add_done_callback(lambda _: _initial_tasks.pop(key, None))
+    position = table.index_of_offset(start)
+    if position is None:
+        # Init segment or index: a probe, not a playback position.
+        return
+    ahead = PREFETCH_AHEAD_AUDIO_SUBSEGMENTS if is_audio_url(url) else PREFETCH_AHEAD_VIDEO_SUBSEGMENTS
+    for following in range(position + 1, position + 1 + ahead):
+        span = table.span(following)
+        if span is None:
+            break
+        warm_span(client, url, span[0], span[1], identity, read_ahead=True)
 
 
 async def shutdown_prefetch() -> None:
     """Drain speculative fetches before closing their HTTP client."""
-    tasks = list(_read_ahead_tasks.values()) + list(_initial_tasks.values())
+    tasks = list(_span_tasks.values())
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
@@ -302,34 +323,10 @@ async def shutdown_prefetch() -> None:
     _prefetch_sessions.clear()
 
 
-async def prefetch_initial_segments(
-    video_url: Optional[str],
-    audio_url: Optional[str],
-    client: httpx.AsyncClient
-) -> None:
-    """
-    Prefetch initial segments of a new video for faster startup.
-
-    Called when a new video is set in a room. Fetches the first few
-    segments in parallel to minimize initial buffering.
-    """
-    tasks = []
-
-    async def prefetch_range(url: str, start: int, length: int, is_audio: bool):
-        await prefetch_bytes(client, url, start, start + length - 1, is_audio=is_audio)
-
-    # For direct URLs (not manifests), prefetch initial bytes
-    if video_url and not urlparse(video_url).path.endswith(('.m3u8', '.m3u', '.mpd')):
-        # Prefetch first 3MB of video
-        tasks.append(prefetch_range(video_url, 0, 3 * 1024 * 1024, is_audio=False))
-
-    if audio_url and not urlparse(audio_url).path.endswith(('.m3u8', '.m3u', '.mpd')):
-        # Prefetch first 1MB of audio (audio is more critical)
-        tasks.append(prefetch_range(audio_url, 0, 1 * 1024 * 1024, is_audio=True))
-
-    if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
-        logger.info(f"Initial prefetch complete for {len(tasks)} streams")
+async def drain_span_warms() -> None:
+    """Let in-flight span warms finish (tests)."""
+    while _span_tasks:
+        await asyncio.gather(*list(_span_tasks.values()), return_exceptions=True)
 
 
 async def cleanup_stale_sessions():

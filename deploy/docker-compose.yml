@@ -204,7 +204,11 @@ services:
     # disappeared in 2026.2.0 and a floating tag crash-looped the stack.
     image: adguard/dnsproxy:v0.84.2
     restart: unless-stopped
-    command: -l 0.0.0.0 -p 53 -u https://1.1.1.1/dns-query -u https://1.0.0.1/dns-query
+    # --cache: every proxied segment that misses the cache resolves its
+    # googlevideo host first; uncached, that was an HTTPS round trip to
+    # Cloudflare in front of each fetch. --cache-optimistic answers an
+    # expired entry at once while refreshing it.
+    command: -l 0.0.0.0 -p 53 -u https://1.1.1.1/dns-query -u https://1.0.0.1/dns-query --cache --cache-optimistic
     networks:
       watch_net:
         ipv4_address: ${WT_DNS_IP:-172.28.0.53}

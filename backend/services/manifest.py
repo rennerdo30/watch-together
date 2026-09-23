@@ -14,6 +14,7 @@ each representation needs come from scanning the head of each file.
 """
 import asyncio
 import logging
+import re
 import time
 from xml.sax.saxutils import escape, quoteattr
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -21,7 +22,9 @@ from urllib.parse import quote
 
 import httpx
 
-from services.cache import stream_identity
+from services.cache import stream_identity, memory_cache, get_segment_cache_key, is_audio_url
+from services.gvs_range import rewrite_range
+from services import startup_timing, stream_owner
 from services.mp4_index import Mp4Index, SegmentTable, parse_index, parse_segment_table, index_span
 from services.upstream import open_upstream_stream, UnsafeUpstreamError
 from core.config import (
@@ -48,6 +51,9 @@ _index_lock = asyncio.Lock()
 # the same manifest at once otherwise probes every rendition once each.
 _probe_locks: Dict[str, asyncio.Lock] = {}
 _probe_users: Dict[str, int] = {}
+
+
+_CONTENT_RANGE = re.compile(r"bytes (\d+)-(\d+)/(\d+|\*)")
 
 
 class ManifestError(Exception):
@@ -113,9 +119,16 @@ async def _probe_index_locked(
 
     async def read_prefix(length: int) -> Optional[bytes]:
         request_headers = dict(headers or {})
-        request_headers["Range"] = f"bytes=0-{length - 1}"
+        # googlevideo serves a `range=` query at full speed and a Range
+        # header through its throttled path (see services/gvs_range); the
+        # probe is on the critical path of every start, so it takes the
+        # fast one wherever it applies.
+        fast = rewrite_range(url, 0, length - 1)
+        if not fast:
+            request_headers["Range"] = f"bytes=0-{length - 1}"
         try:
-            response, _pinned = await open_upstream_stream(client, url, request_headers)
+            response, _pinned = await open_upstream_stream(
+                client, fast.url if fast else url, request_headers)
             try:
                 body = await response.aread()
             finally:
@@ -129,6 +142,12 @@ async def _probe_index_locked(
         if response.status_code not in (200, 206):
             report(f"Probe of {url[:80]} returned {response.status_code}")
             return None
+        content_range = (f"bytes 0-{len(body) - 1}/{fast.total}"
+                         if fast and response.status_code == 200 and body
+                         else response.headers.get("content-range"))
+        await _keep_prefix(url, body, content_range,
+                           response.headers.get("content-type", "video/mp4"),
+                           request_headers.get("Cookie"))
         return body
 
     data = await read_prefix(MANIFEST_PROBE_BYTES)
@@ -168,6 +187,30 @@ async def _probe_index_locked(
         await _prune_index_cache(now)
 
     return index
+
+
+async def _keep_prefix(url: str, body: bytes, content_range: Optional[str],
+                       content_type: str, cookie: Optional[str]) -> None:
+    """Keep the probed head of a rendition where the player will ask for it.
+
+    The first thing a player fetches from a rendition is its init segment
+    and then its index — both inside the bytes this probe just read. Kept in
+    the memory cache under the stream's fetch identity, those requests are
+    answered without another trip to the CDN.
+
+    Only kept when the probe was made exactly as the proxy would fetch the
+    URL: bytes fetched with one member's cookies must never be filed where
+    another's request would find them.
+    """
+    match = _CONTENT_RANGE.fullmatch(content_range or "")
+    if not match or int(match[1]) != 0 or int(match[2]) != len(body) - 1:
+        return
+    fetcher = stream_owner.fetcher_for(url)
+    if fetcher.cookie != cookie:
+        return
+    await memory_cache.put(get_segment_cache_key(url, 0, len(body) - 1, fetcher.cache_identity),
+                           body, content_type, is_audio=is_audio_url(url),
+                           content_range=content_range)
 
 
 def clear_index_cache() -> None:
@@ -378,13 +421,15 @@ async def build_manifest_for_formats(
     audio_formats: List[dict],
     proxy_base: str,
     headers: Optional[dict] = None,
+    source_url: str = "",
 ) -> str:
     """Probe every candidate representation and render the manifest.
 
     Representations that cannot be probed are dropped rather than
     failing the whole manifest, so one bad rendition does not break
-    playback.
+    playback. `source_url` names the video in the timing record.
     """
+    started = time.monotonic()
     async def prepare(fmt: dict, kind: str) -> Optional[dict]:
         url = fmt.get("url")
         if not url:
@@ -402,6 +447,10 @@ async def build_manifest_for_formats(
 
     video_reps = [r for r in video_results if r]
     audio_reps = [r for r in audio_results if r]
+    startup_timing.record_manifest(
+        source_url, (time.monotonic() - started) * 1000,
+        video=len(video_reps), video_total=len(video_formats),
+        audio=len(audio_reps), audio_total=len(audio_formats))
     lost = (len(video_formats) - len(video_reps)) + (len(audio_formats) - len(audio_reps))
     if lost:
         # Visible as "quality selection does nothing": the ladder shrank.

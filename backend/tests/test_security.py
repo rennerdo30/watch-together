@@ -4,6 +4,7 @@ Tests for room and queue handling in the connection manager.
 import pytest
 import sys
 import os
+from queueing import enqueue
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -24,8 +25,8 @@ class TestConnectionManager:
         assert isinstance(rooms, list)
     
     @pytest.mark.asyncio
-    async def test_add_to_queue(self, manager):
-        """Test adding items to queue."""
+    async def test_queueing_by_address(self, manager):
+        """A queued address becomes a resolved entry."""
         room_id = "test-room"
         manager.room_states[room_id] = {
             "video_data": None,
@@ -37,7 +38,7 @@ class TestConnectionManager:
         }
         
         video = {"original_url": "https://youtube.com/watch?v=test", "title": "Test Video"}
-        queue = await manager.add_to_queue(room_id, video)
+        queue = await enqueue(manager, room_id, video)
         
         assert len(queue) == 1
         assert queue[0]["title"] == "Test Video"

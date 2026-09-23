@@ -179,13 +179,13 @@ class TestProxyStillAnswersAWellFormed206:
     def test_prefetch_bytes_serve_multiple_player_ranges_without_refetching(self, client, origin):
         import asyncio
         import httpx
-        from services.prefetcher import prefetch_initial_segments
+        from services.prefetcher import prefetch_bytes
         port, seen = origin
         url = self.media_url(port)
 
         async def warm():
             async with httpx.AsyncClient() as upstream_client:
-                await prefetch_initial_segments(url, None, upstream_client)
+                await prefetch_bytes(upstream_client, url, 0, len(self.PAYLOAD) - 1)
 
         asyncio.run(warm())
         assert len(seen) == 1

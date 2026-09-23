@@ -18,7 +18,14 @@
  * that delivers a buffered body with its headers looks arbitrarily fast.
  */
 
-import { ABR_CACHE_LOAD_THRESHOLD_MS, SHAKA_ABR_MIN_SAMPLE_BYTES, SHAKA_ABR_MIN_TOTAL_BYTES } from './constants';
+import {
+    ABR_CACHE_LOAD_THRESHOLD_MS,
+    OPENING_PLAN_AUDIO_BPS,
+    SHAKA_ABR_MIN_SAMPLE_BYTES,
+    SHAKA_ABR_MIN_TOTAL_BYTES,
+    SHAKA_BANDWIDTH_DOWNGRADE_TARGET,
+    SHAKA_PREFERRED_VIDEO_CODECS,
+} from './constants';
 
 /** The fields of a Shaka request the sampler reads. */
 export interface SampledRequest {
@@ -122,4 +129,83 @@ export function autoQualityCap(heights: readonly number[], surfacePx: number, le
     const covering = rungs.findIndex((h) => h >= surfacePx);
     const floor = covering === -1 ? rungs.length - 1 : covering;
     return rungs[Math.min(rungs.length - 1, floor + Math.max(0, levelsAbove))];
+}
+
+/** One rung of a quality ladder, as the resolve response describes it. */
+export interface LadderRung {
+    height: number;
+    vcodec?: string | null;
+    /** Declared bitrate in kbit/s, the unit yt-dlp reports. */
+    tbr?: number | null;
+}
+
+/** A codec family Shaka may commit to; see SHAKA_PREFERRED_VIDEO_CODECS. */
+export type CodecFamily = (typeof SHAKA_PREFERRED_VIDEO_CODECS)[number];
+
+/**
+ * The codec family the player will adapt within: the first preferred family
+ * the ladder offers that this browser can decode. Undefined when none can be
+ * determined — the ladder names no codecs, or the page cannot ask.
+ */
+export function preferredCodecFamily(
+    ladder: readonly LadderRung[],
+    isSupported: (vcodec: string) => boolean,
+): CodecFamily | undefined {
+    for (const family of SHAKA_PREFERRED_VIDEO_CODECS) {
+        if (ladder.some((rung) => !!rung.vcodec && rung.vcodec.startsWith(family) && isSupported(rung.vcodec))) {
+            return family;
+        }
+    }
+    return undefined;
+}
+
+/** Whether this browser's Media Source Extensions can decode a video codec. */
+export function mseSupportsVideoCodec(vcodec: string): boolean {
+    if (typeof MediaSource === 'undefined') return false;
+    try {
+        return MediaSource.isTypeSupported(`video/mp4; codecs="${vcodec}"`);
+    } catch {
+        return false;
+    }
+}
+
+export interface OpeningPlan {
+    /** The rung the player is expected to open on. */
+    height: number;
+    codec?: CodecFamily;
+}
+
+/**
+ * The rung a load is expected to open on, so the server can warm exactly its
+ * bytes before the player asks for them.
+ *
+ * This mirrors Shaka's own opening choice closely enough to be useful, not
+ * exactly: within the codec family the player will commit to, the tallest
+ * rung at or below `cap` whose declared bitrate, plus a typical audio track,
+ * fits the opening estimate with Shaka's downgrade margin — or the smallest
+ * allowed rung when none fits. A rung with no declared bitrate is assumed to
+ * fit. A wrong guess costs one warmed segment nobody fetches.
+ */
+export function openingPlan(
+    ladder: readonly LadderRung[],
+    cap: number | null,
+    estimateBps: number,
+    isSupported: (vcodec: string) => boolean = mseSupportsVideoCodec,
+): OpeningPlan | null {
+    const codec = preferredCodecFamily(ladder, isSupported);
+    const rungs = ladder
+        .filter((rung) => Number.isFinite(rung.height) && rung.height > 0)
+        .filter((rung) => !codec || (!!rung.vcodec && rung.vcodec.startsWith(codec)))
+        .sort((a, b) => a.height - b.height);
+    if (rungs.length === 0) return null;
+    const allowed = cap === null ? rungs : rungs.filter((rung) => rung.height <= cap);
+    const candidates = allowed.length > 0 ? allowed : rungs.slice(0, 1);
+    const fits = (rung: LadderRung) => {
+        if (typeof rung.tbr !== 'number' || !Number.isFinite(rung.tbr) || rung.tbr <= 0) return true;
+        const variantBps = rung.tbr * 1000 + OPENING_PLAN_AUDIO_BPS;
+        return variantBps / SHAKA_BANDWIDTH_DOWNGRADE_TARGET <= estimateBps;
+    };
+    const affordable = candidates.filter(fits);
+    const chosen = affordable.length > 0 ? affordable[affordable.length - 1] : candidates[0];
+    return codec ? { height: chosen.height, codec } : { height: chosen.height };
 }

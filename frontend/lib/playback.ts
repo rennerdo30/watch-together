@@ -14,6 +14,8 @@
  * the caller is told so it can ask for the gesture the browser is waiting for.
  */
 
+import { RESUME_END_GUARD_SECONDS, RESUME_MIN_SECONDS } from './constants';
+
 export type PlaybackStart =
     /** Playing, with the sound the viewer had chosen. */
     | 'started'
@@ -41,4 +43,28 @@ export async function startPlayback(video: HTMLMediaElement): Promise<PlaybackSt
         video.muted = false;
         return 'blocked';
     }
+}
+
+/** The fields of a queue entry that decide where it resumes. */
+export interface ResumableEntry {
+    is_live?: boolean;
+    duration?: number;
+    progress?: number;
+}
+
+/**
+ * Where the room starts a queued video: the position it was left at, or the
+ * top. Mirrors the server's `ConnectionManager._resume_position`, because a
+ * player preparing the next entry has to prepare the position the server is
+ * about to announce — a few seconds in is not worth resuming, and the last
+ * stretch of a video is where a replay should start over.
+ */
+export function resumePosition(entry: ResumableEntry | null | undefined): number {
+    if (!entry || entry.is_live) return 0;
+    const progress = entry.progress;
+    if (typeof progress !== 'number' || !Number.isFinite(progress)) return 0;
+    if (progress < RESUME_MIN_SECONDS) return 0;
+    const duration = entry.duration;
+    if (typeof duration === 'number' && duration > 0 && progress > duration - RESUME_END_GUARD_SECONDS) return 0;
+    return progress;
 }

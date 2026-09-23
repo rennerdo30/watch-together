@@ -21,6 +21,8 @@
 #                                                 # service-time percentiles, slowest paths
 #   ./deploy/host-status.sh --quality [--tail=N]   # which rung each viewer is on and why,
 #   ./deploy/host-status.sh --quality=<viewer>     # including viewers who have left
+#   ./deploy/host-status.sh --startup [--tail=N]   # paste -> playing: resolve, manifest and
+#                                                 # first-frame times, medians and p90
 #   ./deploy/host-status.sh --seek=<video-url>     # cost of a ranged read at increasing
 #                                                 # depths, upstream and through the proxy
 #   ./deploy/host-status.sh --host=10.0.0.5 --user=admin
@@ -50,6 +52,7 @@ RANGES_URL=""
 RUN_PERF=0
 RUN_QUALITY=0
 QUALITY_VIEWER=""
+RUN_STARTUP=0
 SEEK_URL=""
 
 for arg in "$@"; do
@@ -70,6 +73,7 @@ for arg in "$@"; do
 		--perf) RUN_PERF=1 ;;
 		--quality) RUN_QUALITY=1 ;;
 		--quality=*) RUN_QUALITY=1; QUALITY_VIEWER="${arg#--quality=}" ;;
+		--startup) RUN_STARTUP=1 ;;
 		--seek=*) SEEK_URL="${arg#--seek=}" ;;
 	esac
 done
@@ -96,6 +100,7 @@ ssh -o BatchMode=yes -o ConnectTimeout=15 "${SSH_USER}@${SSH_HOST}" \
 	 WT_PERF=$(printf '%q' "$RUN_PERF") \
 	 WT_QUALITY=$(printf '%q' "$RUN_QUALITY") \
 	 WT_QUALITY_VIEWER=$(printf '%q' "$QUALITY_VIEWER") \
+	 WT_STARTUP=$(printf '%q' "$RUN_STARTUP") \
 	 WT_SEEK_URL=$(printf '%q' "$SEEK_URL") \
 	 bash -s" <<'REMOTE_SCRIPT'
 set -u
@@ -113,6 +118,7 @@ RANGES_URL="${WT_RANGES_URL:-}"
 RUN_PERF="${WT_PERF:-0}"
 RUN_QUALITY="${WT_QUALITY:-0}"
 QUALITY_VIEWER="${WT_QUALITY_VIEWER:-}"
+RUN_STARTUP="${WT_STARTUP:-0}"
 SEEK_URL="${WT_SEEK_URL:-}"
 COMPOSE="docker compose -f deploy/docker-compose.yml --env-file ${REMOTE}/.env"
 
@@ -302,6 +308,62 @@ if [ "$RUN_QUALITY" = "1" ]; then
 			| awk '{ if ($1 == 0) print "(no changes logged for that viewer)" }'
 	fi
 	rm -f /tmp/wt-quality.log
+	exit 0
+fi
+
+# Paste -> playing, from the backend log (services/startup_timing.py): how
+# long resolves took (extracted vs served from cache), how long manifests
+# took to build, and each viewer's player: set_video -> first frame, whether
+# the start was preloaded, and how often it stalled in its first 30 seconds.
+if [ "$RUN_STARTUP" = "1" ]; then
+	cd "$REMOTE" || exit 1
+	$COMPOSE logs -t --no-log-prefix --tail "${TAIL_LINES}" backend 2>/dev/null \
+		| grep -E 'Resolve timing:|Manifest timing:|Startup timing:' > /tmp/wt-startup.log || true
+	awk -v tail="$TAIL_LINES" '
+	function pct(list, n, q,    i, j, t, k) {
+		if (n == 0) return "-"
+		for (i = 1; i <= n; i++) s[i] = list[i]
+		for (i = 2; i <= n; i++) { t = s[i]; for (j = i - 1; j >= 1 && s[j] > t; j--) s[j + 1] = s[j]; s[j + 1] = t }
+		k = int(q * n) + 1; if (k > n) k = n
+		return s[k]
+	}
+	{
+		delete f
+		for (i = 1; i <= NF; i++) { p = index($i, "="); if (p > 1) f[substr($i, 1, p - 1)] = substr($i, p + 1) }
+		if ($0 ~ /Resolve timing:/) {
+			if (f["outcome"] == "extracted") ex[++nex] = f["ms"] + 0
+			else if (f["outcome"] == "cached") hits++
+			else fails++
+		} else if ($0 ~ /Manifest timing:/) {
+			mf[++nmf] = f["ms"] + 0
+		} else if ($0 ~ /Startup timing:/ && f["set_video_to_first_frame_ms"] != "?") {
+			if (f["preloaded"] == "yes") pre[++npre] = f["set_video_to_first_frame_ms"] + 0
+			else cold[++ncold] = f["set_video_to_first_frame_ms"] + 0
+			if (f["stalls"] != "?") { stalls += f["stalls"]; nst++ }
+			last[f["member"]] = sprintf("%-30s %-6s %-9s %8s ms  rung=%-5s stalls=%s", f["member"], f["engine"],
+				(f["preloaded"] == "yes" ? "preloaded" : "cold"), f["set_video_to_first_frame_ms"], f["rung"], f["stalls"])
+		}
+	}
+	END {
+		if (nex + hits + fails + nmf + npre + ncold == 0) {
+			print "(no timings in the last " tail " log lines - raise --tail, or nothing was played)"
+			exit
+		}
+		print "── paste -> playing (backend log) ───────────"
+		printf "%-36s %6s %8s %8s\n", "", "count", "p50", "p90"
+		printf "%-36s %6d %8s %8s\n", "resolve: yt-dlp extraction (ms)", nex, pct(ex, nex, 0.5), pct(ex, nex, 0.9)
+		printf "%-36s %6d\n", "resolve: answered from cache", hits
+		printf "%-36s %6d\n", "resolve: failed", fails
+		printf "%-36s %6d %8s %8s\n", "manifest build (ms)", nmf, pct(mf, nmf, 0.5), pct(mf, nmf, 0.9)
+		printf "%-36s %6d %8s %8s\n", "set_video -> first frame, preloaded", npre, pct(pre, npre, 0.5), pct(pre, npre, 0.9)
+		printf "%-36s %6d %8s %8s\n", "set_video -> first frame, cold", ncold, pct(cold, ncold, 0.5), pct(cold, ncold, 0.9)
+		if (nst) printf "%-36s %6d %8.2f\n", "stalls in the first 30 s (mean)", nst, stalls / nst
+		print ""
+		print "── latest start per viewer ───────────"
+		for (m in last) print last[m] | "sort"
+		close("sort")
+	}' /tmp/wt-startup.log
+	rm -f /tmp/wt-startup.log
 	exit 0
 fi
 

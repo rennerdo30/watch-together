@@ -58,8 +58,37 @@ class MemoryCache:
         self._max_size = max_size_bytes
         self._lock = asyncio.Lock()
         self._audio_keys: set[str] = set()  # Track audio segments for priority eviction
+        # Keys grouped by stream and cookie identity, so a request for a
+        # span inside a cached one looks at that stream's few entries rather
+        # than scanning the whole cache under the lock on every miss.
+        self._stream_keys: Dict[str, set[str]] = {}
         self._hits = 0
         self._misses = 0
+
+    @staticmethod
+    def _stream_of(key: str) -> str:
+        """The stream-and-identity part of a segment key (its span removed)."""
+        parts = key.split('_')
+        return '_'.join(parts[:2] + parts[3:])
+
+    def _forget(self, key: str) -> None:
+        """Drop an entry's bookkeeping; the caller has popped the entry itself."""
+        self._audio_keys.discard(key)
+        stream = self._stream_of(key)
+        keys = self._stream_keys.get(stream)
+        if keys is not None:
+            keys.discard(key)
+            if not keys:
+                del self._stream_keys[stream]
+
+    def contains(self, key: str) -> bool:
+        """Whether an entry exists, without counting a hit or a miss.
+
+        For speculation deciding whether to fetch: the hit rate is meant to
+        describe what viewers were served, and a warm checking its own work
+        is not a viewer.
+        """
+        return key in self._cache
 
     async def get(self, key: str) -> tuple[bytes, str, str | None] | None:
         """
@@ -86,18 +115,18 @@ class MemoryCache:
         """
         if end is None or start < 0 or end < start:
             return None
+        # Only entries of the same stream AND the same cookie identity are
+        # candidates, whatever span they hold (the origin may shorten a
+        # range at EOF, so the span is not part of the match).
+        stream = self._stream_of(get_segment_cache_key(url, 0, None, identity))
         async with self._lock:
-            for key, (data, ctype, crange, _) in self._cache.items():
-                match = re.fullmatch(r'bytes (\d+)-(\d+)/(\d+|\*)', crange or '')
+            for key in list(self._stream_keys.get(stream, ())):
+                data, ctype, crange, _ = self._cache[key]
+                match = _CONTENT_RANGE.fullmatch(crange or '')
                 if not match:
                     continue
                 first, last = int(match[1]), int(match[2])
                 if len(data) != last - first + 1 or not first <= start <= end <= last:
-                    continue
-                # Compare the URL hash AND the user suffix independently of
-                # the request span (the origin may shorten a range at EOF).
-                expected = get_segment_cache_key(url, 0, None, identity)
-                if key.split('_')[1] != expected.split('_')[1] or key.split('_')[3:] != expected.split('_')[3:]:
                     continue
                 self._cache.move_to_end(key)
                 self._hits += 1
@@ -123,7 +152,7 @@ class MemoryCache:
             if key in self._cache:
                 old_data, _, _, _ = self._cache.pop(key)
                 self._current_size -= len(old_data)
-                self._audio_keys.discard(key)
+                self._forget(key)
 
             # Evict until we have space
             while self._current_size + len(data) > self._max_size and self._cache:
@@ -133,6 +162,7 @@ class MemoryCache:
                     if old_key not in self._audio_keys:
                         old_data, _, _, _ = self._cache.pop(old_key)
                         self._current_size -= len(old_data)
+                        self._forget(old_key)
                         evicted = True
                         logger.debug(f"Evicted video segment from memory cache: {old_key[:40]}...")
                         break
@@ -141,12 +171,13 @@ class MemoryCache:
                     # All items are audio, evict oldest audio (least recently used)
                     old_key, (old_data, _, _, _) = self._cache.popitem(last=False)
                     self._current_size -= len(old_data)
-                    self._audio_keys.discard(old_key)
+                    self._forget(old_key)
                     logger.debug(f"Evicted audio segment from memory cache: {old_key[:40]}...")
 
             # Add new item
             self._cache[key] = (data, content_type, content_range, time.time())
             self._current_size += len(data)
+            self._stream_keys.setdefault(self._stream_of(key), set()).add(key)
             if is_audio:
                 self._audio_keys.add(key)
 
@@ -156,7 +187,7 @@ class MemoryCache:
             if key in self._cache:
                 data, _, _, _ = self._cache.pop(key)
                 self._current_size -= len(data)
-                self._audio_keys.discard(key)
+                self._forget(key)
                 return True
         return False
 
@@ -166,6 +197,7 @@ class MemoryCache:
         async with self._lock:
             self._cache.clear()
             self._audio_keys.clear()
+            self._stream_keys.clear()
             self._current_size = 0
 
     def get_stats(self) -> dict:
@@ -182,6 +214,8 @@ class MemoryCache:
             "hit_rate_percent": round(hit_rate, 1),
         }
 
+
+_CONTENT_RANGE = re.compile(r'bytes (\d+)-(\d+)/(\d+|\*)')
 
 # Global memory cache instance
 memory_cache = MemoryCache()

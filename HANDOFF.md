@@ -4,13 +4,13 @@ Where the project stands, for whoever picks it up next — a person or a
 coding session. Keep it current: when something here stops being true,
 change it in the same commit that makes it untrue. Newest state first.
 
-## State as of 2026-09-15
+## State as of 2026-09-23
 
 - **Production**: https://w2g.renner.dev runs `main` (see `git log -1`). Deployed
   with `./deploy/deploy.sh`; CI (backend, frontend lint/build, Playwright
   e2e, extension checks, CodeQL, container publish) green on that commit.
-- **Suites**: 757 backend tests (`cd backend && pytest`), 129 Playwright
-  tests (`cd frontend && npm run test:e2e`), lint 0 errors / 14 warnings.
+- **Suites**: 844 backend tests (`cd backend && pytest`), 144 Playwright
+  tests (`cd frontend && npm run test:e2e`), lint 0 errors / 13 warnings.
 - **Admin panel** at `/admin`: rooms with members and a force-close, every
   cache tier with a clear action. Gated by `ADMIN_EMAILS` (set on the host
   via `./deploy/make-env.sh --set=ADMIN_EMAILS=a@x,b@y`; empty disables it).
@@ -55,6 +55,7 @@ thresholds: `backend/services/playback_quality.py`.
 
 | Commit | What | Why it mattered |
 | --- | --- | --- |
+| _pending_ | Paste → playing overhaul: exact-subsegment warming, in-flight join, opening rung capped before load, next entry preloaded in the browser, `/api/prewarm`, URL-only queueing, one resolve path, DNS cache, startup timing telemetry (`--startup`) | The warms fetched bytes no request matched and the top rung nobody played; fast viewers opened on 4K; queueing waited on yt-dlp; nothing measured any of it. See *Performance: paste to playing* below. |
 | _pending_ | Live HLS latency derived from the playlist (`frontend/lib/live-latency.ts`) instead of counting declared target durations; catch-up by playback rate; hls.js interstitials off | A Twitch stream sat 24s behind the edge of a 30s window and stalled whenever a playlist refresh was late. See *Live HLS latency* below. |
 | `3c53078` | Per-viewer telemetry in the backend log (one INFO line per change, with a verdict), `host-status.sh --quality`, and a bounded history the admin panel shows | The reports existed but only a browser signed in to Access could read them, and only while the viewer was connected — from the host every admin call is a 401, by design. See *Reading per-viewer telemetry from the host* above. |
 | `c5b7a16` | Shared browser: a neko container in the room's player, opened and closed over the room socket, sessions minted server-side | The first thing the tunnel cannot carry. Media is WebRTC, the origin publishes nothing, so it is opt-in and reports *why* it is unavailable rather than offering a button — see *Shared browser* below. |
@@ -175,66 +176,57 @@ is pinned as a pure function, and two live fixtures (Twitch-shaped and
 YouTube-shaped) assert *which segment* the player asks for first — the only
 observable that says where it decided to start.
 
-## Performance: findings and open ideas
+## Performance: paste to playing
 
-Measured on 2026-09-15 from the nginx media log (`./deploy/host-status.sh
---perf --tail=4000`) and the backend log.
+**Measure first**: `./deploy/host-status.sh --startup --tail=4000` prints
+resolve extraction time (p50/p90), the resolve cache-hit count, manifest
+build time, and set_video → first frame per viewer, split into *preloaded*
+and *cold* starts, with stalls in the first 30 s. The same numbers are in
+the admin overview (`startup_timing`). Sources: `services/startup_timing.py`
+(backend) and `frontend/lib/playback-timing.ts` (one `playback_timing`
+report per start). `--perf` still covers per-transfer proxy behaviour.
 
-**Findings**
+**How starts and jumps are warmed** (2026-09-23 overhaul; see CHANGELOG):
 
-- The proxy itself is fast: of ~2,900 ranged segment transfers, 92 % under
-  200 ms, none over 5 s; average segment 513 KB (82 % between 10 KB and 1 MB).
-- **The bytes went elsewhere**: 35 whole-file GETs (no `Range` header, no
-  `range=` query) fetched entire googlevideo renditions — every quality of
-  the AV1 ladder plus the audio track, several times each, 4.5 GB for one
-  rendition alone — 17 GB out of 18.4 GB served. No player does this
-  (media elements send `Range: bytes=0-`; Shaka and hls.js request exact
-  spans). It is a download manager / video-sniffer extension on the Windows
-  Chrome client in the room. Now refused server-side (`is_whole_file_grab`
-  in `backend/services/gvs_range.py`); the refusal is logged with identity
-  and user agent — check the backend log for `Refused whole-file media
-  download` to see whether it is still trying, and tell that viewer.
-- Segment caches barely participate across viewers: entries are keyed on
-  exact byte spans, so two viewers at different qualities or positions share
-  little. Server-side read-ahead (`prefetch_ahead`, 3 MB aligned blocks) and
-  `start_initial_prefetch` on set_video / queue_add exist and run.
-- **Seek latency = one segment of the active rendition.** After a seek the
-  buffer is empty and Shaka shows nothing until a full segment (plus audio)
-  has arrived. Segment size scales with the rendition: 4K AV1 ≈ 13–28 MB,
-  1080p ≈ 2–5 MB. Hence the surface cap above; `SHAKA_REBUFFER_GOAL_SECONDS`
-  (4 s) is the other lever, deliberately small already.
-- **Nothing logs durations**: resolve (yt-dlp), manifest build (index
-  probes), and first-segment time are not measured anywhere, so
-  "paste → playing" cannot be broken down from production data yet. Per
-  *transfer* this is now covered: every proxy sample carries the identity,
-  the tier that answered (upstream/memory/disk) and the throughput, and the
-  admin panel lists them — so "what was this viewer actually served?" is
-  answerable even though "how long did the resolve take?" still is not.
+- Everything warmed is an **exact subsegment span** from the rendition's
+  `sidx` table, cached under the key the player's request looks up. The old
+  3 MB-aligned read-ahead and 4 MB skip spans rarely covered a whole
+  subsegment and so answered nothing — the likely reason for the ~⅓ memory
+  cache misses seen on 2026-09-12.
+- A request for bytes already being fetched waits for that fetch
+  (`services/inflight.py`, ≤ `INFLIGHT_JOIN_TIMEOUT_SECONDS`).
+- The **opening rung is capped before `load()`**; before, fast returning
+  viewers opened on 4K AV1 and were capped only after the first segments.
+- **The next DASH entry is preloaded in the browser** (Shaka `preload()`,
+  one player kept across videos) and warmed on the server on the rungs the
+  room is watching, at the entry's resume position.
+- The player announces loads, seek-bar hover rests and queue-row hover
+  rests to `/api/prewarm` with the rung and codec it will open on.
+- Probes use googlevideo's fast `range=` path and their bytes answer every
+  rendition's init/index request.
+- Resolves are shared per (URL, cookie owner); paste starts one; queueing
+  sends only the URL (placeholder + server resolve). The second resolver
+  (`refresh_video_url`) is gone.
+- The DoH sidecar caches; the proxy does no DNS before its cache lookup.
 
-**Ideas, in the order worth doing them**
+**Still open / worth watching**
 
-1. **Instrument time-to-play.** Log and expose (admin panel → proxy
-   section) per-video durations: yt-dlp extraction, manifest build, first
-   media byte, `playing` event. Without this every other item is a guess.
-2. **Resolve in the background.** Today the room page resolves on the
-   client before sending `set_video` / `queue_add`, so the sender waits on a
-   spinner for the whole yt-dlp run. Instead: send the URL immediately, show
-   the entry as "resolving…", let the server resolve once (resolves are
-   already coalesced) and broadcast the result. Same for queue adds.
-3. ~~**Warm the next queue item.**~~ Done, and then fixed: the heartbeat
-   probes every rendition of the next entry and warms its opening bytes once
-   the current video is within `PREWARM_NEXT_VIDEO_SECONDS` of its end. The
-   client asks too, for rooms the beat cannot see (paused, or no duration).
-   Preferring the cached resolve over the queue entry was not enough — both
-   can outlive the `expire` in their own URLs — so the deadline is now read
-   from the URL (`services/stream_expiry.py`) and a video whose URLs have
-   less than `STREAM_URL_MIN_LIFETIME_SECONDS` left is re-resolved before
-   anything is fetched. See the row for the fix in *Shipped recently*.
-4. ~~**Overlap segment round trips.**~~ Done: `segmentPrefetchLimit: 2`
-   (`SHAKA_SEGMENT_PREFETCH_LIMIT`). Whether it moved anything is still
-   unmeasured — that needs (1).
-5. **Live streams**: a re-resolve rotates the playlist URL and restarts
+1. Read `--startup` after a few days of real use: if cold first-frame p50
+   is still dominated by resolve time, the extraction itself (PO token,
+   challenge solving) is the next target; if by manifest time, embedding
+   the segment index in the manifest (`SegmentList`) would save a
+   round trip per start — rejected for now because long VODs make the
+   manifest megabytes large.
+2. **Seek latency is still one segment of the active rendition**; the
+   surface cap and the seek-bar hover warm are the levers.
+3. HLS (Twitch, live) gets no per-start warming beyond the resolve; live
+   playlists change too fast for it to pay. HLS quality telemetry still
+   reports `rung=?`.
+4. **Live streams**: a re-resolve rotates the playlist URL and restarts
    hls.js; keep an eye on the 5-minute live TTL versus token lifetimes.
+5. Whole-file grabs by a download-manager extension are refused
+   (`is_whole_file_grab`); `Refused whole-file media download` in the
+   backend log shows whether it is still trying.
 
 ## Known caveats
 

@@ -6,6 +6,100 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Paste to playing: faster starts, fewer stalls, and measured
+
+A review of the path from adding a URL to its first frame found the warming
+built for it mostly fetched bytes nobody asked for. Fixed, and measured:
+
+- **Warms are exact subsegments.** The subsegment table read from each
+  rendition's `sidx` now records sizes, so read-ahead, SponsorBlock skip
+  warming and next-video warming fetch precisely the byte spans a player
+  requests. The memory cache only answers a request one entry fully covers;
+  the old aligned 3 MB read-ahead blocks and 4 MB skip spans rarely covered
+  a whole subsegment (never at 1440p and above), so they answered nothing
+  and churned the 256 MB cache. Read-ahead now runs after the cache lookup
+  and never includes the bytes being requested.
+- **One fetch per span.** A request for bytes a warm (or another viewer) is
+  already fetching waits for that fetch and is answered from memory
+  (`services/inflight.py`), instead of fetching the same bytes again beside
+  it. Read-ahead and the other warms draw from separate slot pools, so one
+  room's read-ahead cannot hold back another room's start.
+- **The rung that is warmed is the one that plays.** Next-video warming used
+  the top rendition's first 3 MB — the players' surface cap rarely allows
+  that rung, and a 1440p+ subsegment does not fit in 3 MB anyway. The next
+  entry is now warmed on the rungs the room is watching, at the position it
+  will resume from. `start_initial_prefetch` is deleted.
+- **The manifest probe feeds the player.** Probes use googlevideo's fast
+  `range=` path instead of the throttled `Range` header, and the bytes they
+  read are kept in memory, so every rendition's init-segment and index
+  requests are answered without another trip to the CDN.
+- **`/api/prewarm`.** The player announces a start or jump it is about to
+  make (a load, the pointer resting on the seek bar, a queue row) with the
+  position, the rung it will open on and its codec family; the server warms
+  exactly those subsegments. Only videos the server itself resolved are
+  warmed, and only a member of a room may have its members lend cookies.
+- **One extraction per video.** Concurrent resolves are shared by URL and
+  whose cookies they run with — no longer per requester and user agent — and
+  a plain resolve joins a refresh under way.
+- **Queueing never waits on yt-dlp.** `queue_add` carries only the URL; the
+  room sees a placeholder at once, the server resolves it, fills it in and
+  probes its ladder. A failure removes it and tells the sender
+  (`resolve_failed`). A placeholder a restart orphaned is resolved when the
+  next member joins.
+- **One resolve path.** The queue advance used `refresh_video_url`, a
+  second resolver that was not coalesced, ignored URL expiry, had no remote
+  challenge fallback, lent the adder's cookies even after they left, and ran
+  on the sender's socket loop. It is deleted: an advance goes through the
+  normal path, off the socket loop, and passes over an entry that cannot be
+  resolved instead of handing players an address with no stream.
+- **No DNS before the cache.** The proxy looked up every host before its
+  cache lookup, hits included; validation now happens only where a
+  connection is made (it always did there too). The DNS-over-HTTPS sidecar
+  caches (`--cache --cache-optimistic`), so a miss no longer waits on an
+  HTTPS round trip to Cloudflare for its hostname.
+- **nginx no longer cuts off a cold resolve.** `/api/resolve` and
+  `/api/dash-manifest` get a 90 s read timeout instead of the general 20 s,
+  which turned a slow-but-successful two-attempt extraction into a 504.
+- **The opening rung is capped.** The auto-quality cap (surface + one rung)
+  was applied after `load()`, but Shaka picks the opening rung before that,
+  so a returning viewer on a fast line opened on 4K AV1 — 13–28 MB a
+  segment — and was capped only afterwards. It is now configured before the
+  load, from the ladder the resolve already describes.
+- **The next video is preloaded in the browser.** One Shaka player and one
+  `<video>` element now live across DASH videos (the room page keys the
+  player `'mse'`), and near the end of a video the next entry is preloaded
+  with Shaka's `preload()`, so the advance needs no manifest, init or index
+  request and starts from buffered media. Everything per-video (error,
+  clock, quality list, stats, a manual pick, pending seeks) is reset when the
+  source changes.
+- **Resolving starts on paste.** A complete-looking link is resolved after
+  a 400 ms pause in typing; *Play* joins that resolve (the backend shares
+  it) instead of starting another. *Queue* sends only the URL and clears the
+  box at once; the pending row shows "Resolving…".
+- **Warms on intent.** Before every load and preload, when the pointer rests
+  on the seek bar, and when it rests on a queue row, the player asks
+  `/api/prewarm` for exactly the bytes that start or jump will need.
+- **Shaka settings that were silently ignored.** `clearBufferSwitch` and
+  `safeMarginSwitch` moved under `abr` in Shaka 5; set under `streaming`
+  they were rejected as unknown keys, so a better rendition waited behind
+  the whole buffer. `preferredVideoCodecs` (deprecated) is now
+  `preferredVideo`. A browser test fails on any configuration warning.
+- **An expired DASH source recovers.** When the CDN refused a video's
+  signed URLs the page re-resolved it, but the manifest's address did not
+  change, so the player kept the dead one and swallowed every later 403:
+  the video just stopped. The player now loads the manifest again where it
+  stopped once the re-resolve is in.
+- **Queue internals.** `add_to_queue` (no caller left) is deleted; playing
+  an entry that is still resolving joins that resolve instead of starting a
+  second extraction.
+- **Measured.** Every resolve (extracted, cached or failed), every manifest
+  build and every player start (`playback_timing` on the room socket:
+  set_video → manifest → first frame, preloaded or cold, stalls in the first
+  30 s) is logged with a fixed prefix and kept in a bounded ring
+  (`services/startup_timing.py`). Read it with
+  `./deploy/host-status.sh --startup`, or in the admin overview
+  (`startup_timing`).
+
 ### Screen sharing goes through the server
 
 - A shared screen no longer travels browser to browser. The sharer's browser

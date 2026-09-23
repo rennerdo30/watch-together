@@ -5,17 +5,20 @@ import { cn } from '@/lib/utils';
 import { Loader2, Info, Activity, Play, VolumeX } from 'lucide-react';
 import { PlayerControls } from './player-controls';
 import { QualityOption } from '@/lib/api';
-import { useAudioProcessing, useHlsPlayer, useShakaPlayer, HlsQualityLevel, AUTO_QUALITY } from './player/hooks';
+import {
+    useAudioProcessing, useHlsPlayer, useShakaPlayer, HlsQualityLevel, AUTO_QUALITY,
+    type ShakaLoadPlan, type ShakaPreloadTarget,
+} from './player/hooks';
 import { startPlayback, type PlaybackStart } from '@/lib/playback';
 import type { SponsorSegment } from '@/lib/sponsorblock';
 import type { Storyboard } from '@/lib/storyboard';
 import type { VideoChapter } from '@/lib/chapters';
 import { useLocalStorageState, parseStoredBoolean } from '@/lib/hooks/useLocalStorageState';
-import { DEFAULT_QUALITY_MODE, parseQualityMode, type QualityMode } from '@/lib/quality-mode';
+import { DEFAULT_QUALITY_MODE, QUALITY_MODE_STORAGE_KEY, parseQualityMode, type QualityMode } from '@/lib/quality-mode';
 import { forgetBandwidth, readRememberedEstimate } from '@/lib/bandwidth-memory';
 import {
     PLAYER_STATS_REFRESH_MS, QUALITY_REPORT_INTERVAL_MS,
-    SHARE_LIVE_EDGE_CHECK_MS, SHARE_LIVE_EDGE_MAX_SECONDS,
+    SHARE_LIVE_EDGE_CHECK_MS, SHARE_LIVE_EDGE_MAX_SECONDS, SHAKA_PREFERRED_VIDEO_CODECS,
 } from '@/lib/constants';
 import { useVideoEnhancement } from './player/hooks/useVideoEnhancement';
 
@@ -44,7 +47,22 @@ interface CustomPlayerProps {
     audioUrl?: string;
     /** Manifest describing the adaptive streams, used by the MSE engine. */
     manifestUrl?: string;
+    /** The page the video came from, as the room knows it. */
+    originalUrl?: string;
+    /** The video's rungs; the opening rung is capped from these. */
     availableQualities?: QualityOption[];
+    /**
+     * The adaptive video the room is expected to play next. The player
+     * preloads it, and an advance to it starts from what is already here.
+     */
+    preloadNext?: ShakaPreloadTarget | null;
+    /**
+     * The player is about to want the bytes at one position of one video:
+     * a load or a preload is starting, or the pointer rests on the seek bar.
+     */
+    onPrewarm?: (request: PrewarmRequest) => void;
+    /** Milestones of this video's start, for the room's startup telemetry. */
+    onStartupMark?: (mark: StartupMark) => void;
     /** SponsorBlock segments of this video, marked on the seek bar. */
     sponsorSegments?: SponsorSegment[];
     /** Preview thumbnails for the seek bar, when the site provides them. */
@@ -75,6 +93,25 @@ interface CustomPlayerProps {
      */
     onQualityReport?: (report: QualityReport) => void;
 }
+
+export interface PrewarmRequest {
+    originalUrl: string;
+    seconds: number;
+    height: number;
+    codec?: string;
+}
+
+/** A milestone of a video's start; see lib/playback-timing.ts. */
+export type StartupMark = { originalUrl?: string } & (
+    | { kind: 'manifest'; preloaded: boolean }
+    | { kind: 'first-frame'; height: number }
+    | { kind: 'playing' }
+    | { kind: 'stall' }
+);
+
+/** The codec family of a codec string, as the prewarm endpoint names it. */
+const codecFamilyOf = (codec: string) =>
+    SHAKA_PREFERRED_VIDEO_CODECS.find((family) => codec.startsWith(family));
 
 export interface QualityReport {
     rung: number;
@@ -159,7 +196,11 @@ export function CustomPlayer({
     videoUrl,
     audioUrl,
     manifestUrl,
+    originalUrl,
     availableQualities,
+    preloadNext,
+    onPrewarm,
+    onStartupMark,
     sponsorSegments,
     storyboard,
     chapters,
@@ -223,6 +264,30 @@ export function CustomPlayer({
     const [liveLatency, setLiveLatency] = useState(0);
     const [seekableRange, setSeekableRange] = useState({ start: 0, end: 0 });
 
+    // === ONE PLAYER, MANY VIDEOS ===
+    // An adaptive video is loaded into the element already on screen rather
+    // than into a new one, so everything this component knows about the
+    // *previous* video has to be forgotten here — a remount used to do it.
+    // Adjusted during render, not in an effect, so the next video never
+    // renders a frame with the last one's error, clock or quality list.
+    const sourceKey = isShareMode ? 'share' : isMseMode ? manifestUrl! : src;
+    const [currentSource, setCurrentSource] = useState(sourceKey);
+    if (currentSource !== sourceKey) {
+        setCurrentSource(sourceKey);
+        setError(null);
+        setPlaybackGate('started');
+        setCurrentTime(0);
+        setDuration(0);
+        setIsPlaying(false);
+        setLiveLatency(0);
+        setSeekableRange({ start: 0, end: 0 });
+    }
+    useEffect(() => {
+        // Commanded seeks and pauses belong to the video they were aimed at.
+        pendingProgrammaticSeeksRef.current = [];
+        pendingProgrammaticPauseRef.current = false;
+    }, [sourceKey]);
+
     // === PERSISTED AUDIO PREFERENCES ===
     // useSyncExternalStore gives hydration the server defaults, then reads the
     // browser snapshot and updates every subscriber. Unlike a mount effect, it
@@ -243,7 +308,7 @@ export function CustomPlayer({
     // What auto quality optimises for. Also this viewer's own business: it
     // describes their screen and their link, not the room's video.
     const [qualityMode, setQualityMode] = useLocalStorageState<QualityMode>(
-        'w2g-player-quality-mode', DEFAULT_QUALITY_MODE, parseStoredQualityMode);
+        QUALITY_MODE_STORAGE_KEY, DEFAULT_QUALITY_MODE, parseStoredQualityMode);
 
     // === HLS PLAYER HOOK ===
     const [hlsLoading, setHlsLoading] = useState(true);
@@ -260,6 +325,7 @@ export function CustomPlayer({
         onManifestParsed: (levels: HlsQualityLevel[]) => {
             setHlsQualities(levels);
             setHlsLoading(false);
+            onStartupMark?.({ kind: 'manifest', preloaded: false, originalUrl });
         },
         onError: setError,
         onSourceExpired,
@@ -271,13 +337,21 @@ export function CustomPlayer({
     const shakaPlayer = useShakaPlayer({
         videoRef,
         manifestUrl: manifestUrl ?? '',
+        originalUrl,
         enabled: isMseMode && !isShareMode,
+        ladder: availableQualities,
+        preload: preloadNext,
         qualityMode,
         autoPlay,
         initialTime,
         onError: setError,
         onSourceExpired,
         onPlaybackStart: setPlaybackGate,
+        onLoadPlan: (plan: ShakaLoadPlan) => {
+            if (!plan.originalUrl) return;
+            onPrewarm?.({ originalUrl: plan.originalUrl, seconds: plan.startTime, height: plan.height, codec: plan.codec });
+        },
+        onManifestReady: (preloaded: boolean) => onStartupMark?.({ kind: 'manifest', preloaded, originalUrl }),
     });
 
     // Derive loading/qualities/currentQuality from the active engine
@@ -429,6 +503,45 @@ export function CustomPlayer({
             video.removeEventListener('timeupdate', handleVideoTimeUpdate);
         };
     }, [isLive, onPlay, onPlaying, onPause, onSeeked, onEnd, onTimeUpdate]);
+
+    // === STARTUP MILESTONES ===
+    // The first frame is the element's `loadeddata` for a source: a picture
+    // at the current position is decoded and on screen. Its height is the
+    // rung the video opened on, whichever engine chose it.
+    const startupMarkRef = useRef(onStartupMark);
+    const originalUrlRef = useRef(originalUrl);
+    useEffect(() => {
+        startupMarkRef.current = onStartupMark;
+        originalUrlRef.current = originalUrl;
+    });
+    useEffect(() => {
+        const video = mediaElement;
+        if (!video) return;
+        const onLoadedData = () => startupMarkRef.current?.(
+            { kind: 'first-frame', height: video.videoHeight, originalUrl: originalUrlRef.current });
+        const onPlayingMark = () => startupMarkRef.current?.({ kind: 'playing', originalUrl: originalUrlRef.current });
+        video.addEventListener('loadeddata', onLoadedData);
+        video.addEventListener('playing', onPlayingMark);
+        return () => {
+            video.removeEventListener('loadeddata', onLoadedData);
+            video.removeEventListener('playing', onPlayingMark);
+        };
+    }, [mediaElement]);
+    useEffect(() => {
+        if (isBuffering) startupMarkRef.current?.({ kind: 'stall', originalUrl: originalUrlRef.current });
+    }, [isBuffering]);
+
+    // Resting on the seek bar is the moment before a seek: the server gets a
+    // head start on the segment there, at the rung this viewer is on now.
+    const handleSeekHoverRest = useCallback((time: number) => {
+        if (!isMseMode || !originalUrl || shakaPlayer.stats.height <= 0) return;
+        onPrewarm?.({
+            originalUrl,
+            seconds: time,
+            height: shakaPlayer.stats.height,
+            codec: codecFamilyOf(shakaPlayer.stats.videoCodec),
+        });
+    }, [isMseMode, originalUrl, onPrewarm, shakaPlayer.stats.height, shakaPlayer.stats.videoCodec]);
 
     // === EXPOSE PLAYER API ===
     useEffect(() => {
@@ -910,6 +1023,7 @@ export function CustomPlayer({
                 onStatsToggle={() => setShowStats(!showStats)}
                 onQualityChange={handleQualityChange}
                 onSeek={handleSeek}
+                onSeekHoverRest={handleSeekHoverRest}
                 isLive={isLive}
                 sponsorSegments={sponsorSegments}
                 storyboard={storyboard}

@@ -5,7 +5,8 @@ The three bypass paths that used to be documented here as expected
 failures — the trusted-CDN suffix skip, unvalidated redirects, and
 unpinned DNS — are now closed, so these assert the fixed behaviour.
 Redirect and pinning mechanics are covered in depth in test_upstream.py;
-this file guards the endpoint-facing validator.
+this file guards the validator every upstream fetch goes through, and the
+proxy endpoint's answer when it refuses.
 """
 import socket
 import pytest
@@ -14,12 +15,12 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fastapi import HTTPException
+from services.upstream import UnsafeUpstreamError
 
 
 def _validate(url: str):
-    from main import validate_proxy_url
-    validate_proxy_url(url)
+    from services.upstream import pin_url
+    pin_url(url)
 
 
 # ---------------------------------------------------------------------------
@@ -47,9 +48,24 @@ BLOCKED_URLS = [
 
 @pytest.mark.parametrize("url", BLOCKED_URLS)
 def test_blocked_url_raises(url):
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(UnsafeUpstreamError):
         _validate(url)
-    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.parametrize("url", [
+    "http://127.0.0.1/latest/meta-data",
+    "http://169.254.169.254/latest/meta-data",
+    "http://localhost:8000/api/rooms",
+])
+def test_the_proxy_answers_a_refused_address_with_400(url):
+    """Validation now happens where the connection is made; the endpoint
+    still has to say "bad request", not "server error"."""
+    from fastapi.testclient import TestClient
+    from main import app
+
+    response = TestClient(app).get("/api/proxy", params={"url": url, "user": "viewer@example.com"},
+                                   headers={"Range": "bytes=0-99"})
+    assert response.status_code == 400
 
 
 def test_public_ip_literal_allowed():
@@ -63,7 +79,7 @@ def test_unresolvable_hostname_blocked(monkeypatch):
         raise socket.gaierror("resolution failed")
 
     monkeypatch.setattr(socket, "getaddrinfo", fail_resolve)
-    with pytest.raises(HTTPException):
+    with pytest.raises(UnsafeUpstreamError):
         _validate("https://does-not-resolve.invalid/x")
 
 
@@ -85,7 +101,7 @@ def test_cdn_subdomain_does_not_skip_ip_check(monkeypatch, url):
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: [
         (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443)),
     ])
-    with pytest.raises(HTTPException):
+    with pytest.raises(UnsafeUpstreamError):
         _validate(url)
 
 

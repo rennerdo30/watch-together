@@ -340,6 +340,7 @@ class TestIndexCacheKey:
 
         class FakeResponse:
             status_code = 206
+            headers: dict = {}
             def __init__(self, payload): self._payload = payload
             async def aread(self): return self._payload
             async def aclose(self): return None
@@ -454,6 +455,7 @@ class TestProbeSingleFlight:
 
             class Resp:
                 status_code = 206
+                headers: dict = {}
 
                 async def aread(self):
                     return b""

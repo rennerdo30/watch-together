@@ -144,7 +144,7 @@ def test_manifest_probes_with_the_resolvers_cookies_for_everyone(client, cookie_
     asyncio.run(cache_format(VIDEO_URL, _video()))
     seen = []
 
-    async def fake_build(client_, duration_seconds, video_formats, audio_formats, proxy_base, headers=None):
+    async def fake_build(client_, duration_seconds, video_formats, audio_formats, proxy_base, headers=None, **_):
         seen.append(dict(headers or {}))
         return "<MPD/>"
 

@@ -6,6 +6,7 @@ the stack ran on a real host, and which no runtime test would notice.
 """
 import json
 import pathlib
+import re
 import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
@@ -274,7 +275,9 @@ class TestQueuedVideosAreNotPlayedFromStaleUrls:
         server = (REPO_ROOT / "backend" / "main.py").read_text()
         for message in ('queue_play', 'video_ended'):
             handler = server.split(f'elif msg_type == "{message}":')[1].split('elif msg_type ==')[0]
-            assert handler.index('await refresh_video_url') < handler.index('"type": "set_video"')
+            assert '_run_detached(_start_entry(' in handler
+        start = server.split('async def _start_entry(')[1].split('\nasync def ')[0]
+        assert start.index('await _refresh_entry(') < start.index('"type": "set_video"')
 
     def test_every_member_sees_the_spinner_not_an_empty_room(self):
         """`loadingQueueIndex` is only set on the client that clicked."""
@@ -302,7 +305,8 @@ class TestWatchProgressIsShownAndResumed:
     def test_replaying_a_video_seeks_to_the_saved_progress(self):
         text = self.ROOM_PAGE.read_text()
         set_video = text.split("case 'set_video':")[1].split("case '")[0]
-        assert "nextVideo.progress" in set_video
+        # The same rule the server starts the room with (_resume_position).
+        assert "resumePosition(nextVideo)" in set_video
         assert "timestamp: resumeAt" in set_video
 
     def test_the_row_renders_a_progress_bar(self):
@@ -323,9 +327,11 @@ class TestPlayerIsNotRemountedOnReResolve:
     ROOM_PAGE = REPO_ROOT / "frontend" / "app" / "room" / "[id]" / "page.tsx"
 
     def test_player_is_keyed_on_video_identity(self):
+        """DASH keeps one player across videos (it preloads the next one);
+        everything else is keyed on the video, never its signed URL."""
         text = self.ROOM_PAGE.read_text()
-        assert "key={`${videoData.original_url}" in text
-        assert "key={`${videoData.stream_url}" not in text, (
+        assert "key={playsThroughShaka ? 'mse' : `${videoData.original_url}" in text
+        assert "videoData.stream_url}" not in text.split("key={playsThroughShaka")[1].split("\n")[0], (
             "keying on the signed stream URL remounts the player whenever it rotates"
         )
 
@@ -977,3 +983,49 @@ class TestTheSharedBrowserIsDocumented:
         assert "docker-compose.browser-udp.yml" in text
         assert "--profile browser" in text
         assert "no_media_path" in text
+
+
+class TestStartupLatencyContracts:
+    """Footguns on the path from paste to playing that must not return."""
+
+    @pytest.fixture(params=["docker-compose.yml", "deploy/docker-compose.yml"])
+    def compose(self, request):
+        return (REPO_ROOT / request.param).read_text(encoding="utf-8")
+
+    def test_the_doh_resolver_caches(self, compose):
+        """Uncached, every segment fetch that missed paid an HTTPS round trip
+        to Cloudflare for its googlevideo host before the fetch itself."""
+        command = next(line for line in compose.splitlines()
+                       if "https://1.1.1.1/dns-query" in line and "command:" in line)
+        assert "--cache" in command.split()
+        assert "--cache-optimistic" in command.split()
+
+    def test_a_cold_resolve_is_not_cut_off_by_nginx(self):
+        """Two yt-dlp attempts can outlast the general 20 s API timeout, which
+        turned a slow-but-successful resolve into a 504."""
+        conf = (REPO_ROOT / "nginx" / "nginx.conf").read_text(encoding="utf-8")
+        block = conf.split("location ~ ^/api/(resolve|dash-manifest)$ {")[1].split("}")[0]
+        seconds = int(re.search(r"proxy_read_timeout (\d+)s;", block).group(1))
+        assert seconds >= 60
+
+    def test_the_replaced_warm_and_resolve_paths_are_gone(self):
+        """No second resolver, no top-rung opening-bytes warm, no block read-ahead."""
+        backend = REPO_ROOT / "backend"
+        sources = "\n".join(path.read_text(encoding="utf-8")
+                            for path in list(backend.glob("*.py")) + list((backend / "services").glob("*.py")))
+        for gone in ("refresh_video_url", "start_initial_prefetch", "prefetch_initial_segments",
+                     "validate_proxy_url", "PREWARM_VIDEO_BYTES", "block_size = 3 * 1024 * 1024"):
+            assert gone not in sources, gone
+
+    def test_the_proxy_does_no_dns_before_its_cache(self):
+        """A memory or disk hit contacts nothing, so it must not wait on a lookup."""
+        server = (REPO_ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+        proxy = server.split("async def proxy_stream(")[1].split("\n@app.")[0]
+        assert "pin_url" not in proxy
+        assert proxy.index("from_memory()") < proxy.index("open_upstream_stream(")
+
+    def test_manifest_probes_take_the_fast_googlevideo_path(self):
+        manifest = (REPO_ROOT / "backend" / "services" / "manifest.py").read_text(encoding="utf-8")
+        probe = manifest.split("async def read_prefix(")[1].split("\n    data = await read_prefix")[0]
+        assert "rewrite_range(url, 0, length - 1)" in probe
+        assert 'request_headers["Range"]' in probe.split("if not fast:")[1].split("try:")[0]

@@ -1,9 +1,14 @@
 import { test, expect, type Page } from '@playwright/test';
 
 import { stubAdaptiveStream } from './adaptive-fixture';
+import { emulateQueueResolution } from './queue-emulation';
 
 /**
  * Preparing the next video while the current one finishes.
+ *
+ * With an adaptive video playing, the player itself preloads the next entry
+ * (see preload-next.spec.ts for what that saves); either way the next
+ * entry's manifest is asked for once, before the advance.
  *
  * A queue advance used to pay for everything at once: resolving the entry,
  * probing every rendition to build its manifest, then fetching the first
@@ -26,6 +31,9 @@ async function openRoomWithQueue(page: Page, label: string) {
   // One fixture serves both entries: it answers a resolve for whichever
   // URL is asked about.
   const manifestRequests = await stubAdaptiveStream(page, FIRST);
+  // The queue add is resolved by the server, which cannot resolve fixture
+  // links; see queue-emulation.
+  await emulateQueueResolution(page, { addedBy: USER, resolveMs: 100 });
   await page.goto(`/room/e2e-prewarm-${label}-${Date.now().toString(36)}?user=${encodeURIComponent(USER)}`);
   await expect(page.getByLabel('Connected to the room')).toBeVisible({ timeout: 15_000 });
 

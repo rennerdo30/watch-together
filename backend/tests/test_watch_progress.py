@@ -10,6 +10,7 @@ pick up where the room stopped instead of starting over.
 import pytest
 
 from connection_manager import ConnectionManager
+from queueing import enqueue
 
 
 def _video(n, **extra):
@@ -34,7 +35,7 @@ def _stopped_at(room, seconds, room_id="r"):
 
 
 async def test_playing_a_new_video_records_where_the_old_one_stopped(room):
-    await room.add_to_queue("r", _video(1, duration=600))
+    await enqueue(room, "r", _video(1, duration=600))
     await room.play_from_queue("r", 0)
     _stopped_at(room, 120)
 
@@ -45,8 +46,8 @@ async def test_playing_a_new_video_records_where_the_old_one_stopped(room):
 
 
 async def test_replaying_a_queue_entry_resumes_where_it_stopped(room):
-    await room.add_to_queue("r", _video(1, duration=600))
-    await room.add_to_queue("r", _video(2, duration=600))
+    await enqueue(room, "r", _video(1, duration=600))
+    await enqueue(room, "r", _video(2, duration=600))
     await room.play_from_queue("r", 0)
     _stopped_at(room, 200)
     await room.prepend_to_queue("r", _video(3, duration=600))
@@ -59,8 +60,8 @@ async def test_replaying_a_queue_entry_resumes_where_it_stopped(room):
 
 
 async def test_auto_advance_resumes_the_next_entry(room):
-    await room.add_to_queue("r", _video(1, duration=600))
-    await room.add_to_queue("r", _video(2, duration=600))
+    await enqueue(room, "r", _video(1, duration=600))
+    await enqueue(room, "r", _video(2, duration=600))
     room.room_states["r"]["queue"][1]["progress"] = 250.0
     await room.play_from_queue("r", 0)
     _stopped_at(room, 600)
@@ -72,7 +73,7 @@ async def test_auto_advance_resumes_the_next_entry(room):
 
 
 async def test_a_finished_pinned_video_starts_over_if_replayed(room):
-    await room.add_to_queue("r", _video(1, duration=600, pinned=True))
+    await enqueue(room, "r", _video(1, duration=600, pinned=True))
     await room.play_from_queue("r", 0)
     _stopped_at(room, 600)
 
@@ -84,8 +85,8 @@ async def test_a_finished_pinned_video_starts_over_if_replayed(room):
 
 
 async def test_a_skipped_video_keeps_its_position(room):
-    await room.add_to_queue("r", _video(1, duration=600, pinned=True))
-    await room.add_to_queue("r", _video(2, duration=600))
+    await enqueue(room, "r", _video(1, duration=600, pinned=True))
+    await enqueue(room, "r", _video(2, duration=600))
     await room.play_from_queue("r", 0)
     _stopped_at(room, 300)
 
@@ -95,8 +96,8 @@ async def test_a_skipped_video_keeps_its_position(room):
 
 
 async def test_a_video_watched_into_the_credits_starts_over(room):
-    await room.add_to_queue("r", _video(1, duration=600))
-    await room.add_to_queue("r", _video(2, duration=600))
+    await enqueue(room, "r", _video(1, duration=600))
+    await enqueue(room, "r", _video(2, duration=600))
     await room.play_from_queue("r", 0)
     _stopped_at(room, 590)  # inside the end guard, nothing left to resume
     await room.prepend_to_queue("r", _video(3, duration=600))
@@ -108,8 +109,8 @@ async def test_a_video_watched_into_the_credits_starts_over(room):
 
 
 async def test_a_barely_started_video_starts_over(room):
-    await room.add_to_queue("r", _video(1, duration=600))
-    await room.add_to_queue("r", _video(2, duration=600))
+    await enqueue(room, "r", _video(1, duration=600))
+    await enqueue(room, "r", _video(2, duration=600))
     await room.play_from_queue("r", 0)
     _stopped_at(room, 3)  # less than the minimum worth resuming
     await room.prepend_to_queue("r", _video(3, duration=600))
@@ -122,8 +123,8 @@ async def test_a_barely_started_video_starts_over(room):
 
 async def test_a_livestream_never_resumes(room):
     item = _video(1, is_live=True)
-    await room.add_to_queue("r", item)
-    item["progress"] = 500.0
+    await enqueue(room, "r", item)
+    room.room_states["r"]["queue"][0]["progress"] = 500.0
 
     await room.play_from_queue("r", 0)
 
@@ -138,7 +139,7 @@ async def test_progress_survives_persistence(room):
         "video_data": None, "is_playing": False, "timestamp": 0, "members": [],
         "queue": [], "roles": {}, "playing_index": -1, "permanent": False, "name": "",
     }
-    await room.add_to_queue(room_id, _video(1, duration=600))
+    await enqueue(room, room_id, _video(1, duration=600))
     await room.play_from_queue(room_id, 0)
     _stopped_at(room, 240, room_id)
 
@@ -158,7 +159,7 @@ def test_the_client_cannot_assert_watch_progress():
 
 
 async def test_re_resolving_keeps_the_watch_progress(monkeypatch):
-    import services.resolver as resolver
+    import main
 
     async def cached(_url):
         return {
@@ -167,13 +168,13 @@ async def test_re_resolving_keeps_the_watch_progress(monkeypatch):
             "duration": 600,
         }
 
-    monkeypatch.setattr(resolver, "get_cached_format", cached)
+    monkeypatch.setattr(main, "get_cached_format", cached)
     video = {
         "original_url": "https://youtu.be/video1", "title": "Video 1",
         "progress": 123.0, "added_by": "a@example.com", "pinned": True,
     }
 
-    refreshed = await resolver.refresh_video_url(video)
+    refreshed = await main._refresh_entry(video, "room", "a@example.com")
 
     assert refreshed["progress"] == 123.0
     assert refreshed["added_by"] == "a@example.com"

@@ -18,11 +18,12 @@ member's cookies from being used for arbitrary addresses.
 
 import logging
 from collections import OrderedDict
-from typing import Iterable, Optional, Set
+from typing import Iterable, NamedTuple, Optional, Set
 from urllib.parse import urlparse
 
 from core.config import STREAM_OWNER_MAX_ENTRIES
 from services.cache import stream_identity
+from services import user_cookies
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,31 @@ def owner_of(url: str) -> Optional[str]:
 
 def is_known(url: str) -> bool:
     return _key(url) in _owners
+
+
+class Fetcher(NamedTuple):
+    """Who a fetch of one URL runs as, and where its bytes may be cached."""
+    #: Whose cookies the fetch carries (None for anonymous).
+    identity: Optional[str]
+    #: The Cookie header to send, or None.
+    cookie: Optional[str]
+    #: The identity the response is cached under: set only when cookies were
+    #: actually sent, so an anonymous body stays shareable and an
+    #: authenticated one never is.
+    cache_identity: Optional[str]
+
+
+def fetcher_for(url: str, fallback: Optional[str] = None) -> Fetcher:
+    """How any fetch of `url` has to be made — by a viewer, a warm or a probe.
+
+    A stream URL a resolve produced is fetched as whoever resolved it; any
+    other URL as `fallback` (the requester, for a proxied request). Every
+    path that fetches or caches stream bytes goes through this one rule, so
+    a warm lands under exactly the key the viewer's request looks up.
+    """
+    identity = owner_of(url) if is_known(url) else fallback
+    cookie = user_cookies.get_cookie_header(identity, url) if identity else None
+    return Fetcher(identity, cookie, identity if cookie else None)
 
 
 def sanitize_client_video(video_data: dict, cached: Optional[dict]) -> None:

@@ -50,6 +50,13 @@ export interface ResolveResponse {
     pinned?: boolean;
     /** Identity of the member who put it in the room; set by the server. */
     added_by?: string;
+    /**
+     * A queue entry the server is still resolving: it carries the link as
+     * both `original_url` and `title`, and nothing else yet. The server
+     * replaces it with the resolved entry (same `original_url`), or removes
+     * it and tells the member who added it (`resolve_failed`).
+     */
+    pending?: boolean;
     /** Preview thumbnails for the seek bar, when the site provides them. */
     storyboard?: Storyboard;
     /** Chapters (YouTube: sections), sorted by start, when the video has any. */

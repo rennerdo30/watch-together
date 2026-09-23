@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Trash2, ListVideo, Pin, Play, Loader2, ExternalLink } from 'lucide-react';
 
 import { displayHost, displayName } from '@/lib/utils';
+import { HOVER_PREWARM_DELAY_MS } from '@/lib/constants';
 
 interface ResolveResponse {
     original_url: string;
@@ -15,6 +16,8 @@ interface ResolveResponse {
     pinned?: boolean;
     added_by?: string;
     progress?: number;
+    /** Still being resolved by the server; see ResolveResponse.pending. */
+    pending?: boolean;
 }
 
 const LIVE_BADGE_CLASSES =
@@ -40,6 +43,8 @@ interface SortableQueueItemProps {
     onRemove: (index: number) => void;
     onPlay: (index: number) => void;
     onPin?: (index: number) => void;
+    /** The pointer has rested on the row for `HOVER_PREWARM_DELAY_MS`. */
+    onHoverRest?: (index: number) => void;
     fontSize: number;
 }
 
@@ -53,8 +58,28 @@ export function SortableQueueItem({
     onRemove,
     onPlay,
     onPin,
+    onHoverRest,
     fontSize
 }: SortableQueueItemProps) {
+    // A row the server is still resolving has nothing to show or pin yet,
+    // and is not dragged: its place is only settled once it resolves. It can
+    // still be played (the server resolves on play) or removed.
+    const pending = !!item.pending;
+    const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const cancelHoverRest = () => {
+        if (hoverTimer.current !== null) clearTimeout(hoverTimer.current);
+        hoverTimer.current = null;
+    };
+    useEffect(() => cancelHoverRest, []);
+    const startHoverRest = () => {
+        cancelHoverRest();
+        if (!onHoverRest || pending) return;
+        hoverTimer.current = setTimeout(() => {
+            hoverTimer.current = null;
+            onHoverRest(index);
+        }, HOVER_PREWARM_DELAY_MS);
+    };
+
     const {
         attributes,
         listeners,
@@ -62,7 +87,7 @@ export function SortableQueueItem({
         transform,
         transition,
         isDragging
-    } = useSortable({ id });
+    } = useSortable({ id, disabled: pending });
 
     const style = {
         transform: CSS.Transform.toString(transform),
@@ -72,7 +97,7 @@ export function SortableQueueItem({
 
     // Watch progress is only meaningful for a video with a known length; a
     // livestream has no position to return to.
-    const duration = !item.is_live && typeof item.duration === 'number' ? item.duration : 0;
+    const duration = !pending && !item.is_live && typeof item.duration === 'number' ? item.duration : 0;
     const watched = duration > 0
         ? Math.min(Math.max(0, progress ?? item.progress ?? 0), duration)
         : 0;
@@ -84,6 +109,9 @@ export function SortableQueueItem({
             style={style}
             {...attributes}
             {...listeners}
+            data-queue-pending={pending || undefined}
+            onPointerEnter={startHoverRest}
+            onPointerLeave={cancelHoverRest}
             className={`
                 group flex items-center gap-1.5 p-1 rounded-lg border transition-all select-none
                 ${isActive
@@ -103,7 +131,11 @@ export function SortableQueueItem({
                     if (!isLoading) onPlay(index);
                 }}
             >
-                {item.thumbnail ? (
+                {pending ? (
+                    <span className="w-full h-full flex items-center justify-center">
+                        <Loader2 aria-hidden="true" className="w-4 h-4 text-neutral-400 animate-spin" />
+                    </span>
+                ) : item.thumbnail ? (
                     <img
                         src={item.thumbnail}
                         alt=""
@@ -152,7 +184,9 @@ export function SortableQueueItem({
                     {isLoading && <Loader2 className="w-3 h-3 text-white/40 animate-spin shrink-0" />}
                 </div>
                 <p className="text-[9px] font-mono text-neutral-500 truncate mt-0.5">
-                    {displayHost(item.original_url)}
+                    {pending ? (
+                        <span role="status">Resolving…</span>
+                    ) : displayHost(item.original_url)}
                     {item.added_by && (
                         <span title={`Added by ${item.added_by}`}> · {displayName(item.added_by)}</span>
                     )}
@@ -201,7 +235,7 @@ export function SortableQueueItem({
                 >
                     <ExternalLink aria-hidden="true" className="w-3 h-3" />
                 </a>
-                {onPin && (
+                {onPin && !pending && (
                     <button
                         onClick={(e) => {
                             e.stopPropagation();

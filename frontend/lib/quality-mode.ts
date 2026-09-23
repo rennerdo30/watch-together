@@ -19,6 +19,9 @@ export type QualityMode = 'balanced' | 'highest' | 'saver';
 
 export const DEFAULT_QUALITY_MODE: QualityMode = 'balanced';
 
+/** Where this browser keeps the viewer's choice. */
+export const QUALITY_MODE_STORAGE_KEY = 'w2g-player-quality-mode';
+
 const QUALITY_MODES: readonly QualityMode[] = ['balanced', 'highest', 'saver'];
 
 /** A stored or user-supplied value, or the default for anything else. */

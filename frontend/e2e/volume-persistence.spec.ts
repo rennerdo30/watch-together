@@ -3,11 +3,15 @@ import { test, expect } from '@playwright/test';
 import { stubAdaptiveStream } from './adaptive-fixture';
 
 /**
- * The queue intentionally remounts the player for each video. A fresh
- * HTMLVideoElement starts at volume=1 and muted=false; persisted preferences
- * update React state after hydration, but the old mount-only synchronization
- * effect had already copied the initial defaults into the element. The slider
- * then showed 25% while the next queued video actually played at 100%.
+ * A fresh HTMLVideoElement starts at volume=1 and muted=false; persisted
+ * preferences update React state after hydration, but the old mount-only
+ * synchronization effect had already copied the initial defaults into the
+ * element. The slider then showed 25% while the next video actually played
+ * at 100%.
+ *
+ * Adaptive videos now share one element (the player is kept across videos),
+ * which is asserted below; the volume must survive either way, and a reload
+ * still builds a new element.
  */
 
 const USER = 'volume@example.com';
@@ -48,7 +52,7 @@ async function setVolume(page: import('@playwright/test').Page, value: number) {
   await expect(slider).toHaveValue(String(value));
 }
 
-test('the next queued video keeps the volume displayed by the slider',
+test('the next video keeps the volume displayed by the slider, on the same element',
   async ({ page }) => {
     await openRoom(page, 'queue');
     const firstMedia = await playUrl(page, FIRST);
@@ -60,22 +64,17 @@ test('the next queued video keeps the volume displayed by the slider',
     expect(await page.evaluate(() => localStorage.getItem('w2g-player-volume')))
       .toBe('0.25');
 
-    // Mark the physical element. A queue transition has to replace it, so the
-    // assertion after Play next cannot accidentally pass against the old node.
+    // Mark the physical element: the next adaptive video is loaded into it
+    // rather than into a new one.
     await firstMedia.evaluate((video: HTMLVideoElement) => {
       video.dataset.volumeTestInstance = 'first';
     });
 
-    const input = page.getByPlaceholder('Paste video URL...');
-    await input.fill(SECOND);
-    await page.getByRole('button', { name: 'Queue', exact: true }).click();
-    await expect(page.getByRole('button', { name: /play next/i })).toBeEnabled();
-    await page.getByRole('button', { name: /play next/i }).click();
-
-    const nextMedia = page.locator('video[data-stream-type="mse"]');
-    await expect.poll(() => nextMedia.evaluate(
-      (v: HTMLVideoElement) => v.dataset.volumeTestInstance ?? 'new'),
-    { timeout: 15_000 }).toBe('new');
+    const nextMedia = await playUrl(page, SECOND);
+    expect(await nextMedia.evaluate(
+      (v: HTMLVideoElement) => v.dataset.volumeTestInstance ?? 'new')).toBe('first');
+    await expect(page.locator('header').getByRole('link', { name: /open adaptive fixture/i }))
+      .toHaveAttribute('href', SECOND);
 
     const slider = page.getByLabel('Volume');
     await expect(slider).toHaveValue('0.25');

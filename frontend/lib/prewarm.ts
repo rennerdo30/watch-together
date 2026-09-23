@@ -20,6 +20,7 @@
  */
 
 import { dashManifestUrl } from './api';
+import { BACKEND_ORIGIN, PREWARM_POSITION_DEDUPE_MS } from './constants';
 
 /** Videos already asked for, so a tick every second does not re-ask. */
 const requested = new Set<string>();
@@ -28,6 +29,11 @@ const requested = new Set<string>();
  * Prepare a queued video. Resolves once the server has answered, and
  * swallows failures: this is speculation, and the advance still works
  * without it.
+ *
+ * Only for a room whose current video is not playing through Shaka: when it
+ * is, the player preloads the next entry itself (manifest, index, first
+ * segments; see `useShakaPlayer`), which asks the server for the same
+ * manifest and keeps what it got.
  */
 export async function prewarmVideo(
     originalUrl: string | undefined,
@@ -49,7 +55,52 @@ export async function prewarmVideo(
     }
 }
 
+/** Positions asked for, by request, with when they were asked. */
+const positionsAsked = new Map<string, number>();
+
+/**
+ * Ask the server to warm the bytes a player is about to want: the segments
+ * covering `seconds` of the tallest rung at or below `height` (of `codec`'s
+ * family when given), and the audio beside them.
+ *
+ * Called on intent — just before a load or a preload, when the pointer
+ * rests on the seek bar or on a queue row — so the server has a head start
+ * of a round trip or more on the request the player is about to send. The
+ * server answers at once and does the work in the background; this never
+ * waits for it, and a failure costs nothing but the head start.
+ */
+export function prewarmPosition(
+    originalUrl: string | undefined,
+    roomId: string,
+    seconds: number,
+    height: number,
+    codec?: string,
+): void {
+    if (!originalUrl || !Number.isFinite(seconds) || !Number.isFinite(height) || height <= 0) return;
+    const t = Math.max(0, Math.floor(seconds));
+    const h = Math.round(height);
+    const params = new URLSearchParams({ url: originalUrl, room: roomId, t: String(t), h: String(h) });
+    if (codec) params.set('codec', codec);
+    // Identity travels as a query parameter in development mode, the same
+    // way the other client calls carry it.
+    const user = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('user');
+    if (user) params.set('user', user);
+    const url = `${BACKEND_ORIGIN}/api/prewarm?${params.toString()}`;
+
+    const now = Date.now();
+    const askedAt = positionsAsked.get(url);
+    if (askedAt !== undefined && now - askedAt < PREWARM_POSITION_DEDUPE_MS) return;
+    positionsAsked.set(url, now);
+    for (const [key, at] of positionsAsked) {
+        if (now - at >= PREWARM_POSITION_DEDUPE_MS) positionsAsked.delete(key);
+    }
+    void fetch(url, { cache: 'no-store' }).catch(() => {
+        // Speculation: the load itself still works without it.
+    });
+}
+
 /** Forget what has been asked for (a new room, and tests). */
 export function resetPrewarm(): void {
     requested.clear();
+    positionsAsked.clear();
 }
