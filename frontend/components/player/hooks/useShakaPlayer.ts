@@ -3,6 +3,7 @@
 import { useRef, useEffect, useCallback, useState } from 'react';
 
 import { startPlayback, type PlaybackStart } from '@/lib/playback';
+import { clearJumpCache, fetchJumpDestination, installJumpCache } from '@/lib/jump-cache';
 import {
     autoQualityCap,
     latencyAwareAbrFactory,
@@ -30,6 +31,7 @@ import {
     SHAKA_RETRY_BASE_DELAY_MS,
     SHAKA_REQUEST_TIMEOUT_MS,
     SHAKA_PREFERRED_VIDEO_CODECS,
+    JUMP_BUFFERED_MARGIN_SECONDS,
     DASH_MIME_TYPE,
 } from '@/lib/constants';
 
@@ -146,6 +148,12 @@ export interface UseShakaPlayerOptions {
     onLoadPlan?: (plan: ShakaLoadPlan) => void;
     /** The current load has its manifest; `preloaded` when it came from a preload. */
     onManifestReady?: (preloaded: boolean) => void;
+    /**
+     * A jump the room is about to make (a SponsorBlock skip, announced by
+     * the server ahead of time): its destination is fetched into the page
+     * unless the buffer already reaches it. `key` names one announcement.
+     */
+    upcomingJump?: { seconds: number; key: string } | null;
 }
 
 export interface UseShakaPlayerReturn {
@@ -479,6 +487,7 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
             if (cancelled) return;
 
             shaka.polyfill.installAll();
+            installJumpCache(shaka);
             if (!shaka.Player.isBrowserSupported()) {
                 console.warn('[ShakaPlayer] Browser does not support MSE playback');
                 setIsSupported(false);
@@ -779,6 +788,31 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
         };
         // Deliberately keyed on the player and the stream alone; see above.
     }, [player, manifestUrl, reloadCount, videoRef, readTracks]);
+
+    // === AN ANNOUNCED JUMP: its destination fetched into the page ===
+    const jumpKey = options.upcomingJump?.key;
+    const jumpSeconds = options.upcomingJump?.seconds;
+    useEffect(() => {
+        if (!player || !loadedUrl || jumpKey === undefined || jumpSeconds === undefined) return;
+        const video = videoRef.current;
+        const originalUrl = callbackRefs.current.originalUrl;
+        if (!video || !originalUrl) return;
+        // Already buffered up to there: the jump plays from the buffer.
+        for (let i = 0; i < video.buffered.length; i++) {
+            if (video.buffered.start(i) <= jumpSeconds
+                && video.buffered.end(i) >= jumpSeconds + JUMP_BUFFERED_MARGIN_SECONDS) return;
+        }
+        // The rung and codec the player is on now are the ones it will
+        // request on the far side of the jump.
+        const active = player.getVariantTracks().find((track) => track.active);
+        const height = active?.height ?? 0;
+        if (height <= 0) return;
+        const codec = (active?.videoCodec ?? '').split('.')[0] || undefined;
+        void fetchJumpDestination(originalUrl, jumpSeconds, height, codec);
+    }, [player, loadedUrl, jumpKey, jumpSeconds, videoRef]);
+
+    // A destination fetched for one video is no use to the next.
+    useEffect(() => () => clearJumpCache(), [loadedUrl]);
 
     // === THE NEXT VIDEO: preloaded while this one finishes ===
     useEffect(() => {

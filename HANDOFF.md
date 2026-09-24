@@ -202,6 +202,9 @@ report per start). `--perf` still covers per-transfer proxy behaviour.
   room is watching, at the entry's resume position.
 - The player announces loads, seek-bar hover rests and queue-row hover
   rests to `/api/prewarm` with the rung and codec it will open on.
+- A SponsorBlock skip is announced (`skip_upcoming`) when the server warms
+  it; each player whose buffer stops short fetches the destination's exact
+  spans into the page (`lib/jump-cache.ts`), so the jump makes no request.
 - Probes use googlevideo's fast `range=` path and their bytes answer every
   rendition's init/index request.
 - Resolves are shared per (URL, cookie owner); paste starts one; queueing

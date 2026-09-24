@@ -72,11 +72,11 @@ test('a speculative resolve that fails says nothing until the click', async ({ p
   await input.fill(PLAYING);
   await expect.poll(() => failures, { timeout: 5_000 }).toBe(1);
   await page.waitForTimeout(300);
-  await expect(page.getByText('Unsupported URL')).toHaveCount(0);
+  await expect(page.getByRole('status').filter({ hasText: 'Unsupported URL' })).toHaveCount(0);
 
   // The click asks again — a failure is not kept — and reports it.
   await input.press('Enter');
-  await expect(page.getByText('Unsupported URL')).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Unsupported URL' })).toBeVisible();
   expect(failures).toBe(2);
 });
 

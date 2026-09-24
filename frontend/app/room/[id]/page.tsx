@@ -173,6 +173,9 @@ export default function RoomPage() {
     const [sponsorBlock, setSponsorBlock] = useState<SponsorBlockSettings>(DEFAULT_SPONSORBLOCK_SETTINGS);
     const [sponsorSegments, setSponsorSegments] = useState<{ videoUrl: string | null; segments: SponsorSegment[] }>(
         { videoUrl: null, segments: [] });
+    // The skip the server announced it is about to make (`skip_upcoming`),
+    // so the player can fetch where the room will land before it jumps.
+    const [upcomingSkip, setUpcomingSkip] = useState<{ videoUrl: string; seconds: number; key: string } | null>(null);
 
     // A link is being resolved, either pasted directly or picked from the
     // queue. The empty state is hidden while this is true: both used to
@@ -777,6 +780,16 @@ export default function RoomPage() {
                 break;
             case 'roles_update':
                 if (payload.roles) setRoles(payload.roles);
+                break;
+            case 'skip_upcoming':
+                if (typeof payload.video_url === 'string' && typeof payload.to === 'number'
+                    && Number.isFinite(payload.to) && payload.to >= 0) {
+                    setUpcomingSkip({
+                        videoUrl: payload.video_url,
+                        seconds: payload.to,
+                        key: `${payload.video_url}@${payload.at}-${payload.to}`,
+                    });
+                }
                 break;
             case 'sponsorblock_segments':
                 if (typeof payload.video_url === 'string') {
@@ -1438,6 +1451,7 @@ export default function RoomPage() {
                                     syncThreshold={syncThreshold}
                                     onSyncThresholdChange={setSyncThreshold}
                                     sponsorSegments={sponsorSegments.videoUrl === videoData.original_url ? sponsorSegments.segments : []}
+                                    upcomingJump={upcomingSkip?.videoUrl === videoData.original_url ? upcomingSkip : null}
                                     storyboard={videoData.storyboard}
                                     chapters={videoData.chapters}
                                 />

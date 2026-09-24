@@ -183,34 +183,47 @@ def choose_renditions(video_data: dict, rungs: Sequence[Rung]) -> List[str]:
     return chosen
 
 
-async def _warm_position(client: httpx.AsyncClient, urls: Sequence[str],
-                         seconds: float, identity: Optional[str]) -> None:
-    warmed = 0
+def spans_at(urls: Sequence[str], seconds: float) -> List[Tuple[str, int, int]]:
+    """The exact byte spans a player fetches to resume at `seconds`.
+
+    Per stream: the subsegment covering the position and the ones after it
+    (PREWARM_POSITION_SUBSEGMENTS in all), as (url, first byte, last byte).
+    A stream nobody has probed yet contributes nothing: guessing is worse
+    than not warming — a guessed span downloads megabytes and answers no
+    request.
+    """
+    spans: List[Tuple[str, int, int]] = []
     for url in urls:
         table = manifest_service.segment_table_for(url)
-        if table is None:
-            # Nothing has probed this rendition yet, so where its subsegments
-            # lie is unknown. Guessing is worse than not warming: a guessed
-            # span downloads megabytes and answers no request.
-            continue
-        first = table.index_at(seconds)
+        first = table.index_at(seconds) if table is not None else None
         if first is None:
             continue
         for position in range(first, first + PREWARM_POSITION_SUBSEGMENTS):
             span = table.span(position)
             if span is None:
                 break
-            await prefetch_bytes(client, url, span[0], span[1],
-                                 is_audio=is_audio_url(url), identity=identity)
-        warmed += 1
-    if warmed:
-        logger.info("Prewarmed %d stream(s) at %.1fs", warmed, seconds)
+            spans.append((url, span[0], span[1]))
+    return spans
+
+
+async def _warm_position(client: httpx.AsyncClient, urls: Sequence[str],
+                         seconds: float, identity: Optional[str]) -> None:
+    spans = spans_at(urls, seconds)
+    for url, start, end in spans:
+        await prefetch_bytes(client, url, start, end,
+                             is_audio=is_audio_url(url), identity=identity)
+    if spans:
+        logger.info("Prewarmed %d stream(s) at %.1fs", len({url for url, _, _ in spans}), seconds)
 
 
 def warm_position(client: httpx.AsyncClient, video_data: dict, seconds: float,
-                  identity: Optional[str] = None) -> None:
-    """Warm the bytes serving `seconds` of the video the room is playing."""
-    urls = stream_urls(video_data or {})
+                  identity: Optional[str] = None, urls: Optional[Sequence[str]] = None) -> None:
+    """Warm the bytes serving `seconds` of the video the room is playing.
+
+    `urls` names the renditions when the caller knows them (a player that
+    said which rung it is on); otherwise the ones the room is fetching.
+    """
+    urls = list(urls) if urls is not None else stream_urls(video_data or {})
     if not urls or seconds < 0:
         return
     _spawn(f"position:{urls[0][:120]}:{int(seconds)}",

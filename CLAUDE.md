@@ -163,7 +163,10 @@ Read-ahead follows each request; skips, the next queue entry (on the rungs the r
 is playing) and player-announced starts/jumps (`/api/prewarm`) are warmed ahead of
 time; the manifest probe's bytes answer every rendition's init/index request. A
 request for a span someone is already fetching waits for that fetch
-(`services/inflight.py`). Timings: `./deploy/host-status.sh --startup`.
+(`services/inflight.py`). A SponsorBlock skip is also announced to the room
+(`skip_upcoming`): players fetch its destination spans (`/api/segment-spans`) into
+an in-page cache that a Shaka networking plugin answers from (`lib/jump-cache.ts`).
+Timings: `./deploy/host-status.sh --startup`.
 
 ### Playback
 yt-dlp returns adaptive streams as **separate** fragmented-MP4 files with no manifest,

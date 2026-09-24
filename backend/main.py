@@ -63,7 +63,7 @@ from services.upstream import (
     open_upstream_stream, resolve_upstream,
 )
 from services.user_cookies import choose_cookie_source, cookie_file, get_cookie_header
-from services.manifest import build_manifest_for_formats, manifest_formats, probe_formats, ManifestError
+from services.manifest import build_manifest_for_formats, manifest_formats, probe_formats, ManifestError, proxied_url
 from services import prewarm
 from services.metrics import (
     proxy_metrics, OUTCOME_OK, OUTCOME_UPSTREAM_ERROR,
@@ -922,9 +922,7 @@ async def dash_manifest(request: Request, url: str, room: str = None):
     if not video_formats or not audio_formats:
         raise HTTPException(status_code=422, detail="Video has no adaptive streams")
 
-    host = request.headers.get("host")
-    proto = "https" if request.headers.get("x-forwarded-proto") == "https" else "http"
-    proxy_base = f"{proto}://{host}/api/proxy?url="
+    proxy_base = _proxy_base(request)
 
     outgoing_headers = {
         "User-Agent": request.headers.get("user-agent", "Mozilla/5.0"),
@@ -965,6 +963,76 @@ async def dash_manifest(request: Request, url: str, room: str = None):
     )
 
 
+def _proxy_base(request: Request) -> str:
+    """The absolute proxy prefix this request's host sees; manifests use it."""
+    host = request.headers.get("host")
+    proto = "https" if request.headers.get("x-forwarded-proto") == "https" else "http"
+    return f"{proto}://{host}/api/proxy?url="
+
+
+async def _announced_video(request: Request, url: str, room: Optional[str]) -> tuple:
+    """The video a player's announcement is about, and the room it may borrow from.
+
+    Only videos the server itself resolved: a cached resolve (what manifests
+    are built from) or the room's current video or queue entry — never an
+    arbitrary address. The room is dropped for anyone not connected to it:
+    a room's members lend their cookies to its re-resolves, and an outsider
+    does not get to trigger one. Returns (video or None, room id, identity).
+    """
+    user_email = get_user_from_request(request)
+    if REQUIRE_AUTHENTICATION and not user_email:
+        raise HTTPException(status_code=401, detail="User identity required")
+    check_rate_limit(user_email or (request.client.host if request.client else "anonymous"),
+                     scope="prewarm", max_requests=PREWARM_RATE_LIMIT_PER_MINUTE)
+    room_id = sanitize_room_id(room)
+    if room_id and not (user_email and _is_connected_to_room(room_id, user_email)):
+        room_id = ""
+    state = manager.room_states.get(room_id, {}) if room_id else {}
+    candidates = [state.get("video_data")] + list(state.get("queue", []))
+    video = await get_cached_format(url) or next(
+        (entry for entry in candidates
+         if isinstance(entry, dict) and entry.get("original_url") == url and not entry.get("pending")),
+        None)
+    return video, room_id, user_email
+
+
+@app.get("/api/segment-spans")
+async def segment_spans(
+    request: Request,
+    url: str = Query(..., max_length=QUEUE_URL_MAX_LENGTH, description="The video's original URL"),
+    room: str = Query(None),
+    t: float = Query(..., ge=0, le=PREWARM_MAX_POSITION_SECONDS, allow_inf_nan=False,
+                     description="Where the jump lands, in seconds"),
+    h: int = Query(PREWARM_DEFAULT_HEIGHT, ge=1, le=10_000, description="The rung the player is on"),
+    codec: str = Query(None, max_length=8, description="Its video codec family"),
+):
+    """The exact requests a player will make to resume at `t`, to fetch early.
+
+    A scheduled SponsorBlock skip is announced to the room ahead of time
+    (`skip_upcoming`). Warming the server's cache for it still leaves every
+    viewer a round trip to this server — Japan to Germany — after the jump.
+    With these spans the player fetches the destination into its own cache
+    beforehand, so the jump plays from memory in the page.
+
+    Each span is the proxied URI exactly as the manifest addresses it and
+    the byte range the player requests, for the rung and codec given, plus
+    audio. Only renditions whose index has been read are described; the
+    server warms the same spans so the player's own fetches hit memory.
+    """
+    video, _room_id, _user = await _announced_video(request, url, room)
+    if not video:
+        return {"spans": []}
+    family = codec if codec in PREWARM_CODEC_PREFERENCE else None
+    urls = prewarm.choose_renditions(video, [(h, family)])
+    spans = prewarm.spans_at(urls, t)
+    if spans and _proxy_client is not None:
+        prewarm.warm_position(_proxy_client, video, t,
+                              identity=video.get(stream_owner.RESOLVED_BY_KEY), urls=urls)
+    proxy_base = _proxy_base(request)
+    return {"spans": [{"uri": proxied_url(stream_url, proxy_base), "start": start, "end": end}
+                      for stream_url, start, end in spans]}
+
+
 @app.get("/api/prewarm", status_code=202)
 async def prewarm_start(
     request: Request,
@@ -988,22 +1056,7 @@ async def prewarm_start(
     video or queue entry for `url`, or a cached resolve — so this is never a
     way to have the server fetch an arbitrary address.
     """
-    user_email = get_user_from_request(request)
-    if REQUIRE_AUTHENTICATION and not user_email:
-        raise HTTPException(status_code=401, detail="User identity required")
-    check_rate_limit(user_email or (request.client.host if request.client else "anonymous"),
-                     scope="prewarm", max_requests=PREWARM_RATE_LIMIT_PER_MINUTE)
-    room_id = sanitize_room_id(room)
-    if room_id and not (user_email and _is_connected_to_room(room_id, user_email)):
-        # A room's members lend their cookies to its re-resolves; someone who
-        # is not in the room does not get to trigger one.
-        room_id = ""
-    state = manager.room_states.get(room_id, {}) if room_id else {}
-    candidates = [state.get("video_data")] + list(state.get("queue", []))
-    video = next((entry for entry in candidates
-                  if isinstance(entry, dict) and entry.get("original_url") == url
-                  and not entry.get("pending")), None)
-    video = video or await get_cached_format(url)
+    video, room_id, _user = await _announced_video(request, url, room)
     if not video:
         return {"status": "unknown"}
     family = codec if codec in PREWARM_CODEC_PREFERENCE else None
@@ -1072,9 +1125,7 @@ async def proxy_stream(request: Request, url: str):
     else:
         referer = f"{parsed_url.scheme}://{hostname}/"
 
-    host = request.headers.get("host")
-    proto = "https" if request.headers.get("x-forwarded-proto") == "https" else "http"
-    proxy_base = f"{proto}://{host}/api/proxy?url="
+    proxy_base = _proxy_base(request)
 
     url_path = url.split('?')[0]
     is_hls_manifest = url_path.endswith('.m3u8') or url_path.endswith('.m3u')

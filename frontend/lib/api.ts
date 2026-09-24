@@ -395,6 +395,22 @@ export interface AdminCacheReport {
  * to resolve the video again — after a restart, or for an entry whose
  * signed URLs have expired.
  */
+/**
+ * Where the exact requests a player makes after a jump to `seconds` are
+ * described: the manifest's own URIs and byte ranges on the given rung.
+ */
+export function segmentSpansUrl(originalUrl: string, seconds: number, height: number, codec?: string): string {
+    const params = new URLSearchParams({
+        url: originalUrl, t: String(Math.max(0, seconds)), h: String(Math.max(1, Math.round(height))),
+    });
+    if (codec) params.set('codec', codec);
+    const mockUser = typeof window === 'undefined'
+        ? null
+        : new URLSearchParams(window.location.search).get('user');
+    if (mockUser) params.set('user', mockUser);
+    return `${BACKEND_ORIGIN}/api/segment-spans?${params.toString()}`;
+}
+
 export function dashManifestUrl(originalUrl: string, roomId: string): string {
     // Identity travels as a query parameter in development mode, the same
     // way the other client calls carry it.

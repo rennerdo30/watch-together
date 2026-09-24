@@ -429,7 +429,7 @@ class SponsorSkipper:
                         await self._sleep(wait - lead)
                         if not self._still_waiting(room_id, segment):
                             continue
-                    self._prewarm_destination(room_id, segment)
+                    await self._prepare_destination(room_id, segment)
                     await self._sleep(lead)
                     state = self._manager.room_states.get(room_id)
                     if not state or not state.get("is_playing") or state.get("startup_pending"):
@@ -463,18 +463,32 @@ class SponsorSkipper:
             return segment.start - SPONSORBLOCK_SKIP_TOLERANCE_SECONDS <= position < segment.end
         return position < segment.end
 
-    def _prewarm_destination(self, room_id: str, segment: Segment) -> None:
-        """Ask for the bytes the room will need on the far side of the skip."""
-        if self.prewarm is None:
-            return
+    async def _prepare_destination(self, room_id: str, segment: Segment) -> None:
+        """Get the far side of the skip ready before the room jumps there.
+
+        The server's cache is warmed here, and every player is told where the
+        room is about to land (`skip_upcoming`), so each can fetch those bytes
+        into its own buffer too: a warm server cache still leaves a viewer one
+        round trip to this server after the jump, which from the other side
+        of the world is most of the stall.
+        """
         state = self._manager.room_states.get(room_id) or {}
         video = state.get("video_data") or {}
         if not video:
             return
+        if self.prewarm is not None:
+            try:
+                self.prewarm(video, segment.end)
+            except Exception:  # Never let speculation break a skip.
+                logger.exception("SponsorBlock prewarm failed for room %s", room_id)
         try:
-            self.prewarm(video, segment.end)
-        except Exception:  # Never let speculation break a skip.
-            logger.exception("SponsorBlock prewarm failed for room %s", room_id)
+            await self._manager.broadcast({"type": "skip_upcoming", "payload": {
+                "video_url": video.get("original_url"),
+                "at": segment.start,
+                "to": segment.end,
+            }}, room_id)
+        except Exception:
+            logger.exception("Announcing a skip failed for room %s", room_id)
 
     async def _skip(self, room_id: str, segment: Segment) -> None:
         logger.info("SponsorBlock: room %s skips %s %.1fs-%.1fs",

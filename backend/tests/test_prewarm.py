@@ -354,6 +354,21 @@ class TestTheSkipWarmsItsDestination:
         assert clock.slept[0] < 100.0
         assert sum(clock.slept) == pytest.approx(100.0)
 
+    async def test_every_player_is_told_where_the_room_will_land(self):
+        """A warm server cache still leaves each viewer a round trip to the
+        server after the jump; announced in advance, the players fetch the
+        destination into their own buffers first."""
+        skipper, manager, state, clock = self._armed_room()
+        skipper.prewarm = lambda video, seconds: None
+
+        skipper.rearm("room")
+        await skipper.wait_idle()
+
+        kinds = [m["type"] for m in manager.broadcasts]
+        assert kinds.index("skip_upcoming") < kinds.index("seek")
+        announced = next(m["payload"] for m in manager.broadcasts if m["type"] == "skip_upcoming")
+        assert announced == {"video_url": state["video_data"]["original_url"], "at": 100.0, "to": 130.0}
+
     async def test_a_room_that_moved_on_is_not_warmed(self):
         """Paused, seeked away, or given another video during the wait: the
         skip that was scheduled no longer describes the room, and fetching
@@ -372,7 +387,7 @@ class TestTheSkipWarmsItsDestination:
         await skipper.wait_idle()
 
         assert warmed == []
-        assert not [m for m in manager.broadcasts if m["type"] == "seek"]
+        assert not [m for m in manager.broadcasts if m["type"] in ("seek", "skip_upcoming")]
 
     async def test_a_failing_warm_never_costs_the_room_its_skip(self):
         skipper, manager, _state, _clock = self._armed_room()

@@ -235,7 +235,8 @@ def _duration_attr(seconds: float) -> str:
     return f"PT{max(float(seconds), 0.0):.3f}S"
 
 
-def _proxied(url: str, proxy_base: str) -> str:
+def proxied_url(url: str, proxy_base: str) -> str:
+    """How a manifest addresses a stream through the proxy (also used to match its requests)."""
     return f"{proxy_base}{quote(url, safe='')}"
 
 
@@ -328,7 +329,7 @@ def build_mpd(
             if rep.get("fps"):
                 attrs.append(f'frameRate="{int(round(float(rep["fps"])))}"')
             lines.append(f'      <Representation {" ".join(attrs)}>')
-            lines.append(f'        <BaseURL>{escape(_proxied(rep["url"], proxy_base))}</BaseURL>')
+            lines.append(f'        <BaseURL>{escape(proxied_url(rep["url"], proxy_base))}</BaseURL>')
             lines.append(f'        <SegmentBase indexRange="{index.index_range}" indexRangeExact="true">')
             lines.append(f'          <Initialization range="{index.init_range}"/>')
             lines.append('        </SegmentBase>')
@@ -371,7 +372,7 @@ def build_mpd(
                 'schemeIdUri="urn:mpeg:dash:23003:3:audio_channel_configuration:2011" '
                 f'value="{int(rep.get("audio_channels") or 2)}"/>'
             )
-            lines.append(f'        <BaseURL>{escape(_proxied(rep["url"], proxy_base))}</BaseURL>')
+            lines.append(f'        <BaseURL>{escape(proxied_url(rep["url"], proxy_base))}</BaseURL>')
             lines.append(f'        <SegmentBase indexRange="{index.index_range}" indexRangeExact="true">')
             lines.append(f'          <Initialization range="{index.init_range}"/>')
             lines.append('        </SegmentBase>')
