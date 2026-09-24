@@ -65,6 +65,8 @@ interface CustomPlayerProps {
     onStartupMark?: (mark: StartupMark) => void;
     /** SponsorBlock segments of this video, marked on the seek bar. */
     sponsorSegments?: SponsorSegment[];
+    /** A jump the room is about to make; its destination is fetched ahead. */
+    upcomingJump?: { seconds: number; key: string } | null;
     /** Preview thumbnails for the seek bar, when the site provides them. */
     storyboard?: Storyboard;
     /** Chapters of the video, marked on the seek bar and named beside the time. */
@@ -202,6 +204,7 @@ export function CustomPlayer({
     onPrewarm,
     onStartupMark,
     sponsorSegments,
+    upcomingJump,
     storyboard,
     chapters,
     shareSource,
@@ -352,6 +355,7 @@ export function CustomPlayer({
             onPrewarm?.({ originalUrl: plan.originalUrl, seconds: plan.startTime, height: plan.height, codec: plan.codec });
         },
         onManifestReady: (preloaded: boolean) => onStartupMark?.({ kind: 'manifest', preloaded, originalUrl }),
+        upcomingJump,
     });
 
     // Derive loading/qualities/currentQuality from the active engine

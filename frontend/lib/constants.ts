@@ -386,6 +386,17 @@ export const SHARE_PUBLISHER_BACKLOG_BYTES = 512 * 1024;
 export const PREWARM_NEXT_VIDEO_SECONDS = 45;
 
 /**
+ * The in-page cache of an announced jump's destination (lib/jump-cache.ts):
+ * the most it may hold, and how long an entry is kept waiting for the jump.
+ * A destination is two subsegments of video plus audio — a few megabytes at
+ * 1080p, tens at 4K — announced about twenty seconds before the skip.
+ */
+export const JUMP_CACHE_MAX_BYTES = 96 * 1024 * 1024;
+export const JUMP_CACHE_TTL_MS = 120_000;
+/** A destination already this far inside the buffer needs no fetching. */
+export const JUMP_BUFFERED_MARGIN_SECONDS = 2;
+
+/**
  * How rarely a player repeats an unchanged quality report to the server, in
  * milliseconds. A change — a different rung, cap or mode — is reported as
  * it happens; this only keeps a steady picture from talking every second.

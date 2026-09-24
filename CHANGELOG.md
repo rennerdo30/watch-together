@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### A SponsorBlock skip plays from the page
+
+- The server already warmed the far side of a scheduled skip in its own
+  cache, but every viewer still had to fetch it from the server after the
+  jump — a round trip from Japan to Germany, which was most of the stall.
+  The skipper now also tells the room where it is about to land
+  (`skip_upcoming`, about 20 s ahead). Each player whose buffer does not
+  already reach that position asks `/api/segment-spans` for the exact
+  requests it will make there (the manifest's URIs and byte ranges on the
+  rung and codec it is playing), fetches them into a bounded in-page cache
+  (`lib/jump-cache.ts`), and a Shaka networking plugin answers those
+  requests from it when the room jumps. Answers from the cache are marked
+  `fromCache`, so they never inflate the bandwidth estimate.
+
 ### Paste to playing: faster starts, fewer stalls, and measured
 
 A review of the path from adding a URL to its first frame found the warming

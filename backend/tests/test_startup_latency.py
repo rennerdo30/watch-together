@@ -649,3 +649,58 @@ class TestReviewFindings:
             await task
         finally:
             leftover.__exit__(None, None, None)
+
+
+class TestThePlayerCanFetchAJumpsDestination:
+    """`/api/segment-spans`: the exact requests a player makes after a jump."""
+
+    VIDEO_URL = URL
+    AUDIO = URL.replace("itag=137", "itag=140").replace("video%2Fmp4", "audio%2Fmp4")
+
+    def _resolved(self):
+        return {"original_url": "https://youtu.be/latency-spans", "title": "spans", "duration": 6,
+                "available_qualities": [{"video_url": self.VIDEO_URL, "height": 720, "vcodec": "avc1.4d401f"}],
+                "audio_options": [{"audio_url": self.AUDIO}]}
+
+    def test_the_spans_are_what_the_manifest_makes_the_player_request(self, monkeypatch):
+        import main
+        from services.manifest import build_mpd
+        table = parse_segment_table(VIDEO, parse_index(VIDEO))
+        for url in (self.VIDEO_URL, self.AUDIO):
+            monkeypatch.setitem(manifest_service._segment_tables, stream_identity(url), table)
+        resolved = self._resolved()
+
+        async def cached(url):
+            return resolved if url == resolved["original_url"] else None
+
+        monkeypatch.setattr(main, "get_cached_format", cached)
+        with TestClient(main.app) as test_client:
+            body = test_client.get("/api/segment-spans", params={
+                "url": resolved["original_url"], "t": 2.5, "h": 720, "codec": "avc1",
+                "user": "a@example.com"}).json()
+
+        index = parse_index(VIDEO)
+        mpd = build_mpd(6, [{"id": "v", "url": self.VIDEO_URL, "index": index, "height": 720}],
+                        [{"id": "a", "url": self.AUDIO, "index": index}],
+                        "http://testserver/api/proxy?url=")
+        from xml.sax.saxutils import unescape
+        base_urls = {unescape(part.split("</BaseURL>")[0]) for part in mpd.split("<BaseURL>")[1:]}
+        assert {span["uri"] for span in body["spans"]} == base_urls
+        first = table.index_at(2.5)
+        video_spans = [(s["start"], s["end"]) for s in body["spans"] if "itag%3D137" in s["uri"]]
+        assert video_spans == [table.span(first), table.span(first + 1)]
+
+    def test_nothing_is_described_for_an_address_nobody_resolved(self):
+        import main
+        with TestClient(main.app) as test_client:
+            response = test_client.get("/api/segment-spans", params={
+                "url": "http://169.254.169.254/", "t": 3, "user": "a@example.com"})
+        assert response.status_code == 200
+        assert response.json() == {"spans": []}
+
+    def test_an_impossible_position_is_refused(self):
+        import main
+        with TestClient(main.app) as test_client:
+            response = test_client.get("/api/segment-spans", params={
+                "url": "https://youtu.be/x", "t": "inf", "user": "a@example.com"})
+        assert response.status_code == 422
