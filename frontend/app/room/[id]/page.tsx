@@ -23,7 +23,7 @@ import {
 } from '@/lib/shared-browser';
 import { useSharePublisher } from '@/lib/share/useSharePublisher';
 import { useShareViewer } from '@/lib/share/useShareViewer';
-import { ResolveResponse, dashManifestUrl, resolveUrl, getExtensionToken, regenerateExtensionToken, ExtensionToken, getUserSettings, updateUserSettings, getCookies, forgetCookies, extensionDownloadUrl, type CookieStatus, type UserSettings } from '@/lib/api';
+import { ResolveResponse, type QueueEntry, dashManifestUrl, resolveUrl, getExtensionToken, regenerateExtensionToken, ExtensionToken, getUserSettings, updateUserSettings, getCookies, forgetCookies, extensionDownloadUrl, type CookieStatus, type UserSettings } from '@/lib/api';
 import { youtubePlaylistUrl } from '@/lib/playlist-url';
 import { PlaylistPreviewDialog } from '@/components/playlist-preview-dialog';
 import { CustomPlayer, type PrewarmRequest, type StartupMark } from '@/components/custom-player';
@@ -98,7 +98,7 @@ interface RoomPlayer {
 type WsPayload = {
     video_data?: ResolveResponse;
     members?: { email: string }[];
-    queue?: ResolveResponse[];
+    queue?: QueueEntry[];
     roles?: Record<string, string>;
     your_email?: string;
     playing_index?: number;
@@ -138,7 +138,7 @@ export default function RoomPage() {
 
     // UI State
     const [videoData, setVideoData] = useState<ResolveResponse | null>(null);
-    const [queue, setQueue] = useState<ResolveResponse[]>([]);
+    const [queue, setQueue] = useState<QueueEntry[]>([]);
     const [playingIndex, setPlayingIndex] = useState<number>(-1);
     const [inputUrl, setInputUrl] = useState('');
     const [playlistDialogUrl, setPlaylistDialogUrl] = useState<string | null>(null);
@@ -1081,7 +1081,7 @@ export default function RoomPage() {
     // Which entry the room will play next, mirroring the server's own
     // choice: a pinned video stays in the queue and is passed over, and the
     // entry after the last one is the first.
-    const upcomingEntry = (): ResolveResponse | undefined => {
+    const upcomingEntry = (): QueueEntry | undefined => {
         if (queue.length === 0) return undefined;
         if (playingIndex >= 0 && playingIndex < queue.length && queue[playingIndex].pinned) {
             return queue[playingIndex + 1];

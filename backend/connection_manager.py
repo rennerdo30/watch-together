@@ -19,6 +19,36 @@ from services import playback_quality
 from services.share_relay import relay as share_relay
 
 
+# What a member's browser is sent of each queue entry: what a queue row
+# draws, and what the player plans an opening rung from when it preloads or
+# warms the entry. The rest of a resolve — signed URLs for every rung and
+# audio track, storyboard sheets, chapters — is ~50 KB per entry and only
+# ever read from `set_video`, which carries the whole entry. Sending it with
+# the queue made every queue change a megabytes-large message per member
+# (2.3 MB for 50 entries), and the advance's `queue_update` is what the
+# `set_video` behind it waits on.
+QUEUE_VIEW_FIELDS = (
+    "original_url", "title", "thumbnail", "duration", "is_live", "stream_type",
+    "pending", "pinned", "progress", "added_by",
+)
+LADDER_VIEW_FIELDS = ("height", "width", "vcodec", "tbr")
+
+
+def queue_view(queue: list) -> List[dict]:
+    """The queue as members are sent it; see QUEUE_VIEW_FIELDS."""
+    view = []
+    for entry in queue:
+        row = {key: entry[key] for key in QUEUE_VIEW_FIELDS if key in entry}
+        ladder = entry.get("available_qualities")
+        if isinstance(ladder, list):
+            row["available_qualities"] = [
+                {key: rung[key] for key in LADDER_VIEW_FIELDS if key in rung}
+                for rung in ladder if isinstance(rung, dict)
+            ]
+        view.append(row)
+    return view
+
+
 class ConnectionManager:
     ACTIVITY_LOG_LIMIT = 200
 
@@ -502,6 +532,7 @@ class ConnectionManager:
 
         # Send adjusted current room state to the new user
         sync_payload = self.get_sync_payload(room_id)
+        sync_payload["queue"] = queue_view(sync_payload.get("queue", []))
         sync_payload["your_email"] = user_email
         sync_payload["your_connection_id"] = getattr(websocket, "connection_id", "")
         await websocket.send_json({
@@ -643,11 +674,13 @@ class ConnectionManager:
         if room_id not in self.active_connections:
             return
 
+        # Serialised once for the room, not once per member.
+        text = json.dumps(message, separators=(",", ":"), ensure_ascii=False)
         dead_connections = []
         for connection in self.active_connections[room_id]:
             if connection != exclude:
                 try:
-                    await connection.send_json(message)
+                    await connection.send_text(text)
                 except Exception as e:
                     logger.warning(f"Failed to send to connection in room {room_id}: {e}")
                     dead_connections.append(connection)
@@ -675,6 +708,16 @@ class ConnectionManager:
                             pass  # Don't recursively clean, we already identified dead ones
                 except Exception as e:
                     logger.warning(f"Error sending members update: {e}")
+
+    async def broadcast_queue(self, room_id: str) -> None:
+        """Tell the room its queue and which entry is playing."""
+        state = self.room_states.get(room_id)
+        if state is None:
+            return
+        await self.broadcast({"type": "queue_update", "payload": {
+            "queue": queue_view(state.get("queue", [])),
+            "playing_index": state.get("playing_index", -1),
+        }}, room_id)
 
     async def update_state(self, room_id: str, updates: dict):
         """Update room state with proper locking and sync time management."""
