@@ -88,7 +88,7 @@ test('queueing shows the link at once, then the video it resolved to', async ({ 
   await input.press('Enter');
   const media = page.locator('video[data-stream-type="mse"]');
   await expect(media).toHaveCount(1, { timeout: 15_000 });
-  await expect(page.getByText('Resolving...')).toHaveCount(0, { timeout: 15_000 });
+  await expect(page.getByText('Loading video…')).toHaveCount(0, { timeout: 15_000 });
   // Paused: the six-second fixture would otherwise end, and the room move
   // on, while the queue add is being watched.
   await expect.poll(() => media.evaluate((v: HTMLVideoElement) => v.readyState >= 2), { timeout: 20_000 }).toBe(true);
@@ -110,7 +110,7 @@ test('queueing shows the link at once, then the video it resolved to', async ({ 
   await expect(pending.getByRole('status')).toHaveText('Resolving…');
   await expect(pending.getByRole('button', { name: /^Pin / })).toHaveCount(0);
   await expect(pending.getByRole('button', { name: `Remove ${QUEUED} from the queue` })).toBeVisible();
-  await expect(page.getByText('Resolving...')).toHaveCount(0);
+  await expect(page.getByText('Loading video…')).toHaveCount(0);
 
   // Replaced in place by the resolved entry.
   await expect(pending).toHaveCount(0, { timeout: 10_000 });

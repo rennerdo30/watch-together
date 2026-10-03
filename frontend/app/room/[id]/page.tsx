@@ -5,10 +5,11 @@ import { useParams, useRouter } from 'next/navigation';
 import {
     Loader2, Users, Link as LinkIcon,
     Plus, SkipForward,
-    Play, ListVideo, Settings, X, Palette, ShieldCheck, Home, Bug,
+    Play, ListVideo, Settings, X, Palette, ShieldCheck, Bug,
     Crown, Shield, User as UserIcon, ChevronDown, Lock, Copy, Check, Infinity, Sun, ExternalLink, Scissors, Puzzle,
     MonitorUp, MonitorStop, Globe, Type, Download
 } from 'lucide-react';
+import { BrandMark } from '@/components/brand-mark';
 import { prewarmPosition, prewarmVideo } from '@/lib/prewarm';
 import { StartupTimer, type PlaybackEngine } from '@/lib/playback-timing';
 import { resumePosition } from '@/lib/playback';
@@ -215,7 +216,7 @@ export default function RoomPage() {
 
     // Custom theme state
     const [customBgColor, setCustomBgColor] = useState('#09090b');
-    const [customAccentColor, setCustomAccentColor] = useState('#8b5cf6');
+    const [customAccentColor, setCustomAccentColor] = useState('#d93a3a');
     const [showCustomTheme, setShowCustomTheme] = useState(false);
 
     // DnD Sensors - require a small movement before dragging to allow clicks
@@ -1221,9 +1222,9 @@ export default function RoomPage() {
                         onClick={() => router.push('/')}
                         aria-label="Back to all rooms"
                         title="Back to all rooms"
-                        className="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 flex items-center justify-center transition-colors border border-white/5 shrink-0"
+                        className="w-8 h-8 rounded-lg flex items-center justify-center transition-opacity hover:opacity-80 shrink-0"
                     >
-                        <Home aria-hidden="true" className="w-4 h-4 text-neutral-400" />
+                        <BrandMark className="w-8 h-8" />
                     </button>
                     <div className="flex flex-col pl-1 min-w-0">
                         <h1 className="font-bold text-white leading-none text-sm truncate">{APP_NAME}</h1>
@@ -1306,12 +1307,28 @@ export default function RoomPage() {
                 <div className="flex-1 flex flex-col p-3 min-w-0 min-h-0 overflow-hidden gap-2.5">
                     {/* Video Player */}
                     <div className="on-dark flex-1 min-h-0 relative rounded-xl overflow-hidden bg-black border border-neutral-800 shadow-2xl">
-                        {isResolving && (
-                            <div className="absolute inset-0 z-10 bg-black/70 flex flex-col items-center justify-center gap-2 animate-in fade-in duration-300">
-                                <Loader2 className="w-5 h-5 text-white animate-spin opacity-80" />
-                                <span className="ui-label text-neutral-200">Resolving...</span>
+                        {/* Loading the next video never hides the one playing: a small
+                            pill in the corner while it plays on, a centred spinner only
+                            when there is nothing to watch meanwhile. */}
+                        {isResolving && (videoData ? (
+                            <div
+                                role="status"
+                                data-loading-video="corner"
+                                className="pointer-events-none absolute top-3 right-3 z-20 flex items-center gap-2 rounded-full bg-black/70 px-3 py-1.5 text-[11px] text-white backdrop-blur animate-in fade-in duration-300"
+                            >
+                                <Loader2 aria-hidden="true" className="h-3 w-3 animate-spin" />
+                                <span>Loading video…</span>
                             </div>
-                        )}
+                        ) : (
+                            <div
+                                role="status"
+                                data-loading-video="centre"
+                                className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 animate-in fade-in duration-300"
+                            >
+                                <Loader2 aria-hidden="true" className="w-5 h-5 text-white animate-spin opacity-80" />
+                                <span className="ui-label text-neutral-200">Loading video…</span>
+                            </div>
+                        ))}
                         {sharedBrowser && (
                             <div className="absolute top-3 left-3 z-20 flex items-center gap-2 rounded-full bg-black/70 px-3 py-1.5 text-[11px] text-white backdrop-blur">
                                 <Globe aria-hidden="true" className="h-3 w-3" />
