@@ -25,7 +25,8 @@ export const metadata: Metadata = {
   description: "Synchronized video watching with friends",
   icons: {
     icon: "/favicon.svg",
-    apple: "/logo.svg",
+    // iOS takes a PNG for the home screen; it does not use an SVG.
+    apple: "/apple-touch-icon.png",
   },
 };
 
