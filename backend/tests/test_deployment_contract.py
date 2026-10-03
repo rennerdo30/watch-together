@@ -1047,3 +1047,26 @@ class TestDeployTargetsStayPrivate:
         import subprocess
         ignored = subprocess.run(["git", "check-ignore", "-q", "deploy/target.env.example"], cwd=REPO_ROOT)
         assert ignored.returncode == 1
+
+
+class TestDeploysDoNotFillTheHost:
+    """The host's disk is small and shared; a full one takes SQLite down
+    ("database or disk is full" on every room save and extension call)."""
+
+    SCRIPT = REPO_ROOT / "deploy" / "deploy.sh"
+
+    def test_each_deploy_removes_what_the_last_build_left_behind(self):
+        """Every build left the previous images dangling: 3.3 GB of them, plus
+        1.1 GB of build cache, filled a 19 GB host within a few deploys."""
+        text = self.SCRIPT.read_text(encoding="utf-8")
+        build = text.index("${COMPOSE} up -d --build\"")
+        prune = text.index("docker image prune -f >/dev/null", build)
+        assert "docker builder prune -f --filter until=" in text[prune:prune + 200]
+        # Never the volumes (other projects' databases share this host), never
+        # images a container still uses.
+        for unsafe in ("--volumes", "system prune -a", "image prune -a", "image prune --all"):
+            assert unsafe not in text
+
+    def test_a_build_does_not_start_on_a_nearly_full_disk(self):
+        text = self.SCRIPT.read_text(encoding="utf-8")
+        assert text.index("DEPLOY_MIN_FREE_MB * 1024") < text.index("${COMPOSE} up -d --build\"")
