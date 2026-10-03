@@ -1029,3 +1029,21 @@ class TestStartupLatencyContracts:
         probe = manifest.split("async def read_prefix(")[1].split("\n    data = await read_prefix")[0]
         assert "rewrite_range(url, 0, length - 1)" in probe
         assert 'request_headers["Range"]' in probe.split("if not fast:")[1].split("try:")[0]
+
+
+class TestDeployTargetsStayPrivate:
+    """The repository is public; a deploy target names a host and a login."""
+
+    @pytest.mark.parametrize("name", ["target.env", "target.teamspeak.env", "target.old-host-20260101.env"])
+    def test_every_target_file_is_ignored(self, name):
+        """Only target.env used to be ignored: a second target file written
+        beside it (a migration, a spare host) was one `git add -A` from
+        publishing a server address."""
+        import subprocess
+        ignored = subprocess.run(["git", "check-ignore", "-q", f"deploy/{name}"], cwd=REPO_ROOT)
+        assert ignored.returncode == 0, f"deploy/{name} would be committed"
+
+    def test_the_example_is_still_tracked(self):
+        import subprocess
+        ignored = subprocess.run(["git", "check-ignore", "-q", "deploy/target.env.example"], cwd=REPO_ROOT)
+        assert ignored.returncode == 1
