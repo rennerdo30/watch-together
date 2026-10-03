@@ -18,7 +18,10 @@ MAX_CACHE_SIZE_BYTES = int(MAX_CACHE_SIZE_GB * 1024 * 1024 * 1024)
 # so an entry stays valid for as long as it is worth keeping. The size cap
 # above is what actually bounds the cache; this only expires cold content.
 CACHE_TTL_SECONDS = 21600  # 6 hours
-MIN_DISK_FREE_BYTES = 500 * 1024 * 1024  # Keep at least 500MB free
+# Free space the segment cache never eats into. The host disk is shared (and
+# small); with only 500 MB left over, the cache filled it to the point where
+# SQLite failed every room save with "database or disk is full".
+MIN_DISK_FREE_BYTES = int(float(os.environ.get("MIN_DISK_FREE_GB", "2")) * 1024 * 1024 * 1024)
 MAX_CACHEABLE_FILE_BYTES = 50 * 1024 * 1024  # Don't cache files larger than 50MB
 # A partial download left by a crash or a client that vanished mid-body. It
 # can never be completed, so it is removed once no writer could still own it.
