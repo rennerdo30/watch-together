@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Twitch streams wait out a late playlist instead of looping
+
+- When a Twitch playlist stopped advancing for longer than the 6 s cushion
+  (a streamer's upload hiccup), the playhead reached the end of the media a
+  few milliseconds past the playlist's edge. hls.js read that as "outside the
+  window" and seeked back 6 s, so the viewer saw the same six seconds again
+  and again. The stream controller now leaves a playhead waiting at the edge
+  alone (`lib/live-edge.ts`), and a stall at the edge waits 30 s, not 12 s,
+  before the stream is reloaded.
+- The three recovery retries were never given back, so three hiccups over a
+  long stream ended in "Playback failed after multiple retries" on the
+  fourth. They refill after 30 s of clean playback (`lib/retry-budget.ts`).
+- The room heartbeat no longer resets a live stream to 1x every five seconds,
+  which undid hls.js's catch-up towards its latency target.
+
 ### Queue to playing: smaller room messages, no re-extraction of older entries
 
 - **The queue is sent without its streams.** Every queue change sent each

@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { LIVE_SYNC_MIN_SECONDS } from '../lib/constants';
+import { LIVE_EDGE_STALL_RELOAD_MS, LIVE_SYNC_MIN_SECONDS } from '../lib/constants';
 import { liveSyncTargetSeconds } from '../lib/live-latency';
 
 /** The fragmented-MP4 fixture, split into its init segment and its media. */
@@ -114,12 +114,15 @@ test('a rejected live token requests an uncached source and starts the replaceme
 
 
 test('a live playlist that stops advancing is recovered after playback stalls', async ({ page }) => {
-  test.setTimeout(35_000);
+  test.setTimeout(60_000);
   const { media, requests } = await openHls(page, { stalled: true });
   await expect.poll(() => media.evaluate((v: HTMLVideoElement) => v.currentTime)).toBeGreaterThan(0.2);
   // This server keeps returning the same six seconds of live media with 200.
-  // There is no fatal HTTP error to trigger ordinary network recovery.
-  await expect.poll(requests, { timeout: 25_000 }).toBeGreaterThan(1);
+  // There is no fatal HTTP error to trigger ordinary network recovery. The
+  // playhead stalls at the edge of a playlist that may only be late, so the
+  // reload waits LIVE_EDGE_STALL_RELOAD_MS rather than the ordinary 12s
+  // (see live-edge-wait.spec.ts).
+  await expect.poll(requests, { timeout: LIVE_EDGE_STALL_RELOAD_MS + 15_000 }).toBeGreaterThan(1);
   await expect.poll(() => media.evaluate((v: HTMLVideoElement) => v.readyState)).toBeGreaterThan(2);
   await expect(page.getByRole('alert').filter({ hasText: 'Playback Issue' })).toHaveCount(0);
 });

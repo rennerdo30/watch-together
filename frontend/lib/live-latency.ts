@@ -7,6 +7,7 @@
  */
 
 import {
+    LIVE_SYNC_MAX_PLAYBACK_RATE,
     LIVE_SYNC_MAX_WINDOW_FRACTION,
     LIVE_SYNC_MIN_SECONDS,
     LIVE_SYNC_SEGMENT_COUNT,
@@ -60,4 +61,13 @@ export function liveSyncTargetSeconds({
     const window = positiveOrNull(windowDuration);
     if (window === null) return fromSegments;
     return Math.min(fromSegments, window * LIVE_SYNC_MAX_WINDOW_FRACTION);
+}
+
+/**
+ * True for a playback rate hls.js may have chosen itself to trim latency back
+ * to its target: 1x up to `LIVE_SYNC_MAX_PLAYBACK_RATE`. Anything else on a
+ * live stream is left over from position sync and is the room's to undo.
+ */
+export function isLiveCatchUpRate(rate: number): boolean {
+    return rate >= 1 && rate <= LIVE_SYNC_MAX_PLAYBACK_RATE;
 }

@@ -56,6 +56,7 @@ thresholds: `backend/services/playback_quality.py`.
 | Commit | What | Why it mattered |
 | --- | --- | --- |
 | _pending_ | Paste → playing overhaul: exact-subsegment warming, in-flight join, opening rung capped before load, next entry preloaded in the browser, `/api/prewarm`, URL-only queueing, one resolve path, DNS cache, startup timing telemetry (`--startup`) | The warms fetched bytes no request matched and the top rung nobody played; fast viewers opened on 4K; queueing waited on yt-dlp; nothing measured any of it. See *Performance: paste to playing* below. |
+| _pending_ | Live playhead waits at the edge of a late playlist (`frontend/lib/live-edge.ts`, a `streamController` override), edge stalls reload after 30s not 12s, recovery retries refill after 30s of clean playback (`lib/retry-budget.ts`), heartbeat leaves hls.js's live catch-up rate alone | Twitch streams looped: a playlist late by more than the 6s cushion stopped the playhead a hair past the edge, hls.js sent it back 6s, and it replayed the same six seconds; retries never refilled, so a long stream ended in "Playback failed". See *Live HLS latency* below. |
 | _pending_ | Live HLS latency derived from the playlist (`frontend/lib/live-latency.ts`) instead of counting declared target durations; catch-up by playback rate; hls.js interstitials off | A Twitch stream sat 24s behind the edge of a 30s window and stalled whenever a playlist refresh was late. See *Live HLS latency* below. |
 | `3c53078` | Per-viewer telemetry in the backend log (one INFO line per change, with a verdict), `host-status.sh --quality`, and a bounded history the admin panel shows | The reports existed but only a browser signed in to Access could read them, and only while the viewer was connected — from the host every admin call is a 401, by design. See *Reading per-viewer telemetry from the host* above. |
 | `c5b7a16` | Shared browser: a neko container in the room's player, opened and closed over the room socket, sessions minted server-side | The first thing the tunnel cannot carry. Media is WebRTC, the origin publishes nothing, so it is opt-in and reports *why* it is unavailable rather than offering a button — see *Shared browser* below. |
@@ -170,6 +171,18 @@ Three things are worth knowing before touching this again:
   hls.js's latency controller returns early when it is off, so the flag stays
   on for live even though neither Twitch nor YouTube advertises LL-HLS parts
   or blocking reloads. With parts absent, that is all the flag does here.
+- **A playhead at the edge is early, not lost.** When the playlist is late
+  the playhead stops at the end of the media, which lands a few milliseconds
+  past the playlist's declared edge. hls.js's `synchronizeToLiveEdge` reads
+  that as outside the window and seeks back to the sync position — a replay
+  loop for as long as the playlist stays late. `lib/live-edge.ts` overrides
+  that one (private) method through the `streamController` config option.
+  `e2e/live-edge-wait.spec.ts` runs hls.js's own method against a playhead
+  16 ms past the edge (it seeks back; the override does not) and fails if an
+  hls.js upgrade renames it; a browser given such an hls.js anyway keeps the
+  stock controller and logs a warning. The same spec freezes a Twitch-shaped
+  playlist and fails on any backward seek or reload, and drives four spaced
+  fatal playlist errors that must not end in "Playback failed".
 
 The e2e proof is in `frontend/e2e/hls-auto-quality.spec.ts`: the arithmetic
 is pinned as a pure function, and two live fixtures (Twitch-shaped and
