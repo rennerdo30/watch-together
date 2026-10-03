@@ -4,6 +4,7 @@ limits under concurrent bursts, stale-room and lock cleanup, and the
 sync payload contract that the heartbeat relies on.
 """
 import asyncio
+import json
 import time
 import pytest
 import sys
@@ -32,6 +33,9 @@ class FakeWebSocket:
 
     async def send_json(self, message):
         self.sent.append(message)
+
+    async def send_text(self, text):
+        self.sent.append(json.loads(text))
 
 
 @pytest.fixture

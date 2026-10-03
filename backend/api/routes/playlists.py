@@ -85,7 +85,7 @@ async def confirm_playlist(room_id: str, body: ConfirmRequest, request: Request)
         selected_set = set(selected)
         urls = [entry["url"] for entry in preview.entries if entry["id"] in selected_set]
         try:
-            added, skipped, queue, playing_index = await manager.queue_playlist_urls(
+            added, skipped, _queue, _index = await manager.queue_playlist_urls(
                 room_id, user, urls)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Room not found") from exc
@@ -95,8 +95,7 @@ async def confirm_playlist(room_id: str, body: ConfirmRequest, request: Request)
         preview.selected_ids = selected
         preview.result = result
         if added:
-            await manager.broadcast({"type": "queue_update", "payload": {
-                "queue": queue, "playing_index": playing_index}}, room_id)
+            await manager.broadcast_queue(room_id)
             import main
             main._run_detached(_resolve_batch(room_id, user, added,
                                               request.headers.get("user-agent")))

@@ -76,6 +76,26 @@ export interface ResolveResponse {
     audio_options?: AudioOption[];
 }
 
+/** A rung of a queued entry's ladder: what an opening rung is planned from. */
+export interface QueueRung {
+    height: number;
+    width?: number;
+    vcodec?: string;
+    tbr?: number;
+}
+
+/**
+ * A queue row as the server sends it (`queue_update`, `sync`): what the row
+ * draws and what the player plans an opening rung from. Never the stream
+ * URLs, storyboard or chapters — those are ~50 KB per entry, and the whole
+ * entry arrives with `set_video` when it plays.
+ */
+export interface QueueEntry extends Pick<ResolveResponse,
+    'original_url' | 'title' | 'thumbnail' | 'duration' | 'is_live' | 'stream_type'
+    | 'pending' | 'pinned' | 'progress' | 'added_by'> {
+    available_qualities?: QueueRung[];
+}
+
 export interface PlaylistPreviewEntry {
     id: string;
     index: number;
