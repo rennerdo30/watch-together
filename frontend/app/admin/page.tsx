@@ -100,7 +100,7 @@ function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string
       </span>
       <span className="min-w-0">
         <span className="block text-lg font-semibold leading-tight">{value}</span>
-        <span className="block truncate text-xs text-neutral-400">{label}</span>
+        <span className="block text-xs leading-snug text-neutral-400">{label}</span>
       </span>
     </div>
   );

@@ -166,6 +166,15 @@ html[data-theme="light"] {
   --color-rose-400: #b52b2b;
   --color-blue-400: #1e5fd0;
   --color-purple-400: #5b5fd0;
+
+  /* The pale steps are only ever used as text on a dark tinted panel
+     (warnings, errors, notices). Left alone they are near-white on a light
+     page and cannot be read, so they take the same dark inks as above. */
+  --color-amber-100: #7a4210;
+  --color-amber-200: #7a4210;
+  --color-amber-300: #8f4f17;
+  --color-red-300: #b52b2b;
+  --color-emerald-300: #0f766e;
 }
 
 /* Subtrees that stay dark in every colour scheme. */
@@ -208,6 +217,12 @@ html[data-theme="light"] {
   --color-rose-400: #e4605f;
   --color-blue-400: #6b9df5;
   --color-purple-400: #8f92e8;
+
+  --color-amber-100: #fbecc6;
+  --color-amber-200: #f6d98a;
+  --color-amber-300: #ebc062;
+  --color-red-300: #f09a99;
+  --color-emerald-300: #7fd9c8;
 }
 
 /* The colour themes in `lib/themes.ts` pin an explicit dark background. In the
