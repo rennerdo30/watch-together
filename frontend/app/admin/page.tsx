@@ -13,7 +13,6 @@ import {
   RefreshCw,
   ShieldAlert,
   Trash2,
-  Tv,
   Users,
   X,
 } from 'lucide-react';
@@ -30,6 +29,7 @@ import {
 } from '@/lib/api';
 import { APP_NAME } from '@/lib/constants';
 import { ColorModeToggle } from '@/components/color-mode-toggle';
+import { BrandMark } from '@/components/brand-mark';
 
 const REFRESH_INTERVAL_MS = 10_000;
 const SEGMENT_ROWS_SHOWN = 10;
@@ -247,12 +247,7 @@ export default function AdminPage() {
     <div className="app-shell flex min-h-dvh flex-col bg-neutral-950 text-white">
       <header className="flex h-16 shrink-0 items-center justify-between gap-4 border-b border-white/10 px-4 sm:px-6">
         <div className="flex items-center gap-3">
-          <span
-            aria-hidden="true"
-            className="flex h-9 w-9 items-center justify-center rounded-xl bg-[color:var(--accent-primary)]"
-          >
-            <Tv className="icon-on-accent h-5 w-5" />
-          </span>
+          <BrandMark className="h-9 w-9 shrink-0" />
           <h1 className="text-lg font-semibold">
             {APP_NAME} <span className="text-neutral-400">Admin</span>
           </h1>

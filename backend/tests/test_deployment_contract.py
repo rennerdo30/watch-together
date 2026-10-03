@@ -1115,9 +1115,10 @@ class TestOneBrandMark:
                 assert purple not in text, f"{path} still uses {purple}"
 
     def test_the_headers_show_the_mark(self):
-        for page in ("app/page.tsx", "app/room/[id]/page.tsx"):
+        for page in ("app/page.tsx", "app/room/[id]/page.tsx", "app/admin/page.tsx"):
             text = (self.FRONTEND / page).read_text(encoding="utf-8")
             assert "<BrandMark" in text, page
+            assert "<Tv " not in text, f"{page} still shows the old TV icon"
 
     def test_raster_icons_are_real_images_of_the_right_size(self):
         import struct
