@@ -1071,6 +1071,19 @@ export default function RoomPage() {
     useEffect(() => {
         if (sidebarTab === 'chapters' && !hasChapters) setSidebarTab('queue');
     }, [sidebarTab, hasChapters]);
+    // A live stream's chat is part of watching it, so it comes to the front
+    // when a live video starts — once per stream: a member who switches back
+    // to the queue is not pulled away again by every sync.
+    // Remembered per stream rather than keyed on the video state alone: a
+    // live source is re-resolved now and then, and the state passing through
+    // a refresh must not count as a new stream starting.
+    const liveStreamKey = videoData?.is_live ? videoData.original_url : null;
+    const chatShownForRef = useRef<string | null>(null);
+    useEffect(() => {
+        if (!liveStreamKey || chatShownForRef.current === liveStreamKey) return;
+        chatShownForRef.current = liveStreamKey;
+        setSidebarTab('chat');
+    }, [liveStreamKey]);
 
     const getFinalVideoUrl = () => {
         if (!videoData) return "";

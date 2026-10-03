@@ -41,10 +41,10 @@ async function play(page: Page, url: string) {
   await expect(page.locator('header').getByRole('link', { name: /Open Adaptive fixture/ })).toHaveAttribute('href', url);
 }
 
-test('live chat loads on demand, follows the stream and unloads when closed', async ({ page }, testInfo) => {
+test('live chat comes to the front on a stream, follows it and unloads when closed', async ({ page }, testInfo) => {
   await openStream(page, 'https://twitch.tv/zarbex');
-  await expect(page.locator('iframe')).toHaveCount(0);
-  await page.getByRole('tab', { name: 'Live chat' }).click();
+  // A live stream opens on its chat; nobody has to go looking for it.
+  await expect(page.getByRole('tab', { name: 'Live chat' })).toHaveAttribute('aria-selected', 'true');
   const frame = page.getByTitle('Twitch live chat', { exact: true });
   await expect(frame).toHaveAttribute('src', 'https://www.twitch.tv/embed/zarbex/chat?parent=localhost&darkpopout');
   await expect(page.getByText('Chat updates live and may run ahead of the video.')).toBeVisible();
@@ -56,6 +56,10 @@ test('live chat loads on demand, follows the stream and unloads when closed', as
   await expect(frame).toHaveAttribute('src', /embed\/another_channel\/chat/);
   await page.getByRole('tab', { name: /Queue/ }).click();
   await expect(page.locator('iframe')).toHaveCount(0);
+  // Chosen by the member: the same stream's syncs do not pull them back. (The
+  // fixture is six seconds long; waiting past its end would be a new stream.)
+  await page.waitForTimeout(1_500);
+  await expect(page.getByRole('tab', { name: /Queue/ })).toHaveAttribute('aria-selected', 'true');
 });
 
 test('unknown providers accept custom chat without leaking it into another stream', async ({ page }, testInfo) => {
