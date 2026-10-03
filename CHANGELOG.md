@@ -6,19 +6,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-### One live session per stream, shared by the whole room
-
-- Every viewer's player fetched a live stream's master playlist itself, and
-  every such fetch made the origin open a separate playback session: its
-  own media playlists and, on Twitch, its own ad schedule. One member sat
-  through "Commercial break in progress" while another watched the stream.
-  The proxy now fetches a live master once per stream (Twitch: per channel,
-  whatever each member's signed resolve looks like) and serves every viewer
-  that copy, so the room watches one session. Media playlists are fetched
-  once per second at most and shared; a playlist that answers 4xx ends the
-  shared session so the next viewer starts a fresh one. Nothing is shared
-  across different cookie identities (`services/live_playlists.py`).
-
 ### Twitch streams wait out a late playlist instead of looping
 
 - When a Twitch playlist stopped advancing for longer than the 6 s cushion

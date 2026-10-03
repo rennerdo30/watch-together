@@ -123,16 +123,6 @@ def empty_cookie_store():
 
 
 @pytest.fixture(autouse=True)
-def no_shared_live_playlists():
-    """A playlist one test fetched must not answer the next test's request."""
-    from services import live_playlists
-
-    live_playlists.forget_all()
-    yield
-    live_playlists.forget_all()
-
-
-@pytest.fixture(autouse=True)
 def no_share_is_left_relaying():
     """A share one test started must not hold a relay slot in the next.
 

@@ -56,7 +56,7 @@ from services.prefetcher import (
     get_or_create_session, notify_segment_for_url,
     prefetch_cleanup_task, prefetch_ahead, shutdown_prefetch,
 )
-from services import inflight, live_playlists
+from services import inflight
 from services.gvs_range import rewrite_range, is_whole_file_grab
 from services.upstream import (
     UnsafeUpstreamError, request_kwargs,
@@ -1210,24 +1210,16 @@ async def proxy_stream(request: Request, url: str):
     try:
         if is_hls_manifest:
             logger.info(f"Proxying HLS manifest for {url[:100]}...")
+            response = await fetch_upstream_body(segment_client, url, outgoing_headers)
+            if response.status_code >= 400:
+                return Response(content=response.text, status_code=response.status_code)
 
-            async def fetch_playlist() -> live_playlists.Playlist:
-                response = await fetch_upstream_body(segment_client, url, outgoing_headers)
-                return live_playlists.Playlist(response.status_code, response.text, url)
-
-            # Every viewer of one live stream is served the same master and
-            # the same media playlists: each master fetch opens a new
-            # upstream session with its own ads.
-            playlist = await live_playlists.fetch_playlist(url, cache_identity, fetch_playlist)
-            if playlist.status_code >= 400:
-                return Response(content=playlist.text, status_code=playlist.status_code)
-
-            rewritten = rewrite_hls_manifest(playlist.text, playlist.source_url, proxy_base)
+            rewritten = rewrite_hls_manifest(response.text, url, proxy_base)
 
             # Initialize prefetch session and parse manifest for segment URLs
             is_audio = is_audio_url(url)
             session = await get_or_create_session(url, is_audio=is_audio, identity=fetch_identity)
-            await session.parse_hls_manifest(playlist.text, playlist.source_url)
+            await session.parse_hls_manifest(response.text, url)
 
             return Response(
                 content=rewritten,
