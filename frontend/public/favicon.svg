@@ -1,13 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Watch Together">
   <defs>
-    <linearGradient id="wtCouch" x1="0" y1="0" x2="1" y2="1">
+    <linearGradient id="wtTile" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#ff7a1a"/>
       <stop offset="1" stop-color="#ffa24c"/>
     </linearGradient>
   </defs>
-  <rect width="64" height="64" rx="15" fill="#08090f"/>
-  <rect x="14" y="11" width="36" height="4" rx="2" fill="#2de2f0"/>
-  <path d="M17 32a6 6 0 0 1 6-6h18a6 6 0 0 1 6 6v6H17Z" fill="url(#wtCouch)"/>
-  <path d="M9 37a5 5 0 0 1 10 0v4h26v-4a5 5 0 0 1 10 0v9a5 5 0 0 1-5 5H14a5 5 0 0 1-5-5Z" fill="url(#wtCouch)"/>
-  <path d="M15 51v4M49 51v4" stroke="#ffa24c" stroke-width="3" stroke-linecap="round"/>
+  <rect width="64" height="64" rx="16" fill="url(#wtTile)"/>
+  <g fill="none" stroke="#1c1207" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 13h20"/>
+    <path d="M17 33v-4a5 5 0 0 1 5-5h20a5 5 0 0 1 5 5v4"/>
+    <path d="M13 47V38a4 4 0 0 1 8 0v3h22v-3a4 4 0 0 1 8 0v9a4 4 0 0 1-4 4H17a4 4 0 0 1-4-4Z"/>
+  </g>
 </svg>
