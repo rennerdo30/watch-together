@@ -359,6 +359,11 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
     const [currentAudioTrack, setCurrentAudioTrack] = useState(-1);
     const [currentQuality, setCurrentQuality] = useState(AUTO_QUALITY);
     const manualHeightRef = useRef<number | null>(null);
+    // The video a manual pick was made on. A pick belongs to the video, not
+    // to one load of it: the same video is loaded again when its signed
+    // links are refreshed, and that used to quietly put the viewer back on
+    // Auto. Only a different video starts without it.
+    const manualPickVideoRef = useRef<string | undefined>(undefined);
     const [stats, setStats] = useState<ShakaStats>(EMPTY_STATS);
     const [isSupported, setIsSupported] = useState(true);
 
@@ -693,14 +698,16 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
         setQualities([]);
         setAudioTracks([]);
         setCurrentAudioTrack(-1);
-        manualHeightRef.current = null;
+        if (manualPickVideoRef.current !== callbackRefs.current.originalUrl) {
+            manualHeightRef.current = null;
+        }
         setCurrentQuality(AUTO_QUALITY);
         setStats((previous) => ({
             ...EMPTY_STATS,
             estimateBps: previous.estimateBps,
             estimateIsMeasured: previous.estimateIsMeasured,
         }));
-        player.configure({ abr: { enabled: true } });
+        player.configure({ abr: { enabled: manualHeightRef.current === null } });
 
         // Read at load time rather than as dependencies: these describe
         // where to *start*, and re-running this effect means reloading the
@@ -753,6 +760,16 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
                 await player.load(manager ?? manifestUrl, startAt > 0 ? startAt : null, DASH_MIME_TYPE);
                 if (cancelled) return;
                 loadingRef.current = false;
+                // The same video loaded again keeps the viewer's pick: that
+                // height, or the tallest rung under it if it is gone.
+                const pickedHeight = manualHeightRef.current;
+                if (pickedHeight !== null) {
+                    const tracks = player.getVideoTracks();
+                    const fitting = tracks.filter((track) => (track.height ?? 0) > 0 && (track.height ?? 0) <= pickedHeight)
+                        .sort((a, b) => (b.height ?? 0) - (a.height ?? 0));
+                    const chosen = fitting[0] ?? tracks.slice().sort((a, b) => (a.height ?? 0) - (b.height ?? 0))[0];
+                    if (chosen) player.selectVideoTrack(chosen, /* clearBuffer */ true);
+                }
                 readTracks(player);
                 applyQualityCapRef.current?.();
                 setIsLoading(false);
@@ -886,6 +903,7 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
         if (!track) return;
 
         manualHeightRef.current = track.height ?? null;
+        manualPickVideoRef.current = callbackRefs.current.originalUrl;
         player.configure({ abr: { enabled: false } });
         player.selectVideoTrack(track, /* clearBuffer */ true);
         setCurrentQuality(index);
