@@ -252,3 +252,49 @@ for (const shape of [TWITCH_LIVE, YOUTUBE_LIVE]) {
     expect(requested[0]).toBe(expectedFirstSegment(shape));
   });
 }
+
+
+test('a manual quality survives the player being rebuilt for a refreshed live link', async ({ page }) => {
+  // A live stream's link is refreshed when the CDN rejects it, and the player
+  // is rebuilt on the new one. It used to come back on Auto: a viewer who had
+  // chosen a lower quality for a slow connection lost it without a word.
+  let expiredNow = false;
+  const { media } = await openHls(page, { stalled: true });
+  await page.route('**/api/resolve**', route => route.fulfill({ json: {
+    original_url: 'https://example.com/hls-auto-quality',
+    stream_url: `http://localhost:3100/hls-fixture/${expiredNow ? 'fresh-master' : 'master'}.m3u8`,
+    stream_type: 'hls', title: 'HLS auto fixture', duration: 6, is_live: true, available_qualities: [],
+  } }));
+  await page.route('**/api/proxy**', route => {
+    const url = new URL(route.request().url()).searchParams.get('url') ?? '';
+    if (expiredNow && url.endsWith('.m3u8') && !url.includes('fresh')) return route.fulfill({ status: 403 });
+    if (url.endsWith('/fresh-master.m3u8')) {
+      // The refreshed link's own session: its variant playlists are new too.
+      return route.fulfill({ contentType: 'application/vnd.apple.mpegurl', body: `#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=200000,RESOLUTION=320x240,CODECS="avc1.42c015"
+http://localhost:3100/hls-fixture/fresh-low.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=450000,RESOLUTION=1440x1080,CODECS="avc1.42c015"
+http://localhost:3100/hls-fixture/fresh-high.m3u8
+` });
+    }
+    return route.fallback();
+  });
+  await expect.poll(() => media.evaluate((v: HTMLVideoElement) => v.readyState)).toBeGreaterThan(2);
+  await page.getByRole('button', { name: 'Quality and sync settings' }).click();
+  await page.getByRole('button', { name: /240p/ }).click();
+  await expect(page.getByRole('button', { name: /240p/ })).toHaveAttribute('aria-pressed', 'true');
+
+  // The link dies: the next playlist refresh is refused and the player is
+  // rebuilt on a freshly resolved one.
+  expiredNow = true;
+  await expect.poll(() => page.evaluate(() =>
+    performance.getEntriesByType('resource').some(e => decodeURIComponent(e.name).includes('fresh-master'))),
+  { timeout: 30_000 }).toBe(true);
+  await expect.poll(() => media.evaluate((v: HTMLVideoElement) => v.readyState), { timeout: 15_000 }).toBeGreaterThan(2);
+
+  if (!(await page.getByRole('button', { name: 'Auto', exact: true }).isVisible())) {
+    await page.getByRole('button', { name: 'Quality and sync settings' }).click();
+  }
+  await expect(page.getByRole('button', { name: /240p/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Auto', exact: true })).toHaveAttribute('aria-pressed', 'false');
+});
