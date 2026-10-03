@@ -1095,8 +1095,8 @@ class TestOneBrandMark:
     FRONTEND = REPO_ROOT / "frontend"
     EXTENSION = REPO_ROOT / "extension"
     # The couch of the mark: its back, and its seat with the arms.
-    ECHO = "M17 32a6 6 0 0 1 6-6h18a6 6 0 0 1 6 6v6H17Z"
-    PLAY = "M9 37a5 5 0 0 1 10 0v4h26v-4a5 5 0 0 1 10 0v9a5 5 0 0 1-5 5H14"
+    ECHO = "M17 33v-4a5 5 0 0 1 5-5h20a5 5 0 0 1 5 5v4"
+    PLAY = "M13 47V38a4 4 0 0 1 8 0v3h22v-3a4 4 0 0 1 8 0v9a4 4 0 0 1-4 4H17"
 
     def test_every_logo_file_is_the_same_mark(self):
         for path in (self.FRONTEND / "public" / "logo.svg", self.FRONTEND / "public" / "favicon.svg",
