@@ -40,7 +40,7 @@ RESET_DATA=0
 DRY_RUN=0
 # Free space a build needs on the host before it starts, and how old build
 # cache must be before a deploy removes it (newer cache keeps rebuilds fast).
-DEPLOY_MIN_FREE_MB="${DEPLOY_MIN_FREE_MB:-2048}"
+DEPLOY_MIN_FREE_MB="${DEPLOY_MIN_FREE_MB:-1024}"
 DEPLOY_BUILD_CACHE_KEEP="${DEPLOY_BUILD_CACHE_KEEP:-168h}"
 
 for arg in "$@"; do
