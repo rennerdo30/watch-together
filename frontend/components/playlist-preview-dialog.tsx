@@ -125,10 +125,10 @@ export function PlaylistPreviewDialog({ roomId, url, onClose, onImported }: Play
                             <div className="flex gap-3">
                                 <button type="button" disabled={submitting || available.length === 0}
                                     onClick={() => setSelected(new Set(available.map((entry) => entry.id)))}
-                                    className="text-sky-300 hover:text-sky-200 disabled:opacity-40">Select all</button>
+                                    className="text-neutral-300 hover:text-white disabled:opacity-40">Select all</button>
                                 <button type="button" disabled={submitting || selectedIds.length === 0}
                                     onClick={() => setSelected(new Set())}
-                                    className="text-sky-300 hover:text-sky-200 disabled:opacity-40">Clear selection</button>
+                                    className="text-neutral-300 hover:text-white disabled:opacity-40">Clear selection</button>
                             </div>
                         </div>
                         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-2 sm:px-5" aria-label="Playlist videos">
@@ -144,7 +144,7 @@ export function PlaylistPreviewDialog({ roomId, url, onClose, onImported }: Play
                                                 else next.add(entry.id);
                                                 return next;
                                             })}
-                                            className="h-4 w-4 shrink-0 accent-sky-400" />
+                                            className="h-4 w-4 shrink-0 accent-[color:var(--accent-primary)]" />
                                         <span className="w-6 shrink-0 text-right text-xs text-neutral-500">{entry.index}</span>
                                         {entry.thumbnail ? (
                                             // eslint-disable-next-line @next/next/no-img-element
@@ -169,7 +169,7 @@ export function PlaylistPreviewDialog({ roomId, url, onClose, onImported }: Play
                         <button type="button" disabled={submitting} onClick={onClose}
                             className="h-9 rounded-lg px-3 text-sm text-neutral-300 hover:bg-white/5 disabled:opacity-40">Cancel</button>
                         <button type="button" disabled={!preview || selectedIds.length === 0 || submitting} onClick={() => void submit()}
-                            className="flex h-9 items-center gap-2 rounded-lg bg-sky-500 px-4 text-sm font-medium text-neutral-950 hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-40">
+                            className="flex h-9 items-center gap-2 rounded-lg bg-[color:var(--accent-primary)] px-4 text-sm font-medium on-accent-light hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40">
                             {submitting && <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />}
                             Add {selectedIds.length} video{selectedIds.length === 1 ? '' : 's'}
                         </button>

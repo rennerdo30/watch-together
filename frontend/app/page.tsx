@@ -81,7 +81,10 @@ export default function Home() {
         <div className="flex items-center gap-4">
           {!loading && !loadError && (
             <p className="flex items-center gap-2 text-sm text-neutral-400">
-              <span aria-hidden="true" className="h-2 w-2 rounded-full bg-emerald-500" />
+              <span
+                aria-hidden="true"
+                className={`h-2 w-2 rounded-full ${totalUsers > 0 ? 'bg-emerald-500' : 'bg-neutral-600'}`}
+              />
               {totalUsers === 1
                 ? '1 viewer online'
                 : `${numberFormatter.format(totalUsers)} viewers online`}
@@ -155,7 +158,7 @@ export default function Home() {
             </h2>
             <div className="flex items-center gap-2">
               {!loading && !loadError && (
-                <span className="text-sm text-[color:var(--accent-primary)]">
+                <span className="ui-numeric text-sm text-neutral-400">
                   {numberFormatter.format(rooms.length)}
                 </span>
               )}

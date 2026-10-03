@@ -183,7 +183,7 @@ export function SortableQueueItem({
                     </p>
                     {isLoading && <Loader2 className="w-3 h-3 text-white/40 animate-spin shrink-0" />}
                 </div>
-                <p className="text-[9px] font-mono text-neutral-500 truncate mt-0.5">
+                <p className="text-[11px] text-neutral-500 truncate mt-0.5">
                     {pending ? (
                         <span role="status">Resolving…</span>
                     ) : displayHost(item.original_url)}
@@ -210,7 +210,7 @@ export function SortableQueueItem({
                             />
                         </div>
                         {watched > 0 && (
-                            <span className="text-[8px] font-mono text-neutral-500 shrink-0">
+                            <span className="text-[10px] ui-numeric text-neutral-500 shrink-0">
                                 {formatTime(watched)}
                             </span>
                         )}
@@ -237,6 +237,7 @@ export function SortableQueueItem({
                 </a>
                 {onPin && !pending && (
                     <button
+                        type="button"
                         onClick={(e) => {
                             e.stopPropagation();
                             onPin(index);
@@ -253,6 +254,7 @@ export function SortableQueueItem({
                     </button>
                 )}
                 <button
+                    type="button"
                     onClick={(e) => {
                         e.stopPropagation();
                         onRemove(index);
@@ -309,7 +311,7 @@ export function QueueItemOverlay({ item, isActive, fontSize }: Omit<SortableQueu
                     style={{ fontSize: `${fontSize}px` }}>
                     {item.title}
                 </p>
-                <p className="text-[9px] font-mono text-neutral-500 truncate mt-0.5">
+                <p className="text-[11px] text-neutral-500 truncate mt-0.5">
                     {displayHost(item.original_url)}
                 </p>
             </div>

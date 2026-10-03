@@ -32,7 +32,7 @@ test('a member without cookies is pointed at the extension, once', async ({ page
   await hint.getByRole('button', { name: 'Install' }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByText('Install Extension')).toBeVisible();
+  await expect(dialog.getByText('Install the extension')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
 
