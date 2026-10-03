@@ -47,7 +47,14 @@ test('live chat comes to the front on a stream, follows it and unloads when clos
   await expect(page.getByRole('tab', { name: 'Live chat' })).toHaveAttribute('aria-selected', 'true');
   const frame = page.getByTitle('Twitch live chat', { exact: true });
   await expect(frame).toHaveAttribute('src', 'https://www.twitch.tv/embed/zarbex/chat?parent=localhost&darkpopout');
-  await expect(page.getByText('Chat updates live and may run ahead of the video.')).toBeVisible();
+  // One compact row of tools above the provider's own chat; the note that
+  // chat runs ahead lives on its title instead of taking up the panel.
+  await expect(page.getByText('Twitch live chat', { exact: true })).toHaveAttribute('title', 'Chat updates live and may run ahead of the video.');
+  await expect(page.getByRole('button', { name: 'Reload chat' })).toBeVisible();
+  await expect(page.getByText(/If chat is blank/)).toHaveCount(0);
+  const chatTop = await frame.boundingBox();
+  const panelTop = await page.getByRole('region', { name: 'Livestream chat' }).boundingBox();
+  expect(chatTop!.y - panelTop!.y).toBeLessThanOrEqual(48);
   await expect(frame).toHaveAttribute('sandbox', /allow-scripts/);
   await expect(frame).not.toHaveAttribute('sandbox', /allow-top-navigation/);
   await expect(page.frameLocator('iframe').getByText('Chat fixture')).toBeVisible();
@@ -69,7 +76,7 @@ test('unknown providers accept custom chat without leaking it into another strea
   await page.getByRole('tab', { name: 'Live chat' }).click();
   await expect(page.getByRole('link', { name: 'Open original stream' })).toHaveAttribute('href', url);
   await expect(page.locator('iframe')).toHaveCount(0);
-  await page.getByText('Chat from another service', { exact: true }).click();
+  await page.getByRole('button', { name: 'Chat from another service' }).click();
   await page.getByLabel(/Paste a pop-out/).fill('https://chat.example/embed/room');
   await page.getByRole('button', { name: 'Use chat URL' }).click();
   await expect(page.getByTitle('Custom live chat', { exact: true })).toHaveAttribute('src', 'https://chat.example/embed/room');
@@ -83,7 +90,7 @@ test('unknown providers accept custom chat without leaking it into another strea
   await expect(page.locator('iframe')).toHaveCount(0);
   await play(page, url);
   await expect(page.getByTitle('Custom live chat', { exact: true })).toBeVisible();
-  await page.getByText('Chat from another service', { exact: true }).click();
+  await page.getByRole('button', { name: 'Chat from another service' }).click();
   await page.getByRole('button', { name: 'Use automatic chat' }).click();
   await expect(page.locator('iframe')).toHaveCount(0);
   await page.getByLabel(/Paste a pop-out/).fill('javascript:alert(1)');
