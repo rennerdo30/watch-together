@@ -134,6 +134,12 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
     const [isBuffering, setIsBuffering] = useState(false);
     const [qualities, setQualities] = useState<HlsQualityLevel[]>([]);
     const [currentLevel, setCurrentLevel] = useState(-1);
+    // The viewer's own quality pick, as a picture height, for as long as they
+    // watch this video. Level indices belong to one parsed playlist; the
+    // player is rebuilt or reloaded whenever a live stream's link is
+    // refreshed or a playlist fails, and each time it used to start on Auto
+    // again — a manual pick quietly undone. Null means Auto.
+    const manualHeightRef = useRef<number | null>(null);
     const [stats, setStats] = useState<HlsStats>({
         bandwidth: 0,
         videoCodec: '',
@@ -165,6 +171,7 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
             // currentLevel flushes the buffer, including when assigned -1.
             if (index === -1) hlsRef.current.loadLevel = -1;
             else hlsRef.current.currentLevel = index;
+            manualHeightRef.current = index === -1 ? null : (hlsRef.current.levels[index]?.height || null);
             setCurrentLevel(index);
         }
     }, []);
@@ -367,6 +374,22 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
 
                 setQualities(uniqueLevels);
                 callbackRefs.current.onManifestParsed?.(uniqueLevels);
+
+                // A manual pick outlives a rebuilt or reloaded player: the
+                // same height again, or the tallest rung under it if this
+                // playlist no longer offers it.
+                const pickedHeight = manualHeightRef.current;
+                if (pickedHeight !== null) {
+                    const fitting = data.levels
+                        .map((level, index) => ({ height: level.height || 0, bitrate: level.bitrate || 0, index }))
+                        .filter((level) => level.height > 0 && level.height <= pickedHeight)
+                        .sort((a, b) => b.height - a.height || b.bitrate - a.bitrate);
+                    const lowest = data.levels.reduce((best, level, index) =>
+                        (level.height || 0) < (data.levels[best].height || 0) ? index : best, 0);
+                    const restored = fitting[0]?.index ?? lowest;
+                    hls.currentLevel = restored;
+                    setCurrentLevel(restored);
+                }
 
                 // Set initial time if provided
                 if (initialTime > 0 && Number.isFinite(initialTime) && !isLive) {
