@@ -5,10 +5,11 @@ import { useParams, useRouter } from 'next/navigation';
 import {
     Loader2, Users, Link as LinkIcon,
     Plus, SkipForward,
-    Play, ListVideo, Settings, X, Palette, ShieldCheck, Home, Bug,
+    Play, ListVideo, Settings, X, Palette, ShieldCheck, Bug,
     Crown, Shield, User as UserIcon, ChevronDown, Lock, Copy, Check, Infinity, Sun, ExternalLink, Scissors, Puzzle,
     MonitorUp, MonitorStop, Globe, Type, Download
 } from 'lucide-react';
+import { BrandMark } from '@/components/brand-mark';
 import { prewarmPosition, prewarmVideo } from '@/lib/prewarm';
 import { StartupTimer, type PlaybackEngine } from '@/lib/playback-timing';
 import { resumePosition } from '@/lib/playback';
@@ -1221,9 +1222,9 @@ export default function RoomPage() {
                         onClick={() => router.push('/')}
                         aria-label="Back to all rooms"
                         title="Back to all rooms"
-                        className="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 flex items-center justify-center transition-colors border border-white/5 shrink-0"
+                        className="w-8 h-8 rounded-lg flex items-center justify-center transition-opacity hover:opacity-80 shrink-0"
                     >
-                        <Home aria-hidden="true" className="w-4 h-4 text-neutral-400" />
+                        <BrandMark className="w-8 h-8" />
                     </button>
                     <div className="flex flex-col pl-1 min-w-0">
                         <h1 className="font-bold text-white leading-none text-sm truncate">{APP_NAME}</h1>

@@ -1,17 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Watch Together">
   <defs>
-    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#8b5cf6"/>
-      <stop offset="100%" style="stop-color:#6366f1"/>
+    <linearGradient id="wtCouch" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff7a1a"/>
+      <stop offset="1" stop-color="#ffa24c"/>
     </linearGradient>
   </defs>
-  <!-- Background circle -->
-  <circle cx="64" cy="64" r="60" fill="url(#grad)"/>
-  <!-- Play button -->
-  <polygon points="52,40 52,88 92,64" fill="white"/>
-  <!-- Sync arrows (simplified) -->
-  <path d="M28 64 C28 44, 44 28, 64 28" stroke="white" stroke-width="4" fill="none" stroke-linecap="round"/>
-  <path d="M100 64 C100 84, 84 100, 64 100" stroke="white" stroke-width="4" fill="none" stroke-linecap="round"/>
-  <polygon points="64,22 58,32 70,32" fill="white"/>
-  <polygon points="64,106 58,96 70,96" fill="white"/>
+  <rect width="64" height="64" rx="15" fill="#08090f"/>
+  <rect x="14" y="11" width="36" height="4" rx="2" fill="#2de2f0"/>
+  <path d="M17 32a6 6 0 0 1 6-6h18a6 6 0 0 1 6 6v6H17Z" fill="url(#wtCouch)"/>
+  <path d="M9 37a5 5 0 0 1 10 0v4h26v-4a5 5 0 0 1 10 0v9a5 5 0 0 1-5 5H14a5 5 0 0 1-5-5Z" fill="url(#wtCouch)"/>
+  <path d="M15 51v4M49 51v4" stroke="#ffa24c" stroke-width="3" stroke-linecap="round"/>
 </svg>
