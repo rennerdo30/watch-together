@@ -1061,11 +1061,23 @@ class TestDeploysDoNotFillTheHost:
         text = self.SCRIPT.read_text(encoding="utf-8")
         build = text.index("${COMPOSE} up -d --build\"")
         prune = text.index("docker image prune -f >/dev/null", build)
-        assert "docker builder prune -f --filter until=" in text[prune:prune + 200]
+        assert "docker builder prune -f --max-used-space" in text[prune:prune + 200]
         # Never the volumes (other projects' databases share this host), never
         # images a container still uses.
         for unsafe in ("--volumes", "system prune -a", "image prune -a", "image prune --all"):
             assert unsafe not in text
+
+    def test_space_is_reclaimed_before_the_free_space_check(self):
+        """Build cache capped by age let one busy day fill the host; the deploy
+        refused to build although a gigabyte of old cache was reclaimable."""
+        text = self.SCRIPT.read_text(encoding="utf-8")
+        check = text.index("DEPLOY_MIN_FREE_MB * 1024")
+        assert text.rfind("docker builder prune -f --max-used-space", 0, check) != -1
+
+    def test_the_segment_cache_leaves_real_room_on_the_disk(self):
+        """500 MB left over was not enough for SQLite on a shared host."""
+        from core import config
+        assert config.MIN_DISK_FREE_BYTES >= 2 * 1024 ** 3
 
     def test_a_build_does_not_start_on_a_nearly_full_disk(self):
         text = self.SCRIPT.read_text(encoding="utf-8")

@@ -38,10 +38,11 @@ REMOTE="${DEPLOY_REMOTE:-/opt/watch-together}"
 SKIP_SYNC=0
 RESET_DATA=0
 DRY_RUN=0
-# Free space a build needs on the host before it starts, and how old build
-# cache must be before a deploy removes it (newer cache keeps rebuilds fast).
+# Free space a build needs on the host before it starts, and the most build
+# cache kept between deploys (some keeps rebuilds fast; every build adds more,
+# and a cap by age let a busy day fill the host).
 DEPLOY_MIN_FREE_MB="${DEPLOY_MIN_FREE_MB:-1024}"
-DEPLOY_BUILD_CACHE_KEEP="${DEPLOY_BUILD_CACHE_KEEP:-168h}"
+DEPLOY_BUILD_CACHE_MAX="${DEPLOY_BUILD_CACHE_MAX:-1gb}"
 
 for arg in "$@"; do
 	case "$arg" in
@@ -218,6 +219,9 @@ else
 	# Refuse to build onto a nearly full disk: the build itself needs room,
 	# and a full disk takes SQLite down with it ("database or disk is full"
 	# on every room save), which looks like the app being broken.
+	# Clear what earlier builds left first: dangling images and build cache
+	# beyond the cap. Never volumes, never images a container uses.
+	$SSH "docker image prune -f >/dev/null && docker builder prune -f --max-used-space ${DEPLOY_BUILD_CACHE_MAX} >/dev/null" || true
 	free_kb=$($SSH "df -Pk ${REMOTE} | awk 'NR==2 {print \$4}'")
 	if [ "${free_kb:-0}" -lt $((DEPLOY_MIN_FREE_MB * 1024)) ]; then
 		red "  ✗ only $((free_kb / 1024)) MB free on the host; need ${DEPLOY_MIN_FREE_MB} MB to build."
@@ -231,7 +235,7 @@ else
 	# cache grows with each one. On a small shared disk that filled the host
 	# within a handful of deploys. Only dangling images and old build cache
 	# go: nothing a running or stopped container uses, and no volume.
-	$SSH "docker image prune -f >/dev/null && docker builder prune -f --filter until=${DEPLOY_BUILD_CACHE_KEEP} >/dev/null" \
+	$SSH "docker image prune -f >/dev/null && docker builder prune -f --max-used-space ${DEPLOY_BUILD_CACHE_MAX} >/dev/null" \
 		&& green "  ✓ old images and build cache pruned"
 
 	# nginx.conf is a bind mount, so `up -d` sees no change to the service
