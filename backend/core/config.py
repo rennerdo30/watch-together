@@ -75,6 +75,22 @@ INFLIGHT_JOIN_TIMEOUT_SECONDS = 4
 # then a request for those bytes waits INFLIGHT_JOIN_TIMEOUT_SECONDS first.
 INFLIGHT_MAX_AGE_SECONDS = 30
 
+# --- One upstream session per live stream ----------------------------------
+# Every fetch of a live master playlist opens a new upstream playback session
+# with its own ad schedule (Twitch: "Commercial break in progress" for one
+# member and not the other). The master is fetched once and every viewer of
+# the stream gets that copy — and so the same media playlists. A shared
+# master is dropped this long after any of its playlists was last fetched,
+# or at once when one of them answers 4xx (the session expired).
+LIVE_MASTER_SHARE_SECONDS = 300
+# A media playlist fetched this recently is served to the next viewer instead
+# of being fetched again. Well under a live target duration (2 s on Twitch),
+# so nobody sees a segment later than they would have otherwise.
+LIVE_PLAYLIST_SHARE_SECONDS = 1.0
+# Twitch's master-playlist host. Its query (sig, token, random p) differs on
+# every resolve; the path names the channel.
+TWITCH_USHER_HOST = "usher.ttvnw.net"
+
 # --- Sharing a screen with the room ----------------------------------------
 # The media travels through this process: the sharer's browser encodes its
 # screen with MediaRecorder and pushes the chunks up `/ws/share/{room}`, and
