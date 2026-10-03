@@ -28,6 +28,10 @@ header {
     color: #fff;
 }
 
+.logo svg {
+    color: #8b5cf6;
+}
+
 .status-card {
     background: #171717;
     border: 1px solid #262626;
@@ -110,12 +114,12 @@ header {
 }
 
 .btn-primary {
-    background: #d93a3a;
+    background: #8b5cf6;
     color: #fff;
 }
 
 .btn-primary:hover {
-    background: #c62f2f;
+    background: #7c3aed;
 }
 
 .btn-primary:disabled {
@@ -153,7 +157,7 @@ header {
 }
 
 .send-header svg {
-    color: #d93a3a;
+    color: #8b5cf6;
 }
 
 .room-input {
@@ -174,7 +178,7 @@ header {
 }
 
 .room-input input:focus {
-    border-color: #d93a3a;
+    border-color: #8b5cf6;
 }
 
 .room-input input::placeholder {
@@ -286,7 +290,7 @@ footer {
 }
 
 .toggle input:checked {
-    background: #d93a3a;
+    background: #8b5cf6;
 }
 
 .toggle input:checked::before {

@@ -3,8 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { AlertTriangle, ArrowRight, Play, Plus, RefreshCw, Users, Video } from 'lucide-react';
-import { BrandMark } from '@/components/brand-mark';
+import { AlertTriangle, ArrowRight, Play, Plus, RefreshCw, Tv, Users, Video } from 'lucide-react';
 import { fetchRooms, type RoomSummary } from '@/lib/api';
 import { ColorModeToggle } from '@/components/color-mode-toggle';
 import {
@@ -71,7 +70,12 @@ export default function Home() {
     <div className="app-shell flex min-h-dvh flex-col bg-neutral-950 text-white">
       <header className="flex h-16 shrink-0 items-center justify-between gap-4 border-b border-white/10 px-4 sm:px-6">
         <div className="flex items-center gap-3">
-          <BrandMark className="h-9 w-9 shrink-0" />
+          <span
+            aria-hidden="true"
+            className="flex h-9 w-9 items-center justify-center rounded-xl bg-[color:var(--accent-primary)]"
+          >
+            <Tv className="h-5 w-5 on-accent-light" />
+          </span>
           <span className="text-base font-semibold tracking-tight">{APP_NAME}</span>
         </div>
         <div className="flex items-center gap-4">

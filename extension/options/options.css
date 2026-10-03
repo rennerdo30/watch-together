@@ -27,6 +27,10 @@ header {
     gap: 16px;
 }
 
+.logo svg {
+    color: #8b5cf6;
+}
+
 .logo h1 {
     font-size: 24px;
     font-weight: 700;
@@ -190,7 +194,7 @@ main {
 }
 
 .toggle input:checked + .toggle-slider {
-    background: #d93a3a;
+    background: #8b5cf6;
 }
 
 .toggle input:checked + .toggle-slider:before {
@@ -213,12 +217,12 @@ main {
 }
 
 .btn-primary {
-    background: #d93a3a;
+    background: #8b5cf6;
     color: #fff;
 }
 
 .btn-primary:hover {
-    background: #c62f2f;
+    background: #7c3aed;
 }
 
 .btn-secondary {
@@ -269,7 +273,7 @@ input[type="password"] {
 
 input[type="text"]:focus,
 input[type="password"]:focus {
-    border-color: #d93a3a;
+    border-color: #8b5cf6;
 }
 
 input[type="text"]::placeholder {
