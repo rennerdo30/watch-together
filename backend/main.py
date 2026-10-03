@@ -995,9 +995,20 @@ async def dash_manifest(request: Request, url: str, room: str = None):
         media_type="application/dash+xml",
         headers={
             "Access-Control-Allow-Origin": "*",
-            "Cache-Control": "no-cache",
+            "Cache-Control": MANIFEST_CACHE_CONTROL,
         },
     )
+
+
+# Every playlist and manifest this server answers with. A live playlist
+# changes every couple of seconds and a manifest carries signed URLs, so no
+# copy may be kept anywhere. `no-cache` was not enough: in front of the
+# origin it was cached at the edge and handed to browsers with a four-hour
+# max-age, so a live viewer reloaded the playlist it first got, forever —
+# no new segments, an endless spinner — and two members of one room saw two
+# different moments of the stream. `private, no-store` is what segments
+# already carry, and what the edge passes through untouched.
+MANIFEST_CACHE_CONTROL = "private, no-store, no-transform"
 
 
 def _proxy_base(request: Request) -> str:
@@ -1215,7 +1226,7 @@ async def proxy_stream(request: Request, url: str):
                 media_type="application/vnd.apple.mpegurl",
                 headers={
                     "Access-Control-Allow-Origin": "*",
-                    "Cache-Control": "no-cache",
+                    "Cache-Control": MANIFEST_CACHE_CONTROL,
                 }
             )
         elif is_dash_manifest:
@@ -1230,7 +1241,7 @@ async def proxy_stream(request: Request, url: str):
                 media_type="application/dash+xml",
                 headers={
                     "Access-Control-Allow-Origin": "*",
-                    "Cache-Control": "no-cache",
+                    "Cache-Control": MANIFEST_CACHE_CONTROL,
                 }
             )
         else:
@@ -1490,15 +1501,17 @@ async def proxy_stream(request: Request, url: str):
                 # Check for late-detected manifest (content-type based detection)
                 ctype = r.headers.get("content-type", "").lower()
                 if "mpegurl" in ctype:
-                    content = await r.read()
+                    content = await r.aread()
                     text = content.decode('utf-8', errors='replace')
                     rewritten = rewrite_hls_manifest(text, url, proxy_base)
-                    return Response(content=rewritten, media_type="application/vnd.apple.mpegurl")
+                    return Response(content=rewritten, media_type="application/vnd.apple.mpegurl",
+                                    headers={"Access-Control-Allow-Origin": "*", "Cache-Control": MANIFEST_CACHE_CONTROL})
                 elif "dash+xml" in ctype or "mpd" in ctype:
-                    content = await r.read()
+                    content = await r.aread()
                     text = content.decode('utf-8', errors='replace')
                     rewritten = rewrite_dash_manifest(text, url, proxy_base)
-                    return Response(content=rewritten, media_type="application/dash+xml")
+                    return Response(content=rewritten, media_type="application/dash+xml",
+                                    headers={"Access-Control-Allow-Origin": "*", "Cache-Control": MANIFEST_CACHE_CONTROL})
 
                 if should_cache:
                     _, cache_path = get_segment_disk_key(
