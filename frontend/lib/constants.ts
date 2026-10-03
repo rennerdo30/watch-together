@@ -81,6 +81,14 @@ export const HLS_BUFFER_SIZE_BYTES = 200 * 1000 * 1000;
 export const HLS_BACK_BUFFER_SECONDS = 120;
 
 /**
+ * How long hls.js playback must run without stalling before its recovery
+ * retries are counted from zero again. Long enough that a stream failing in
+ * a tight loop still exhausts them and says so; short enough that separate
+ * hiccups during a long live stream never add up to a fatal error.
+ */
+export const HLS_RETRY_BUDGET_REFILL_MS = 30_000;
+
+/**
  * How far behind the live edge a live HLS stream is played.
  *
  * hls.js counts this in *declared* target durations
@@ -125,6 +133,20 @@ export const LIVE_SYNC_MAX_WINDOW_FRACTION = 0.4;
  * though neither Twitch nor YouTube advertises LL-HLS parts.
  */
 export const LIVE_SYNC_MAX_PLAYBACK_RATE = 1.05;
+
+/**
+ * How long a live stall lasts before the stream is reloaded.
+ *
+ * - `LIVE_STALL_RELOAD_MS`: a stall with nothing to explain it.
+ * - `LIVE_EDGE_STALL_RELOAD_MS`: a playhead that has played everything the
+ *   playlist lists and is waiting for the next segment. That is a late
+ *   playlist — a streamer's upload hiccup on Twitch — and reloading cannot
+ *   make it arrive sooner: it restarts the player behind the edge and
+ *   replays what was just watched. Thirty seconds is a whole Twitch window;
+ *   a playlist frozen that long is worth asking for afresh.
+ */
+export const LIVE_STALL_RELOAD_MS = 12_000;
+export const LIVE_EDGE_STALL_RELOAD_MS = 30_000;
 
 /**
  * How much must be buffered before playback starts or resumes.

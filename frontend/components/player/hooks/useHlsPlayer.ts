@@ -5,11 +5,16 @@ import Hls, { type LevelDetails } from 'hls.js';
 
 import { startPlayback, type PlaybackStart } from '@/lib/playback';
 import { liveSyncTargetSeconds } from '@/lib/live-latency';
+import { edgeWaitingStreamController, mediaIsWaitingAtLiveEdge } from '@/lib/live-edge';
+import { RetryBudget } from '@/lib/retry-budget';
 import {
     HLS_BACK_BUFFER_SECONDS,
     HLS_BUFFER_LENGTH_SECONDS,
     HLS_BUFFER_SIZE_BYTES,
     HLS_MAX_BUFFER_LENGTH_SECONDS,
+    HLS_RETRY_BUDGET_REFILL_MS,
+    LIVE_EDGE_STALL_RELOAD_MS,
+    LIVE_STALL_RELOAD_MS,
     LIVE_SYNC_MAX_PLAYBACK_RATE,
 } from '@/lib/constants';
 
@@ -88,7 +93,6 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
     // HLS instance ref
     const hlsRef = useRef<Hls | null>(null);
     const isAutoPlayingRef = useRef(false);
-    const retryCountRef = useRef<number>(0);
     const recoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const recoverStalledLiveRef = useRef<(() => void) | null>(null);
     const lastSrcRef = useRef<string>('');
@@ -97,6 +101,8 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
     // spam the owner with refresh requests.
     const sourceExpiredRef = useRef(false);
     const MAX_RETRIES = 3;
+    // Created once, not on every render; the instance itself is mutable.
+    const [retryBudget] = useState(() => new RetryBudget(MAX_RETRIES, HLS_RETRY_BUDGET_REFILL_MS));
     const RETRY_COOLDOWN_MS = 2000;
     // Upstream verdicts that a retry of the same URL can never change: the
     // signed token in the URL is dead (403) or the resource is gone (410).
@@ -243,6 +249,10 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
                 // restarting the primary stream at the position *it* last
                 // resolved, which silently undoes the live alignment below.
                 enableInterstitialPlayback: false,
+                // A live playhead that catches up with a late playlist waits
+                // for the next segment instead of being sent back to replay
+                // the last few seconds; see lib/live-edge.
+                streamController: edgeWaitingStreamController(),
                 // How far ahead playback is carried without the network;
                 // see the constants for what bounds it.
                 backBufferLength: HLS_BACK_BUFFER_SECONDS,
@@ -283,11 +293,10 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
             };
             const scheduleRecovery = (recover: () => void) => {
                 if (hlsRef.current !== hls || recoveryTimerRef.current !== null) return;
-                if (retryCountRef.current >= MAX_RETRIES) {
+                if (!retryBudget.spend()) {
                     stopWithError();
                     return;
                 }
-                retryCountRef.current++;
                 recoveryTimerRef.current = setTimeout(() => {
                     recoveryTimerRef.current = null;
                     if (hlsRef.current === hls) recover();
@@ -488,7 +497,7 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
 
             video.addEventListener('loadedmetadata', onLoadedMetadata, { once: true });
         }
-    }, [videoRef, src, enabled, autoPlay, initialTime, isLive, isHlsSource, isHlsSupported, isNativeHls]);
+    }, [videoRef, src, enabled, autoPlay, initialTime, isLive, isHlsSource, isHlsSupported, isNativeHls, retryBudget]);
 
     // === EFFECT: Initialize on mount/src change ===
     const initVersionRef = useRef(0);
@@ -499,7 +508,7 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
             // A new source gets a clean slate: fresh retry budget, and the
             // right to report its own expiry.
             sourceExpiredRef.current = false;
-            retryCountRef.current = 0;
+            retryBudget.reset();
         }
 
         const currentVersion = ++initVersionRef.current;
@@ -540,19 +549,32 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
             if (stallTimer !== null) clearTimeout(stallTimer);
             stallTimer = null;
         };
+        const budget = retryBudget;
         const onWaiting = () => {
+            budget.stalled();
             setIsBuffering(true);
             callbackRefs.current.onBufferingChange?.(true);
             // Live playlists can return 200 forever without advancing. HLS
             // then has no fatal network error to recover from. Only restart
             // after playback has begun and a real mid-stream stall persists.
+            // A playhead waiting at the edge of a playlist that is merely late
+            // is given longer: a reload restarts it behind the edge, replaying
+            // what was just watched, and costs a retry for a stream that is
+            // about to continue by itself.
             if (isLive && hasPlayed && !video.paused && stallTimer === null) {
-                stallTimer = setTimeout(() => {
+                const stalledAt = Date.now();
+                const check = () => {
                     stallTimer = null;
-                    if (!video.paused && !video.seeking && video.readyState < 3) {
-                        recoverStalledLiveRef.current?.();
+                    if (video.paused || video.seeking || video.readyState >= 3) return;
+                    const atEdge = mediaIsWaitingAtLiveEdge(video, hlsRef.current?.latestLevelDetails ?? null);
+                    const remaining = stalledAt + LIVE_EDGE_STALL_RELOAD_MS - Date.now();
+                    if (atEdge && remaining > 0) {
+                        stallTimer = setTimeout(check, remaining);
+                        return;
                     }
-                }, 12_000);
+                    recoverStalledLiveRef.current?.();
+                };
+                stallTimer = setTimeout(check, LIVE_STALL_RELOAD_MS);
             }
         };
 
@@ -565,21 +587,26 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
         const onPlaying = () => {
             hasPlayed = true;
             clearStallTimer();
+            budget.playing(Date.now());
             setIsBuffering(false);
             callbackRefs.current.onBufferingChange?.(false);
         };
 
+        const onTimeUpdate = () => budget.progressed(Date.now());
+
         video.addEventListener('waiting', onWaiting);
         video.addEventListener('canplay', onCanPlay);
         video.addEventListener('playing', onPlaying);
+        video.addEventListener('timeupdate', onTimeUpdate);
 
         return () => {
             clearStallTimer();
             video.removeEventListener('waiting', onWaiting);
             video.removeEventListener('canplay', onCanPlay);
             video.removeEventListener('playing', onPlaying);
+            video.removeEventListener('timeupdate', onTimeUpdate);
         };
-    }, [enabled, videoRef, src, isLive]);
+    }, [enabled, videoRef, src, isLive, retryBudget]);
 
     return {
         isLoading,

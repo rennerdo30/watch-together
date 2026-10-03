@@ -12,6 +12,7 @@ import {
 import { prewarmPosition, prewarmVideo } from '@/lib/prewarm';
 import { StartupTimer, type PlaybackEngine } from '@/lib/playback-timing';
 import { resumePosition } from '@/lib/playback';
+import { isLiveCatchUpRate } from '@/lib/live-latency';
 import { autoQualityCap, openingPlan } from '@/lib/abr';
 import { readOpeningEstimate } from '@/lib/bandwidth-memory';
 import { capHeadroom, parseQualityMode, QUALITY_MODE_STORAGE_KEY } from '@/lib/quality-mode';
@@ -879,9 +880,13 @@ export default function RoomPage() {
                 // timestamp is some viewer's window-relative position, and
                 // correcting towards it every five seconds dragged a DVR
                 // stream back to the start of its window on every beat.
+                // hls.js's own catch-up towards its latency target is left
+                // alone; only a rate left over from position sync is put back
+                // to 1x. Resetting every rate here undid the catch-up on every
+                // beat.
                 if (videoDataRef.current?.is_live) {
                     const liveVideo = playerRef.current?.getVideoElement?.();
-                    if (liveVideo) liveVideo.playbackRate = 1.0;
+                    if (liveVideo && !isLiveCatchUpRate(liveVideo.playbackRate)) liveVideo.playbackRate = 1.0;
                 } else if (playerRef.current && payload.is_playing && typeof payload.timestamp === 'number') {
                     // Gradual sync - adjust playback rate instead of jumping for small drifts
                     const currentTime = playerRef.current.currentTime();
