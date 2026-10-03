@@ -6,6 +6,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Queue to playing: smaller room messages, no re-extraction of older entries
+
+- **The queue is sent without its streams.** Every queue change sent each
+  member the whole queue with every entry's full resolve: signed URLs for
+  every rung and audio track, storyboard sheets and chapters. That is about
+  50 KB per entry, or 2.3 MB for a queue of 50, serialised once per member.
+  The advance's `queue_update` goes out just before its `set_video` on the
+  same socket, so the next video waited for it. A playlist import
+  re-broadcast the growing queue once per resolved entry. Members now get
+  the fields a row draws plus the ladder's heights, codecs and bitrates
+  (`queue_view`, about 0.5 KB per entry). The whole entry still arrives
+  with `set_video`. A broadcast is serialised once for the room.
+- **An older queue entry is not extracted again.** The format cache keeps a
+  resolve for 2 hours, but YouTube signs its URLs for about 6. Once an entry
+  had been queued longer than 2 hours, `/api/dash-manifest` missed the cache
+  and ran a full yt-dlp extraction (seconds) before the first frame, even
+  though the room's entry still held URLs the CDN serves. The manifest now
+  falls back to the room's entry while those URLs are signed. Only connected
+  members get this fallback, the same rule announced warms follow.
+- **Only the entry that plays next is probed when it arrives.** Each
+  resolved queue entry used to have its whole ladder probed. A playlist
+  import (about 20 renditions per entry) overflowed the 500-entry manifest
+  index cache, which evicts oldest first. That dropped the index and
+  subsegment tables of the video playing now, switching off its read-ahead
+  and skip warming. Entries further back are probed in the last
+  `PREWARM_NEXT_VIDEO_SECONDS` of the video before them, or when someone
+  hovers over their row; jumping straight to one that was neither pays for
+  its probes when its manifest is built.
+- **An older entry plays from its own signed URLs only if they outlive the
+  video.** Once the format cache has let a resolve go, the manifest is built
+  from the room's entry instead of re-extracting it, but only when its URLs
+  state a deadline at least the video's length (and never under
+  `STREAM_URL_MIN_LIFETIME_SECONDS`) away. URLs with minutes left would play
+  for minutes and then be refused mid-video.
+- The unused in-memory `_format_cache` dict in `services/cache.py` is
+  deleted.
+
 ### A SponsorBlock skip plays from the page
 
 - The server already warmed the far side of a scheduled skip in its own

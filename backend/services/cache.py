@@ -320,9 +320,6 @@ async def cleanup_active_content():
         for k in stale:
             del _active_content[k]
 
-# Format cache - stores resolved video formats in memory
-_format_cache: Dict[str, Tuple[dict, float]] = {}
-
 def make_room(needed_bytes: int) -> bool:
     """Evict oldest entries until `needed_bytes` fits inside the budget.
 

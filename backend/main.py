@@ -364,8 +364,7 @@ async def _start_entry(room_id: str, entry: dict, user_email: Optional[str],
             room_id, entry.get("original_url"))
         if not advanced:
             return
-        await manager.broadcast({"type": "queue_update", "payload": {
-            "queue": queue, "playing_index": playing_index}}, room_id)
+        await manager.broadcast_queue(room_id)
         if next_v and _skipped < QUEUE_UNRESOLVABLE_SKIP_LIMIT:
             await _start_entry(room_id, next_v, user_email, _skipped + 1)
             return
@@ -401,8 +400,8 @@ async def _resolve_queued(room_id: str, url: str, user_email: Optional[str],
     The sender no longer waits on yt-dlp to queue something: the room shows
     the entry at once and it becomes playable when this finishes. On
     failure the placeholder goes and the sender (if still connected) is told
-    why. The ladder is probed straight away, so the manifest is free when
-    the entry is reached.
+    why. The ladder of the entry that plays next is probed straight away, so
+    its manifest is free when it is reached.
     """
     key = (room_id, url)
     if key in _queued_resolves:
@@ -420,19 +419,25 @@ async def _resolve_queued(room_id: str, url: str, user_email: Optional[str],
             entry = await manager.resolve_pending(room_id, url, data)
             if entry is None:
                 return  # Removed while it resolved.
-            state = manager.room_states.get(room_id, {})
-            await manager.broadcast({"type": "queue_update", "payload": {
-                "queue": state.get("queue", []), "playing_index": state.get("playing_index", -1)}}, room_id)
+            await manager.broadcast_queue(room_id)
             await publish_room_activity(room_id, "queue_added", user_email, entry)
-            try:
-                await _prepare_queued_video(entry, room_id)
-            except Exception as exc:  # Speculation; the advance probes again.
-                logger.debug("Probing queued %s failed: %s", url, exc)
+            # Only the entry the room plays next — or is playing, when it was
+            # picked before its resolve finished — is probed now. Probing
+            # every queued entry (a whole playlist import: ~20 renditions
+            # each) overflowed the manifest index cache, oldest first, which
+            # evicted the index and subsegment tables of the video playing
+            # *now* and of the one up next. Any other entry is probed when it
+            # comes up (the heartbeat's warm), or when a pointer rests on its
+            # row (/api/prewarm).
+            state = manager.room_states.get(room_id, {})
+            if entry is manager.peek_next_video(room_id) or entry is state.get("video_data"):
+                try:
+                    await _prepare_queued_video(entry, room_id)
+                except Exception as exc:  # Speculation; the advance probes again.
+                    logger.debug("Probing queued %s failed: %s", url, exc)
             return
         if await manager.drop_pending(room_id, url):
-            state = manager.room_states.get(room_id, {})
-            await manager.broadcast({"type": "queue_update", "payload": {
-                "queue": state.get("queue", []), "playing_index": state.get("playing_index", -1)}}, room_id)
+            await manager.broadcast_queue(room_id)
         if websocket is not None:
             try:
                 await websocket.send_json({"type": "resolve_failed",
@@ -874,6 +879,25 @@ def rewrite_hls_manifest(content: str, base_url: str, proxy_base: str) -> str:
     return '\n'.join(result)
 
 
+def _outlives_playback(entry: dict) -> bool:
+    """Whether a room entry's signed URLs will still be served to its end.
+
+    Building a manifest from them commits every member to those URLs for
+    the whole video: one with minutes left plays for minutes, then every
+    segment is refused mid-video. So an entry only stands in for a fresh
+    resolve when it states its deadline and that deadline outlives the
+    video (and never less than STREAM_URL_MIN_LIFETIME_SECONDS). A source
+    that states no deadline has no known lifetime, and is resolved again.
+    """
+    remaining = stream_expiry.seconds_remaining(entry)
+    if remaining is None:
+        return False
+    duration = entry.get("duration")
+    needed = max(STREAM_URL_MIN_LIFETIME_SECONDS,
+                 float(duration) if isinstance(duration, (int, float)) and duration > 0 else 0.0)
+    return remaining >= needed
+
+
 @app.get("/api/dash-manifest")
 async def dash_manifest(request: Request, url: str, room: str = None):
     """Build a DASH manifest for an already-resolved video.
@@ -886,7 +910,20 @@ async def dash_manifest(request: Request, url: str, room: str = None):
     if REQUIRE_AUTHENTICATION and not user_email:
         raise HTTPException(status_code=401, detail="User identity required")
 
+    room_id = sanitize_room_id(room)
     cached = await get_cached_format(url)
+    if not cached:
+        # The format cache keeps a resolve for FORMAT_CACHE_TTL_SECONDS, but
+        # its signed URLs live for hours longer, and the room's own entry
+        # keeps them: an entry queued a while ago is still playable as it
+        # is. Resolving here instead put a whole extraction — seconds — in
+        # front of the first frame of every older queue entry, for URLs the
+        # room already had. As with announced warms, only a member of the
+        # room reads its entries.
+        entry = (_room_entry(room_id, url)
+                 if room_id and user_email and _is_connected_to_room(room_id, user_email) else None)
+        if entry is not None and _outlives_playback(entry):
+            cached = entry
     if not cached:
         # Resolve it now rather than refusing. Stream URLs expire after a
         # couple of hours and the cache is in process memory, so anything
@@ -898,14 +935,14 @@ async def dash_manifest(request: Request, url: str, room: str = None):
         logger.info(f"Manifest requested for an unresolved video, resolving: {url}")
         cached = await resolve_video(request, url,
                                      request.headers.get("user-agent"),
-                                     room_id=sanitize_room_id(room))
+                                     room_id=room_id)
     else:
         # A cache entry can outlive the signature on the URLs it holds; every
         # probe of those answers 403 and the manifest comes back empty. Only
         # an expired entry is replaced here: a player is waiting, and a
         # source that signs short-lived URLs still plays.
         cached = await _playable_source(
-            url, cached, sanitize_room_id(room),
+            url, cached, room_id,
             min_lifetime=STREAM_URL_SERVE_MIN_SECONDS,
             user_email=user_email,
             user_agent=request.headers.get("user-agent") or DEFAULT_USER_AGENT)
@@ -987,13 +1024,18 @@ async def _announced_video(request: Request, url: str, room: Optional[str]) -> t
     room_id = sanitize_room_id(room)
     if room_id and not (user_email and _is_connected_to_room(room_id, user_email)):
         room_id = ""
-    state = manager.room_states.get(room_id, {}) if room_id else {}
+    video = await get_cached_format(url) or (_room_entry(room_id, url) if room_id else None)
+    return video, room_id, user_email
+
+
+def _room_entry(room_id: str, url: str) -> Optional[dict]:
+    """The room's resolved entry for `url` — its current video or a queued one."""
+    state = manager.room_states.get(room_id, {})
     candidates = [state.get("video_data")] + list(state.get("queue", []))
-    video = await get_cached_format(url) or next(
+    return next(
         (entry for entry in candidates
          if isinstance(entry, dict) and entry.get("original_url") == url and not entry.get("pending")),
         None)
-    return video, room_id, user_email
 
 
 @app.get("/api/segment-spans")
@@ -1755,7 +1797,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 next_v, queue, playing_index = await manager.prepend_to_queue(room_id, video_data)
                 if next_v:
                     await manager.broadcast({"type": "set_video", "payload": {"video_data": next_v}}, room_id)
-                    await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": playing_index}}, room_id)
+                    await manager.broadcast_queue(room_id)
                     await publish_room_activity(
                         room_id, "video_started", user_email, next_v)
                     sponsor_skipper.video_changed(room_id)
@@ -1769,8 +1811,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     logger.warning(f"Rejected queue_add from {user_email} in room {room_id}")
                     continue
                 queue, pending = await manager.queue_url(room_id, url, user_email)
-                state = manager.room_states.get(room_id, {})
-                await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": state.get("playing_index", -1)}}, room_id)
+                await manager.broadcast_queue(room_id)
                 if pending is not None:
                     _run_detached(_resolve_queued(room_id, pending["original_url"], user_email, websocket,
                                                   websocket.headers.get("user-agent")))
@@ -1786,9 +1827,8 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 if (isinstance(index, int) and 0 <= index < len(state.get("queue", []))
                         and index != state.get("playing_index", -1)):
                     removed_video = state["queue"][index].copy()
-                queue = await manager.remove_from_queue(room_id, index)
-                state = manager.room_states.get(room_id, {})
-                await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": state.get("playing_index", -1)}}, room_id)
+                await manager.remove_from_queue(room_id, index)
+                await manager.broadcast_queue(room_id)
                 if removed_video:
                     await publish_room_activity(
                         room_id, "queue_removed", user_email, removed_video)
@@ -1803,9 +1843,8 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         and 0 <= old_index < len(state.get("queue", []))
                         and 0 <= new_index < len(state.get("queue", []))):
                     moved_video = state["queue"][old_index].copy()
-                queue = await manager.reorder_queue(room_id, old_index, new_index)
-                state = manager.room_states.get(room_id, {})
-                await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": state.get("playing_index", -1)}}, room_id)
+                await manager.reorder_queue(room_id, old_index, new_index)
+                await manager.broadcast_queue(room_id)
                 if moved_video:
                     await publish_room_activity(
                         room_id, "queue_reordered", user_email, moved_video,
@@ -1819,17 +1858,16 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 if isinstance(index, int) and 0 <= index < len(state.get("queue", [])):
                     pinned_video = state["queue"][index].copy()
                     was_pinned = bool(pinned_video.get("pinned", False))
-                queue = await manager.toggle_pin(room_id, index)
-                state = manager.room_states.get(room_id, {})
-                await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": state.get("playing_index", -1)}}, room_id)
+                await manager.toggle_pin(room_id, index)
+                await manager.broadcast_queue(room_id)
                 if pinned_video:
                     await publish_room_activity(
                         room_id, "queue_unpinned" if was_pinned else "queue_pinned",
                         user_email, pinned_video)
 
             elif msg_type == "queue_play":
-                next_v, queue, playing_index = await manager.play_from_queue(room_id, payload.get("index"))
-                await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": playing_index}}, room_id)
+                next_v, _queue, _index = await manager.play_from_queue(room_id, payload.get("index"))
+                await manager.broadcast_queue(room_id)
                 if next_v:
                     await publish_room_activity(
                         room_id, "video_started", user_email, next_v)
@@ -1844,7 +1882,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 next_v, queue, playing_index, advanced = await manager.next_video(
                     room_id, ended_url if isinstance(ended_url, str) else None)
                 if advanced:
-                    await manager.broadcast({"type": "queue_update", "payload": {"queue": queue, "playing_index": playing_index}}, room_id)
+                    await manager.broadcast_queue(room_id)
                     if ended_video:
                         await publish_room_activity(
                             room_id,
