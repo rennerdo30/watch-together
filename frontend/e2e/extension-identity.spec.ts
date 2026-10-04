@@ -26,6 +26,7 @@ test('options ignores stale synchronized credentials and shows verified status',
       };
       window.chrome = {
         runtime: {
+          getManifest: () => ({ version: '1.4.0', manifest_version: 3 }),
           sendMessage: async (message) => {
             if (message.type === 'GET_STATUS') return {
               connected: true,

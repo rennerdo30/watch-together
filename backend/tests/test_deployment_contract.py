@@ -1084,6 +1084,74 @@ class TestDeploysDoNotFillTheHost:
         assert text.index("DEPLOY_MIN_FREE_MB * 1024") < text.index("${COMPOSE} up -d --build\"")
 
 
+class TestExtensionLooksLikeTheApp:
+    """The popup and settings pages wear the web app's palette, not their own.
+
+    They were near-black with an orange accent and their own neutral greys,
+    and the settings footer claimed v1.1.0 while the manifest said 1.3.0.
+    """
+
+    EXTENSION = REPO_ROOT / "extension"
+    THEME = EXTENSION / "shared" / "theme.css"
+
+    def test_both_pages_use_the_shared_theme(self):
+        for page in ("popup/popup.html", "options/options.html"):
+            text = (self.EXTENSION / page).read_text(encoding="utf-8")
+            assert 'href="../shared/theme.css"' in text, page
+
+    def test_the_surfaces_are_the_apps(self):
+        app = (REPO_ROOT / "frontend" / "app" / "globals.css").read_text(encoding="utf-8")
+        theme = self.THEME.read_text(encoding="utf-8")
+        for token in ("--bg-primary: #0a0b0d", "--text-primary: #f2f4f7"):
+            assert token in app and token in theme, token
+
+    def test_the_primary_action_is_not_red(self):
+        """A red primary button, red switch and red focus ring made the popup
+        read as an error. Red is for errors and reset only."""
+        import re
+        theme = self.THEME.read_text(encoding="utf-8")
+        for accent in re.findall(r"--accent-primary:\s*(#[0-9a-fA-F]{6})", theme):
+            r, g, b = (int(accent[i:i + 2], 16) for i in (1, 3, 5))
+            assert max(r, g, b) - min(r, g, b) < 24, f"accent {accent} is a colour, not ink"
+
+    def test_queue_is_one_field_with_an_arrow(self):
+        html = (self.EXTENSION / "popup" / "popup.html").read_text(encoding="utf-8")
+        button = html[html.index('id="sendBtn"') - 60:html.index("</button>", html.index('id="sendBtn"'))]
+        assert 'class="room-send"' in button and "btn-primary" not in button
+        assert 'aria-label="Queue current page"' in button
+
+    def test_colours_come_from_the_theme_only(self):
+        """A hex value in a page stylesheet is a colour the theme cannot switch."""
+        import re
+        for sheet in ("popup/popup.css", "options/options.css"):
+            text = (self.EXTENSION / sheet).read_text(encoding="utf-8")
+            assert not re.search(r"#[0-9a-fA-F]{3,8}\b", text), sheet
+
+    def test_the_version_label_comes_from_the_manifest(self):
+        html = (self.EXTENSION / "options" / "options.html").read_text(encoding="utf-8")
+        script = (self.EXTENSION / "options" / "options.js").read_text(encoding="utf-8")
+        assert "v1." not in html
+        assert "chrome.runtime.getManifest().version" in script
+
+    def test_an_older_extension_offers_the_newer_build(self):
+        """An unpacked extension never updates itself; members ran old builds
+        without knowing. The status check compares versions, badges the icon
+        and the popup links the download."""
+        background = (self.EXTENSION / "background.js").read_text(encoding="utf-8")
+        popup = (self.EXTENSION / "popup" / "popup.js").read_text(encoding="utf-8")
+        assert "await noteServedVersion(connection.origin, body.extension_version)" in background
+        assert "isNewerVersion(servedVersion, current)" in background
+        assert "setBadgeText({ text: 'NEW' })" in background
+        assert "/api/extension/download/${browser}" in background
+        assert "status.update.downloadUrl" in popup
+
+    def test_both_manifests_carry_the_same_version(self):
+        import json
+        versions = {json.loads((self.EXTENSION / name).read_text(encoding="utf-8"))["version"]
+                    for name in ("manifest.json", "manifest.v2.json")}
+        assert len(versions) == 1, versions
+
+
 class TestOneBrandMark:
     """One logo everywhere, in the app's own colours.
 

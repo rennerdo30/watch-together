@@ -35,8 +35,9 @@ type HarnessOptions = {
  * after a connection attempt or migration.
  */
 export async function loadBackground(page: Page, options: HarnessOptions = {}) {
+  const manifest = JSON.parse(readFileSync(path.join(EXTENSION, 'manifest.json'), 'utf8'));
   await page.goto('about:blank');
-  await page.evaluate(({ local, sync, session, fetchRules, alarms, omitApis }) => {
+  await page.evaluate(({ local, sync, session, fetchRules, alarms, omitApis, manifest }) => {
     const localState: Record<string, unknown> = structuredClone(local);
     const syncState: Record<string, unknown> = structuredClone(sync);
     const sessionState: Record<string, unknown> = structuredClone(session);
@@ -96,6 +97,7 @@ export async function loadBackground(page: Page, options: HarnessOptions = {}) {
     const onTabRemoved = event();
     const onFocusChanged = event();
     const onIdleStateChanged = event();
+    const badgeState: Record<string, unknown> = { text: '' };
 
     Object.assign(window, {
       __extensionLocal: localState,
@@ -108,6 +110,7 @@ export async function loadBackground(page: Page, options: HarnessOptions = {}) {
         onFocusChanged, onIdleStateChanged,
       },
       __removedPermissions: [] as string[],
+      __extensionBadge: badgeState,
     });
 
     Object.assign(window, {
@@ -133,6 +136,11 @@ export async function loadBackground(page: Page, options: HarnessOptions = {}) {
           onInstalled,
           onStartup,
           async sendMessage() { return undefined; },
+          getManifest() { return manifest; },
+        },
+        action: {
+          async setBadgeText({ text }: { text: string }) { badgeState.text = text; },
+          async setBadgeBackgroundColor({ color }: { color: string }) { badgeState.color = color; },
         },
         alarms: {
           async get(name: string) { return alarmState[name]; },
@@ -177,6 +185,7 @@ export async function loadBackground(page: Page, options: HarnessOptions = {}) {
     fetchRules: options.fetchRules ?? [],
     alarms: options.alarms ?? {},
     omitApis: options.omitApis ?? [],
+    manifest,
   });
 
   await page.addScriptTag({
@@ -193,17 +202,15 @@ export async function loadExtensionPage(
 ) {
   const html = readFileSync(path.join(EXTENSION, relativeHtml), 'utf8');
   const script = readFileSync(path.join(EXTENSION, relativeScript), 'utf8');
-  const cssPath = path.join(path.dirname(relativeHtml),
-    html.match(/href="([^"]+\.css)"/)?.[1] ?? '');
-  const css = cssPath.endsWith('.css')
-    ? readFileSync(path.join(EXTENSION, cssPath), 'utf8')
-    : '';
+  // Every stylesheet the page links (the shared theme and its own), inlined.
+  const inlineCss = (href: string) =>
+    readFileSync(path.join(EXTENSION, path.dirname(relativeHtml), href), 'utf8');
 
   // Both setup and the actual script are present before DOMContentLoaded, as
   // they are in the extension itself. Escaping the closing tag keeps embedded
   // source from terminating the wrapper early.
   const document = html
-    .replace(/<link[^>]+href="[^"]+\.css"[^>]*>/, `<style>${css}</style>`)
+    .replace(/<link[^>]+href="([^"]+\.css)"[^>]*>/g, (_, href: string) => `<style>${inlineCss(href)}</style>`)
     .replace(/<script[^>]+src="[^"]+"[^>]*><\/script>/,
       `<script>${chromeSetup}<\/script><script>${script.replace(/<\/script>/gi, '<\\/script>')}<\/script>`);
 

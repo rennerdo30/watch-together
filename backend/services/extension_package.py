@@ -24,7 +24,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 MANIFEST_NAME = "manifest.json"
 BACKGROUND_SCRIPT = "background.js"
-PAGE_DIRECTORIES = ("popup", "options")
+PAGE_DIRECTORIES = ("popup", "options", "shared")
 PAGE_SUFFIXES = {".html", ".css", ".js"}
 ICON_DIRECTORY = "icons"
 ICON_SUFFIXES = {".png", ".svg"}

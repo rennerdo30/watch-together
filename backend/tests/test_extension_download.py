@@ -62,10 +62,23 @@ class TestPackager:
     def test_every_source_file_the_extension_needs_is_packaged(self):
         """A file added to popup/ or options/ but missed by the packager breaks the build silently."""
         files = {name for _, name in extension_package.package_files(EXTENSION, extension_package.BUILDS["chrome"])}
-        for directory in ("popup", "options"):
+        for directory in extension_package.PAGE_DIRECTORIES:
             for path in (EXTENSION / directory).iterdir():
                 if path.suffix in extension_package.PAGE_SUFFIXES:
                     assert path.relative_to(EXTENSION).as_posix() in files
+
+    def test_every_file_a_page_links_to_is_packaged(self):
+        """The popup and settings pages share ../shared/theme.css; an unpackaged
+        stylesheet loads as nothing, and the installed popup renders unstyled."""
+        import posixpath
+        import re
+        for build in extension_package.BUILDS.values():
+            files = {name for _, name in extension_package.package_files(EXTENSION, build)}
+            for page in ("popup/popup.html", "options/options.html"):
+                html = (EXTENSION / page).read_text(encoding="utf-8")
+                for ref in re.findall(r'(?:href|src)="([^"#:]+)"', html):
+                    target = posixpath.normpath(posixpath.join(posixpath.dirname(page), ref))
+                    assert target in files, f"{page} links {ref}, which the {build.key} build leaves out"
 
     def test_wrong_manifest_version_is_refused(self, tmp_path):
         (tmp_path / "manifest.json").write_text(json.dumps({"manifest_version": 2, "version": "1"}))

@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### The browser extension looks like the app (extension 1.4.0)
+
+- The popup and settings page now use the web app's slate surfaces from one
+  shared stylesheet (`extension/shared/theme.css`), follow the system's light
+  or dark theme, and keep the couch mark in the header. There is no colour
+  accent: actions are drawn in ink, and red is left for errors and reset.
+  Queueing is one room field with a send arrow inside it (Enter works too);
+  offering to connect another site is a secondary button once you are
+  already connected.
+- An installed extension now notices when the instance serves a newer build.
+  `/api/extension/status` names the version it serves; when it is newer, the
+  toolbar icon shows a NEW badge and the popup offers the download. An
+  unpacked extension cannot update itself, so this is the update path.
+- The settings footer read v1.1.0 while the extension was 1.3.0; it now
+  shows the manifest's version. The version is bumped to 1.4.0 so installed
+  copies pick up the new icons and look.
+
 ### Twitch streams wait out a late playlist instead of looping
 
 - When a Twitch playlist stopped advancing for longer than the 6 s cushion
