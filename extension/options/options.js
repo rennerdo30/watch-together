@@ -25,6 +25,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     const domainList = document.getElementById('domainList');
     const backendUrlInput = document.getElementById('backendUrl');
     const resetBtn = document.getElementById('resetBtn');
+    const extensionVersion = document.getElementById('extensionVersion');
+
+    // The manifest is the one place the version lives; a hard-coded label
+    // here went stale (it read v1.1.0 while the manifest said 1.3.0).
+    extensionVersion.textContent = `v${chrome.runtime.getManifest().version}`;
 
     // Load initial data
     await loadSettings();
@@ -61,7 +66,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             statusDot.classList.remove('connected');
             statusText.textContent = status?.connectionReason === 'unverifiable'
                 ? 'Cannot verify connection'
-                : 'Not Connected';
+                : 'Not connected';
             userEmail.textContent = '';
             connectionHelp.textContent = status?.connectionError ||
                 'Visit Watch Together while logged in, then connect it from the extension menu.';
@@ -124,7 +129,7 @@ document.addEventListener('DOMContentLoaded', async () => {
      */
     async function handleSyncNow() {
         syncNowBtn.disabled = true;
-        syncNowBtn.textContent = 'Syncing...';
+        syncNowBtn.textContent = 'Syncing…';
 
         try {
             const result = await chrome.runtime.sendMessage({ type: 'SYNC_NOW' });
@@ -137,7 +142,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             alert('Sync error: ' + err.message);
         } finally {
             syncNowBtn.disabled = false;
-            syncNowBtn.textContent = 'Sync Now';
+            syncNowBtn.textContent = 'Sync now';
         }
     }
 

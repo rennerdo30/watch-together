@@ -4,13 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Watch Together - Settings</title>
+    <link rel="stylesheet" href="../shared/theme.css">
     <link rel="stylesheet" href="options.css">
 </head>
 <body>
     <div class="container">
-        <header>
-            <div class="logo">
-                <svg width="32" height="32" viewBox="0 0 64 64" aria-hidden="true">
+        <header class="brand page-header">
+            <svg class="brand-mark" width="40" height="40" viewBox="0 0 64 64" aria-hidden="true">
                     <defs><linearGradient id="wtTile" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff7a1a"/><stop offset="1" stop-color="#ffa24c"/></linearGradient></defs>
                     <rect width="64" height="64" rx="16" fill="url(#wtTile)"/>
                     <g fill="none" stroke="#1c1207" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
@@ -19,21 +19,20 @@
                         <path d="M13 47V38a4 4 0 0 1 8 0v3h22v-3a4 4 0 0 1 8 0v9a4 4 0 0 1-4 4H17a4 4 0 0 1-4-4Z"/>
                     </g>
                 </svg>
-                <div>
-                    <h1>Watch Together</h1>
-                    <span>Cookie Sync Settings</span>
-                </div>
+            <div class="brand-text">
+                <h1 class="brand-name">Watch Together</h1>
+                <span class="brand-sub">Cookie sync settings</span>
             </div>
         </header>
 
-        <main>
+        <main class="stack">
             <!-- Connection Status -->
             <section class="card">
-                <h2>Connection Status</h2>
+                <h2>Connection</h2>
                 <div class="status-row">
                     <div class="status-indicator">
                         <div class="status-dot" id="statusDot"></div>
-                        <span id="statusText">Checking...</span>
+                        <span id="statusText">Checking…</span>
                     </div>
                     <span class="user-email" id="userEmail"></span>
                 </div>
@@ -44,54 +43,51 @@
 
             <!-- Sync Settings -->
             <section class="card">
-                <h2>Sync Settings</h2>
-                <div class="setting-row">
-                    <label class="toggle">
-                        <input type="checkbox" id="autoSyncToggle" checked>
-                        <span class="toggle-slider"></span>
-                    </label>
+                <h2>Sync</h2>
+                <label class="setting-row">
                     <div class="setting-info">
                         <span class="setting-label">Auto-sync cookies</span>
                         <span class="setting-desc">Automatically sync every 10 minutes</span>
                     </div>
-                </div>
+                    <input class="switch" type="checkbox" id="autoSyncToggle" checked>
+                </label>
                 <div class="setting-row">
-                    <div class="sync-info">
-                        <span class="label">Last sync:</span>
-                        <span class="value" id="lastSync">Never</span>
+                    <div class="setting-info">
+                        <span class="setting-label">Last sync</span>
+                        <span class="setting-desc" id="lastSync">Never</span>
                     </div>
-                    <button class="btn btn-secondary" id="syncNowBtn">Sync Now</button>
+                    <button class="btn btn-secondary" id="syncNowBtn">Sync now</button>
                 </div>
             </section>
 
             <!-- Cookie Domains -->
             <section class="card">
-                <h2>Cookie Domains</h2>
+                <h2>Cookie domains</h2>
                 <p class="help-text">
                     Add domains to sync cookies from. Common streaming sites are included by default.
                 </p>
                 <div class="domain-input-row">
-                    <input type="text" id="newDomain" placeholder="e.g., .example.com" />
+                    <input class="input" type="text" id="newDomain" placeholder="e.g. .example.com" autocomplete="off" spellcheck="false" />
                     <button class="btn btn-primary" id="addDomainBtn">Add</button>
                 </div>
-                <div class="domain-list" id="domainList"></div>
+                <div class="chips domain-list" id="domainList"></div>
             </section>
 
             <!-- Active instance -->
             <section class="card">
-                <h2>Active Instance</h2>
+                <h2>Active instance</h2>
                 <p class="help-text">
                     The verified account above is scoped to this Watch Together instance.
                 </p>
-                <input type="text" id="backendUrl" placeholder="Not connected" readonly />
+                <input class="input" type="text" id="backendUrl" placeholder="Not connected" readonly />
             </section>
 
             <!-- Danger Zone -->
-            <section class="card danger">
-                <h2>Danger Zone</h2>
+            <section class="card">
+                <h2>Reset</h2>
                 <div class="setting-row">
                     <div class="setting-info">
-                        <span class="setting-label">Reset Extension</span>
+                        <span class="setting-label">Reset extension</span>
                         <span class="setting-desc">Clear all settings and disconnect</span>
                     </div>
                     <button class="btn btn-danger" id="resetBtn">Reset</button>
@@ -100,7 +96,7 @@
         </main>
 
         <footer>
-            <p>Watch Together Cookie Sync v1.1.0</p>
+            <p>Watch Together Cookie Sync <span id="extensionVersion"></span></p>
         </footer>
     </div>
 

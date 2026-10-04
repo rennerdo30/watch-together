@@ -131,8 +131,24 @@ async def get_status(response: Response, authorization: str = Header(None)):
         "user_email": user_email,
         "last_sync_at": token["last_sync_at"] if token else None,
         "sync_count": token["sync_count"] if token else 0,
+        # The version this instance would hand out. An unpacked extension
+        # never updates itself, so the extension compares this with its own
+        # and offers the download when it is behind.
+        "extension_version": await _served_extension_version(),
         **user_cookies.status(user_email),
     }
+
+
+async def _served_extension_version() -> Optional[str]:
+    try:
+        return await asyncio.to_thread(
+            extension_package.extension_version,
+            Path(config.EXTENSION_SOURCE_DIR),
+            extension_package.BUILDS["chrome"],
+        )
+    except (OSError, ValueError) as exc:
+        logger.warning(f"Extension version unavailable: {exc}")
+        return None
 
 
 @router.delete("/token")

@@ -4,13 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Watch Together Cookie Sync</title>
+    <link rel="stylesheet" href="../shared/theme.css">
     <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <div class="logo">
-                <svg width="24" height="24" viewBox="0 0 64 64" aria-hidden="true">
+    <header class="topbar">
+        <div class="brand">
+            <svg class="brand-mark" width="28" height="28" viewBox="0 0 64 64" aria-hidden="true">
                     <defs><linearGradient id="wtTile" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff7a1a"/><stop offset="1" stop-color="#ffa24c"/></linearGradient></defs>
                     <rect width="64" height="64" rx="16" fill="url(#wtTile)"/>
                     <g fill="none" stroke="#1c1207" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
@@ -19,76 +19,88 @@
                         <path d="M13 47V38a4 4 0 0 1 8 0v3h22v-3a4 4 0 0 1 8 0v9a4 4 0 0 1-4 4H17a4 4 0 0 1-4-4Z"/>
                     </g>
                 </svg>
-                <span>Watch Together</span>
+            <div class="brand-text">
+                <span class="brand-name">Watch Together</span>
+                <span class="brand-sub">Cookie sync</span>
             </div>
-        </header>
+        </div>
+        <button class="btn btn-ghost icon-btn" id="optionsBtn" title="Settings" aria-label="Settings">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>
+            </svg>
+        </button>
+    </header>
 
-        <div class="status-card" id="statusCard">
+    <main class="stack">
+        <section class="card update" id="updateCard" hidden>
+            <div class="row">
+                <div class="update-text">
+                    <span class="update-title" id="updateTitle">Update available</span>
+                    <span class="update-hint">Unzip it over your extension folder, then press reload on the extensions page.</span>
+                </div>
+                <button class="btn btn-primary" id="updateBtn">Download</button>
+            </div>
+        </section>
+
+        <section class="card account" id="statusCard">
             <div class="status-indicator" id="statusIndicator">
                 <div class="status-dot" id="statusDot"></div>
-                <span id="statusText">Checking...</span>
+                <span id="statusText">Checking…</span>
             </div>
             <div class="user-email" id="userEmail"></div>
             <!-- Shown when the open tab looks like a Watch Together instance
                  that has not been granted access yet. A self-hosted instance
                  has its own domain, so permission is asked for per site. -->
-            <button class="btn btn-primary" id="connectBtn" hidden>
+            <button class="btn btn-primary btn-block" id="connectBtn" hidden>
                 Connect this site
             </button>
             <div class="send-status" id="connectStatus"></div>
-        </div>
+        </section>
 
-        <div class="sync-section">
-            <div class="sync-info">
-                <span class="label">Last Sync</span>
-                <span class="value" id="lastSync">Never</span>
-            </div>
-            <button class="btn btn-primary" id="syncBtn">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M23 4v6h-6"/>
-                    <path d="M1 20v-6h6"/>
-                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-                </svg>
-                Sync Now
-            </button>
-        </div>
-
-        <div class="send-section" id="sendSection">
-            <div class="send-header">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <line x1="22" y1="2" x2="11" y2="13"/>
-                    <polygon points="22,2 15,22 11,13 2,9"/>
-                </svg>
-                <span>Send to Watch Together</span>
-            </div>
+        <section class="card send-section" id="sendSection">
+            <label class="eyebrow" for="roomId">Queue this page in a room</label>
             <div class="room-input">
-                <input type="text" id="roomId" placeholder="Room ID (e.g., movie-night)" />
-                <button class="btn btn-send" id="sendBtn" title="Queue current page">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="12" y1="5" x2="12" y2="19"/>
-                        <line x1="5" y1="12" x2="19" y2="12"/>
+                <input class="input" type="text" id="roomId" placeholder="Room ID, e.g. movie-night" autocomplete="off" spellcheck="false" />
+                <button class="room-send" id="sendBtn" title="Queue current page" aria-label="Queue current page">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M5 12h14"/>
+                        <path d="m13 6 6 6-6 6"/>
                     </svg>
                 </button>
             </div>
             <div class="send-status" id="sendStatus"></div>
-        </div>
+        </section>
 
-        <div class="domains-section">
-            <div class="section-header">
-                <span>Synced Domains</span>
-                <span class="domain-count" id="domainCount">0</span>
+        <section class="card sync-section">
+            <div class="row">
+                <div class="sync-info">
+                    <span class="eyebrow">Last sync</span>
+                    <span class="value" id="lastSync">Never</span>
+                </div>
+                <button class="btn btn-secondary" id="syncBtn">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M23 4v6h-6"/>
+                        <path d="M1 20v-6h6"/>
+                        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                    </svg>
+                    Sync now
+                </button>
             </div>
-            <div class="domain-list" id="domainList"></div>
-        </div>
-
-        <footer>
-            <label class="toggle">
-                <input type="checkbox" id="autoSyncToggle" checked>
-                <span class="toggle-label">Auto-sync every 10 min</span>
+            <label class="row toggle-row">
+                <span class="toggle-label">Auto-sync every 10 minutes</span>
+                <input class="switch" type="checkbox" id="autoSyncToggle" checked>
             </label>
-            <button class="btn btn-link" id="optionsBtn">Settings</button>
-        </footer>
-    </div>
+        </section>
+
+        <section class="domains-section">
+            <div class="section-header">
+                <span class="eyebrow">Synced domains</span>
+                <span class="count" id="domainCount">0</span>
+            </div>
+            <div class="chips domain-list" id="domainList"></div>
+        </section>
+    </main>
 
     <script src="popup.js"></script>
 </body>
