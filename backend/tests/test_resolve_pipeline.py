@@ -675,9 +675,9 @@ class TestRoomMembersLendCookies:
         with TestClient(app) as c:
             yield c
 
-    def _hold(self, email, domain, value):
+    def _hold(self, email, domain, value, name="SID"):
         from tests.test_user_cookies import hold_cookies
-        hold_cookies(email, [(domain, "SID", value)])
+        hold_cookies(email, [(domain, name, value)])
 
     def _resolve(self, client, url, user=REQUESTER, room=ROOM):
         params = {"url": url, "user": user}
@@ -714,6 +714,70 @@ class TestRoomMembersLendCookies:
         assert self._resolve(app_client, "https://youtu.be/left-room").json()["resolved_by"] is None
         assert self._resolve(app_client, "https://youtu.be/no-room", room=None).json()["resolved_by"] is None
 
+    def test_a_lender_whose_tab_dropped_still_lends_for_a_while(self, app_client, extraction):
+        """The room is left open all day in a background tab, and Chrome
+        discards or freezes that tab: its socket closes while the member is
+        still there and their extension still syncing. Lending stopped at
+        that moment, so the next video anyone else loaded ran signed out and
+        YouTube refused it."""
+        import main as main_module
+        self._hold(self.LENDER, ".youtube.com", "lender-secret")
+
+        with app_client.websocket_connect(f"/ws/{self.ROOM}?user={self.LENDER}") as ws:
+            ws.receive_json()
+        assert self.LENDER not in [getattr(w, "user_email", None)
+                                   for w in main_module.manager.active_connections.get(self.ROOM, [])]
+
+        response = self._resolve(app_client, "https://youtu.be/TabDropped1")
+        assert response.json()["resolved_by"] == self.LENDER
+        assert "lender-secret" in extraction["contents"][0]
+
+    def test_lending_ends_once_the_grace_period_has_passed(self, app_client, extraction):
+        import main as main_module
+        from core.config import COOKIE_LEND_GRACE_SECONDS
+        self._hold(self.LENDER, ".youtube.com", "lender-secret")
+
+        with app_client.websocket_connect(f"/ws/{self.ROOM}?user={self.LENDER}") as ws:
+            ws.receive_json()
+        departed = main_module.manager._departed[self.ROOM]
+        departed[self.LENDER] -= COOKIE_LEND_GRACE_SECONDS + 1
+
+        assert self._resolve(app_client, "https://youtu.be/LongGone123").json()["resolved_by"] is None
+        assert extraction["contents"] == [None]
+        assert self.ROOM not in main_module.manager._departed
+
+    def test_members_still_connected_are_asked_before_those_who_left(self, app_client):
+        import main as main_module
+        manager = main_module.manager
+        with app_client.websocket_connect(f"/ws/{self.ROOM}?user=early@example.com") as ws:
+            ws.receive_json()
+        with app_client.websocket_connect(f"/ws/{self.ROOM}?user=late@example.com") as ws:
+            ws.receive_json()
+        with app_client.websocket_connect(f"/ws/{self.ROOM}?user=here@example.com") as ws:
+            ws.receive_json()
+            assert manager.cookie_lenders(self.ROOM) == [
+                "here@example.com", "late@example.com", "early@example.com"]
+            # Coming back makes a member connected again, not departed.
+            with app_client.websocket_connect(f"/ws/{self.ROOM}?user=early@example.com") as back:
+                back.receive_json()
+                assert manager.cookie_lenders(self.ROOM) == [
+                    "here@example.com", "early@example.com", "late@example.com"]
+
+    def test_a_signed_out_refusal_says_nobody_is_signed_in(self, app_client, monkeypatch):
+        """A member without the extension saw "Could not resolve a playable
+        stream URL" and retried; the reason was that nobody signed in was
+        lending to the room."""
+        import main as main_module
+
+        def refuse(url, opts):
+            assert "cookiefile" not in opts
+            raise RuntimeError("ERROR: [youtube] abc: Sign in to confirm you’re not a bot.")
+
+        monkeypatch.setattr(main_module, "_extract_with_options", refuse)
+        response = self._resolve(app_client, "https://youtu.be/b0tCheck123")
+        assert response.status_code == 403
+        assert response.json()["detail"] == main_module.SIGNED_OUT_REFUSAL
+
     def test_requesters_own_cookies_are_preferred(self, app_client, extraction):
         self._hold(self.LENDER, ".youtube.com", "lender-secret")
         self._hold(self.REQUESTER, ".youtube.com", "own-secret")
@@ -748,7 +812,7 @@ class TestRoomMembersLendCookies:
 
     def test_a_member_signed_in_elsewhere_does_not_lend(self, app_client, extraction):
         """Twitch cookies say nothing about YouTube."""
-        self._hold(self.LENDER, ".twitch.tv", "lender-twitch")
+        self._hold(self.LENDER, ".twitch.tv", "lender-twitch", name="auth-token")
 
         with app_client.websocket_connect(f"/ws/{self.ROOM}?user={self.LENDER}") as ws:
             ws.receive_json()

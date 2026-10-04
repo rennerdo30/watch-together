@@ -169,7 +169,9 @@ def reset_room_state():
     manager.room_states.clear()
     manager.active_connections.clear()
     manager._room_locks.clear()
+    manager._departed.clear()
     yield
     manager.room_states.clear()
     manager.active_connections.clear()
     manager._room_locks.clear()
+    manager._departed.clear()

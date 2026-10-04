@@ -13,7 +13,8 @@ Cookies are looked up per user and attached per request. Resolving a video
 is the one place a member's cookies are used on someone else's behalf:
 most members never install the extension, so the member pasting a link
 often has no cookies while somebody else in the room does. Lending is
-limited to members connected to that room, to the sites in
+limited to members signed in to the site who are connected to that room
+or left it within `COOKIE_LEND_GRACE_SECONDS`, to the sites in
 `COOKIE_SHARE_EXTRACTORS`, and to single-video pages — a feed or history
 URL fetched with a lender's session would publish that member's account
 to the room.
@@ -33,7 +34,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from core.config import (
     COOKIE_FILE_MODE, COOKIE_HOST_ALIASES, COOKIE_MAX_BYTES, COOKIE_MEMORY_TTL_SECONDS,
     COOKIE_SCRATCH_DIR, COOKIE_SCRATCH_PREFIX, COOKIE_SHARE_EXTRACTORS,
-    COOKIE_STORE_MAX_USERS, GUEST_IDENTITY, YOUTUBE_PLAYLIST_PARAMS,
+    COOKIE_STORE_MAX_USERS, GUEST_IDENTITY, SIGN_IN_COOKIES, YOUTUBE_PLAYLIST_PARAMS,
 )
 
 logger = logging.getLogger(__name__)
@@ -222,22 +223,18 @@ def _domain_matches(cookie_domain: str, host: str) -> bool:
     return host == cookie_domain
 
 
-def get_cookie_header(user_email: str, url: str) -> Optional[str]:
-    """Build the Cookie header a specific user should send to a URL.
-
-    Returns None when the user has no cookies for that host, so callers
-    can tell an authenticated fetch from an anonymous one.
-    """
+def _live_cookies(user_email: Optional[str], url: str) -> List[http.cookiejar.Cookie]:
+    """The cookies of this user a browser would send to `url` right now."""
     entry = _entry(user_email)
     if entry is None:
-        return None
+        return []
 
     parsed = urlparse(url)
     host = parsed.hostname or ""
     is_secure = parsed.scheme == "https"
     now = time.time()
 
-    pairs = []
+    live = []
     for cookie in entry.cookies:
         if not _domain_matches(cookie.domain, host):
             continue
@@ -247,8 +244,17 @@ def get_cookie_header(user_email: str, url: str) -> Optional[str]:
             continue
         if not parsed.path.startswith(cookie.path or "/"):
             continue
-        pairs.append(f"{cookie.name}={cookie.value}")
+        live.append(cookie)
+    return live
 
+
+def get_cookie_header(user_email: str, url: str) -> Optional[str]:
+    """Build the Cookie header a specific user should send to a URL.
+
+    Returns None when the user has no cookies for that host, so callers
+    can tell an authenticated fetch from an anonymous one.
+    """
+    pairs = [f"{cookie.name}={cookie.value}" for cookie in _live_cookies(user_email, url)]
     return "; ".join(pairs) if pairs else None
 
 
@@ -261,9 +267,31 @@ def _page_url(url: str) -> str:
     return urlunparse(parsed._replace(netloc=alias))
 
 
-def has_cookies_for(user_email: str, url: str) -> bool:
-    """Whether this user's cookies include any live one for the site serving `url`."""
-    return get_cookie_header(user_email, _page_url(url)) is not None
+def _sign_in_cookie_names(host: str) -> Optional[frozenset]:
+    host = host.lower()
+    for site, names in SIGN_IN_COOKIES.items():
+        if host == site or host.endswith("." + site):
+            return names
+    return None
+
+
+def is_signed_in(user_email: Optional[str], url: str) -> bool:
+    """Whether this user's cookies hold a live sign-in for the site serving `url`.
+
+    Any cookie is not enough: every visitor gets some (YouTube's
+    VISITOR_INFO1_LIVE, YSC and PREF), so a member whose browser is signed
+    out still syncs a jar for the site. Picked to resolve with it, they
+    would make the resolve run as a visitor — which YouTube refuses from a
+    datacenter address — while a member who really is signed in sat in the
+    same room. For a site `SIGN_IN_COOKIES` does not describe, any live
+    cookie counts.
+    """
+    page = _page_url(url)
+    cookies = _live_cookies(user_email, page)
+    names = _sign_in_cookie_names(urlparse(page).hostname or "")
+    if names is None:
+        return bool(cookies)
+    return any(cookie.name in names for cookie in cookies)
 
 
 # ----------------------------------------------------------------------------
@@ -305,14 +333,15 @@ def is_shareable(url: str) -> bool:
 def choose_cookie_source(url: str, requester: Optional[str], members: Iterable[str] = ()) -> Optional[str]:
     """Pick the member whose cookies should resolve `url`, or None for anonymous.
 
-    The requester's own cookies win whenever they cover the site. Otherwise,
-    for a shareable single-video page, the first of `members` (the room's
-    connected identities, in join order) who is signed in to the site lends
-    theirs. Guests and anyone not in the room are never a source.
+    The requester's own cookies win whenever they are signed in to the
+    site. Otherwise, for a shareable single-video page, the first of
+    `members` (see `ConnectionManager.cookie_lenders`) who is signed in to
+    the site lends theirs. Guests and anyone not offered as a member are
+    never a source.
     """
     if requester == GUEST_IDENTITY:
         requester = None
-    if requester and has_cookies_for(requester, url):
+    if requester and is_signed_in(requester, url):
         return requester
 
     if not is_shareable(url):
@@ -320,7 +349,7 @@ def choose_cookie_source(url: str, requester: Optional[str], members: Iterable[s
     for email in members:
         if not email or email == GUEST_IDENTITY or email == requester:
             continue
-        if has_cookies_for(email, url):
+        if is_signed_in(email, url):
             logger.info(f"Resolving {url} for {requester or 'anonymous'} with cookies lent by {email}")
             return email
     return None

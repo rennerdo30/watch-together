@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Cookie sharing keeps working for members without the extension
+
+- A member's room tab left in the background loses its connection whenever
+  Chrome discards or freezes it, and lending stopped at that moment: the
+  next video someone without the extension loaded ran signed out, and
+  YouTube refused it. A member now keeps lending to a room for 30 minutes
+  after their last connection to it closes (`COOKIE_LEND_GRACE_SECONDS`),
+  after everyone still connected has been asked.
+- Only a member actually signed in to the site lends. Every browser holds
+  visitor cookies for YouTube, so a signed-out member with the extension
+  could be picked ahead of a signed-in one, and the resolve ran as a
+  visitor. YouTube and Twitch are now checked for their session cookies
+  (`SIGN_IN_COOKIES`); the same check decides whether a requester's own
+  cookies are used.
+- When a site refuses a signed-out resolve, the member is told that nobody
+  in the room is signed in through the extension right now, instead of
+  "Could not resolve a playable stream URL".
+
 ### The browser extension looks like the app (extension 1.4.0)
 
 - The popup and settings page now use the web app's slate surfaces from one

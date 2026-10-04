@@ -342,7 +342,7 @@ type ServerMessage =
 1. **SSRF Protection**: `validate_proxy_url()` blocks access to private/reserved/loopback IPs via `ipaddress` module + DNS resolution
 2. **CORS**: Configurable via `ALLOWED_ORIGINS` env var. Credentials disabled when wildcard origin is used
 3. **Authentication**: Cloudflare Zero Trust header (`cf-access-authenticated-user-email`) in production; `?user=` query param only when `DEVELOPMENT_MODE=true`
-4. **Cookies**: Never persisted. Delivered only by the extension (1MB limit, strict Netscape validation), held in process memory until 30 minutes after the last sync or until the member disconnects the extension, written for yt-dlp to a private RAM-backed scratch file for one extraction. Lent to a room only while the owner is connected, only for single-video pages of YouTube, Twitch and Kick
+4. **Cookies**: Never persisted. Delivered only by the extension (1MB limit, strict Netscape validation), held in process memory until 30 minutes after the last sync or until the member disconnects the extension, written for yt-dlp to a private RAM-backed scratch file for one extraction. Lent to a room only while the owner is connected or for 30 minutes after they leave it, only by a member actually signed in to the site, only for single-video pages of YouTube, Twitch and Kick
 5. **Room Access**: All users can join any room (authentication handled by Cloudflare)
 6. **Connection Limits**: `MAX_CONNECTIONS_PER_ROOM` (50) and `MAX_CONNECTIONS_PER_USER` (10) prevent resource exhaustion
 7. **Room ID Sanitization**: IDs restricted to alphanumeric + hyphen/underscore via regex

@@ -15,7 +15,7 @@ import yt_dlp
 
 from core.config import YTDLP_CACHE_DIR
 from services.resolver import build_ydl_opts
-from services.user_cookies import cookie_file, has_cookies_for
+from services.user_cookies import cookie_file, is_signed_in
 from services.video_identity import queue_video_identity, youtube_video_id
 
 
@@ -83,7 +83,7 @@ async def discover(url: str, requester: str, user_agent: Optional[str] = None) -
         "cache_dir": YTDLP_CACHE_DIR,
     })
     os.makedirs(YTDLP_CACHE_DIR, exist_ok=True)
-    owner = requester if has_cookies_for(requester, canonical) else None
+    owner = requester if is_signed_in(requester, canonical) else None
     async with cookie_file(owner) as cookie_path:
         if cookie_path:
             options["cookiefile"] = cookie_path
