@@ -62,7 +62,7 @@ from services.upstream import (
     UnsafeUpstreamError, request_kwargs,
     open_upstream_stream, resolve_upstream,
 )
-from services.user_cookies import choose_cookie_source, cookie_file, get_cookie_header
+from services.user_cookies import choose_cookie_source, cookie_file, get_cookie_header, is_shareable
 from services.manifest import build_manifest_for_formats, manifest_formats, probe_formats, ManifestError, proxied_url
 from services import prewarm
 from services.metrics import (
@@ -649,6 +649,9 @@ async def resolve_stream(
 
 _resolve_tasks: dict[tuple, asyncio.Task] = {}
 
+SIGNED_OUT_REFUSAL = ("The site wants a signed-in account for this, and nobody in this room is signed in "
+                      "to it through the Watch Together extension right now.")
+
 
 async def resolve_video(request: Request, url: str, user_agent: str = None, *,
                         refresh: bool = False, room_id: str = "") -> dict:
@@ -675,7 +678,7 @@ async def resolve_url(url: str, user_agent: str = None, *, refresh: bool = False
     still; a refresh never joins a plain resolve, which may return exactly
     the stale entry it is meant to replace.
     """
-    cookie_owner = choose_cookie_source(url, user_email, manager.member_emails(room_id))
+    cookie_owner = choose_cookie_source(url, user_email, manager.cookie_lenders(room_id))
     task = None if refresh else _resolve_tasks.get((url, cookie_owner, True))
     key = (url, cookie_owner, refresh)
     task = task or _resolve_tasks.get(key)
@@ -805,10 +808,14 @@ async def _resolve_video(user_email: Optional[str], url: str, user_agent: str = 
     startup_timing.record_resolve(url, (time.monotonic() - started) * 1000,
                                   startup_timing.RESOLVE_FAILED, attempts=len(attempts))
     if last_error and "Sign in to confirm your age" in last_error:
-        raise HTTPException(
-            status_code=403,
-            detail="Age-restricted video. Please upload valid YouTube cookies.",
-        )
+        raise HTTPException(status_code=403, detail=(
+            "Age-restricted video, and the signed-in account could not confirm the age." if has_cookies
+            else "Age-restricted video. " + SIGNED_OUT_REFUSAL))
+    if not has_cookies and last_error and "sign in" in last_error.lower() and is_shareable(url):
+        # Most often nobody in the room is signed in through the extension
+        # right now. Saying so is the difference between a member retrying
+        # the same link and asking someone to open the room.
+        raise HTTPException(status_code=403, detail=SIGNED_OUT_REFUSAL)
 
     raise HTTPException(status_code=400, detail="Could not resolve a playable stream URL.")
 

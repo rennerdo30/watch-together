@@ -405,7 +405,9 @@ signed-in session.
 4. Retry the video
 
 Any member of the room who has the extension is enough for YouTube, Twitch
-and Kick videos: their session is lent to the room while they are in it.
+and Kick videos: their session is lent to the room while they are in it, and
+for 30 minutes after their room tab drops. They have to be signed in to the
+site in that browser; a signed-out browser's cookies are not lent.
 
 ### WebSocket Connection Failed
 
