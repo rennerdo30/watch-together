@@ -90,6 +90,16 @@ class TestExtensionSync:
         assert status["has_cookies"] is True
         assert status["sync_count"] == 1 and status["cookie_count"] == 1
 
+    def test_status_names_the_extension_version_this_instance_serves(self, client):
+        """An unpacked extension never updates itself; it compares this with its
+        own version to offer the newer download."""
+        import json
+        from pathlib import Path
+        manifest = Path(__file__).resolve().parents[2] / "extension" / "manifest.json"
+        served = json.loads(manifest.read_text(encoding="utf-8"))["version"]
+        status = client.get("/api/extension/status", headers=bearer(client)).json()
+        assert status["extension_version"] == served
+
     def test_rejects_malformed_line_after_the_fifth(self, client):
         """Validation must cover every data line, not just the first few."""
         content = (

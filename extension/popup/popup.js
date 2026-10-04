@@ -19,6 +19,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     const sendSection = document.getElementById('sendSection');
     const connectBtn = document.getElementById('connectBtn');
     const connectStatus = document.getElementById('connectStatus');
+    const updateCard = document.getElementById('updateCard');
+    const updateTitle = document.getElementById('updateTitle');
+    const updateBtn = document.getElementById('updateBtn');
 
     let currentStream = null;
     let currentTabUrl = null;
@@ -59,6 +62,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     autoSyncToggle.addEventListener('change', handleAutoSyncToggle);
     optionsBtn.addEventListener('click', () => chrome.runtime.openOptionsPage());
     sendBtn.addEventListener('click', handleSendToRoom);
+    roomIdInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !sendBtn.disabled) handleSendToRoom();
+    });
     roomIdInput.addEventListener('input', () => {
         const roomId = roomIdInput.value.trim();
         // Only save valid room IDs (alphanumeric, hyphens, underscores)
@@ -114,6 +120,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         connectBtn.hidden = false;
+        // Already connected to another instance: offering this site is a
+        // side option, not the popup's main action.
+        connectBtn.className = `btn btn-block ${status?.connected ? 'btn-secondary' : 'btn-primary'}`;
         connectBtn.textContent = alreadyGranted ? `Sync ${host}` : `Connect ${host}`;
         connectBtn.onclick = async () => {
             connectBtn.disabled = true;
@@ -167,7 +176,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 statusDot.classList.remove('connected');
                 statusText.textContent = status.connectionReason === 'unverifiable'
                     ? 'Cannot verify connection'
-                    : 'Not Connected';
+                    : 'Not connected';
                 userEmail.textContent = status.connectionError ||
                     'Open your Watch Together site, then connect it';
             }
@@ -196,6 +205,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                 span.className = 'domain-tag';
                 span.textContent = domain.replace(/^\./, '');
                 domainList.appendChild(span);
+            }
+
+            // A newer build on the instance: an unpacked extension cannot
+            // update itself, so offer the download.
+            updateCard.hidden = !status.update;
+            if (status.update) {
+                updateTitle.textContent = `Version ${status.update.version} is available`;
+                updateBtn.onclick = () => chrome.tabs.create({ url: status.update.downloadUrl });
             }
 
             // Auto-sync toggle
@@ -244,7 +261,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 <path d="M1 20v-6h6"/>
                 <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
             </svg>
-            Syncing...
+            Syncing…
         `;
 
         try {

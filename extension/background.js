@@ -173,12 +173,57 @@ async function fetchTokenStatus(connection) {
     if (!body?.valid || !body.user_email) {
         throw new Error('Instance did not verify the token owner');
     }
+    // Only an offer: a failure here must never fail the status check.
+    await noteServedVersion(connection.origin, body.extension_version)
+        .catch(err => console.warn('[WT Sync] Update check failed:', err));
     return {
         userEmail: body.user_email,
         lastSyncAt: body.last_sync_at || null,
         syncCount: body.sync_count || 0,
         hasCookies: Boolean(body.has_cookies),
     };
+}
+
+/** Local-only record of a newer build the connected instance serves. */
+const UPDATE_KEY = 'availableUpdate';
+
+/** True when dotted version `a` is newer than `b` ("1.10.0" > "1.9.2"). */
+function isNewerVersion(a, b) {
+    const left = String(a).split('.').map(n => parseInt(n, 10) || 0);
+    const right = String(b).split('.').map(n => parseInt(n, 10) || 0);
+    for (let i = 0; i < Math.max(left.length, right.length); i++) {
+        const diff = (left[i] || 0) - (right[i] || 0);
+        if (diff !== 0) return diff > 0;
+    }
+    return false;
+}
+
+/**
+ * Remember whether the instance serves a newer build than this one.
+ *
+ * The extension is installed unpacked from the instance, and an unpacked
+ * extension never updates itself, so members kept running old builds for
+ * weeks without knowing. Every status check compares the version the
+ * instance serves with our own; when ours is behind, the toolbar icon gets
+ * a badge and the popup offers the download.
+ */
+async function noteServedVersion(origin, servedVersion) {
+    const current = chrome.runtime.getManifest().version;
+    const action = chrome.action || chrome.browserAction;
+    if (typeof servedVersion === 'string' && isNewerVersion(servedVersion, current)) {
+        const browser = chrome.runtime.getManifest().manifest_version === 2 ? 'firefox' : 'chrome';
+        await chrome.storage.local.set({
+            [UPDATE_KEY]: {
+                version: servedVersion,
+                downloadUrl: `${origin}/api/extension/download/${browser}`,
+            },
+        });
+        await action.setBadgeBackgroundColor({ color: '#262a31' });
+        await action.setBadgeText({ text: 'NEW' });
+    } else {
+        await chrome.storage.local.remove(UPDATE_KEY);
+        await action.setBadgeText({ text: '' });
+    }
 }
 
 /** Fetch the identity of the browser's current Access session. */
@@ -600,9 +645,9 @@ async function updateSettings(settings) {
 
 /** Get current, backend-verified extension status. */
 async function getStatus() {
-    const [verified, local, sync] = await Promise.all([
-        verifyActiveConnection(),
-        chrome.storage.local.get(['lastSync', 'lastSyncStatus']),
+    const verified = await verifyActiveConnection();
+    const [local, sync] = await Promise.all([
+        chrome.storage.local.get(['lastSync', 'lastSyncStatus', UPDATE_KEY]),
         chrome.storage.sync.get(['domains', 'autoSync']),
     ]);
     return {
@@ -615,6 +660,7 @@ async function getStatus() {
         lastSyncStatus: local.lastSyncStatus || null,
         domains: sync.domains || DEFAULT_DOMAINS,
         autoSync: sync.autoSync !== false,
+        update: local[UPDATE_KEY] || null,
     };
 }
 

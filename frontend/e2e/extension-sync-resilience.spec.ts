@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { test, expect } from '@playwright/test';
 
 import { loadBackground } from './extension-harness';
@@ -135,4 +138,41 @@ test('a browser that lacks an optional API still runs the worker', async ({ page
     onTabUpdated.listeners.forEach((listener) => listener(2, { status: 'complete' }, { url: 'https://watch.example/room/abc' }));
   });
   await expect.poll(() => lastSyncStatus(page)).toBe(RAN_WITHOUT_COOKIES);
+});
+
+test('a newer build on the instance badges the icon and offers the download', async ({ page }) => {
+  // An unpacked extension never updates itself, so members ran old builds
+  // without knowing. The status check is where the extension learns better.
+  await loadBackground(page, {
+    local: { activeConnection: CONNECTION },
+    fetchRules: [
+      { includes: '/api/extension/status', body: { valid: true, user_email: 'alice@example.com', extension_version: '99.0.0' } },
+      { includes: '/api/me', body: { authenticated: true, email: 'alice@example.com' } },
+    ],
+  });
+  await page.evaluate(() => {
+    const { onTabUpdated } = (window as unknown as Harness).__extensionEvents;
+    onTabUpdated.listeners.forEach((listener) => listener(2, { status: 'complete' }, { url: 'https://watch.example/room/abc' }));
+  });
+  await expect.poll(() => page.evaluate(() => (window as unknown as Harness).__extensionLocal.availableUpdate))
+    .toEqual({ version: '99.0.0', downloadUrl: 'https://watch.example/api/extension/download/chrome' });
+  expect(await page.evaluate(() => (window as unknown as { __extensionBadge: { text: string } }).__extensionBadge.text))
+    .toBe('NEW');
+});
+
+test('the same build on the instance offers nothing', async ({ page }) => {
+  const version = JSON.parse(readFileSync(path.join(__dirname, '../../extension/manifest.json'), 'utf8')).version;
+  await loadBackground(page, {
+    local: { activeConnection: CONNECTION, availableUpdate: { version: '0.0.1', downloadUrl: 'x' } },
+    fetchRules: [
+      { includes: '/api/extension/status', body: { valid: true, user_email: 'alice@example.com', extension_version: version } },
+      { includes: '/api/me', body: { authenticated: true, email: 'alice@example.com' } },
+    ],
+  });
+  await page.evaluate(() => {
+    const { onTabUpdated } = (window as unknown as Harness).__extensionEvents;
+    onTabUpdated.listeners.forEach((listener) => listener(2, { status: 'complete' }, { url: 'https://watch.example/room/abc' }));
+  });
+  await expect.poll(() => lastSyncStatus(page)).toBe(RAN_WITHOUT_COOKIES);
+  expect(await page.evaluate(() => (window as unknown as Harness).__extensionLocal.availableUpdate)).toBeUndefined();
 });
