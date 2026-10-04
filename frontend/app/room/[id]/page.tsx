@@ -1350,7 +1350,8 @@ export default function RoomPage() {
                     <span className="max-w-3xl">
                         Your browser unloaded this tab to save memory, so videos the room played while it was away did not reach you.
                         To keep the room live in the background, open <span className="font-mono text-white">chrome://settings/performance</span> and
-                        add this site under <span className="text-white">Always keep these sites active</span>.
+                        add this site under <span className="text-white">Always keep these sites active</span>, or
+                        connect the <a href={extensionDownloadUrl('chrome')} className="underline underline-offset-2 text-white hover:text-[color:var(--accent-primary)]">browser extension</a>, which keeps room tabs loaded for you.
                     </span>
                     <button
                         type="button"

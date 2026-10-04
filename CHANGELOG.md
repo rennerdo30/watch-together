@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Room tabs stay loaded (extension 1.5.0)
+
+- With the extension connected, Chrome's Memory Saver no longer discards an
+  open room tab. A discarded tab runs no code, so a video someone queued
+  never reached that member. The extension marks room pages of the
+  connected instance `autoDiscardable: false` and undoes that when the tab
+  leaves the room. A page cannot do this for itself.
+- The room's "this tab was unloaded" warning mentions the extension as the
+  other way to keep the tab loaded.
 ### Cookie sharing keeps working for members without the extension
 
 - A member's room tab left in the background loses its connection whenever

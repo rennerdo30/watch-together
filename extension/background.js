@@ -341,6 +341,7 @@ async function connectInstanceNow(origin, syncAfterConnect) {
     await chrome.storage.local.set({
         [ACTIVE_CONNECTION_KEY]: acquired.connection,
     });
+    keepOpenRoomsLoaded().catch(err => console.warn('[WT Sync] Could not protect open rooms:', err));
 
     const syncResult = syncAfterConnect
         ? await syncCookies({ allowReconnect: false })
@@ -884,6 +885,84 @@ listenIfAvailable('windows', chrome.windows, 'onFocusChanged', (windowId) => {
 listenIfAvailable('idle', chrome.idle, 'onStateChanged', (state) => {
     if (state !== 'active') return;
     syncIfStale('user active again').catch(err => console.warn('[WT Sync] Catch-up sync failed:', err));
+});
+
+// ============================================================================
+// Keeping room tabs loaded
+// ============================================================================
+
+/**
+ * Tabs this extension exempted from discarding, in session storage so a
+ * restarted worker still knows which exemptions are its own to undo.
+ */
+const PROTECTED_TABS_KEY = 'protectedRoomTabs';
+
+/** A room page of the connected instance. */
+function isRoomUrl(url, origin) {
+    return typeof url === 'string' && url.startsWith(`${origin}/room/`);
+}
+
+/**
+ * Exempt a room tab from discarding, or undo our exemption once it is not one.
+ *
+ * The room is left open all day in a background tab, and Chrome's Memory
+ * Saver discards background tabs it thinks are idle. A discarded tab runs
+ * no code: the video someone queued never reaches that member, and the page
+ * can only tell them so after the fact. A page cannot opt out of this; an
+ * extension with the tabs permission can (`autoDiscardable`). Only room
+ * pages are kept, and only while they are room pages.
+ */
+async function protectTab(tabId, url, origin) {
+    const stored = await chrome.storage.session.get([PROTECTED_TABS_KEY]);
+    const protectedTabs = stored[PROTECTED_TABS_KEY] || {};
+    const isRoom = isRoomUrl(url, origin);
+    if (isRoom === Boolean(protectedTabs[tabId])) return;
+    try {
+        await chrome.tabs.update(tabId, { autoDiscardable: !isRoom });
+    } catch (err) {
+        // Firefox before 117 has no such property; the tab is simply not kept.
+        console.warn('[WT Sync] Could not change discarding for tab', tabId, err?.message || err);
+        return;
+    }
+    if (isRoom) protectedTabs[tabId] = true;
+    else delete protectedTabs[tabId];
+    await chrome.storage.session.set({ [PROTECTED_TABS_KEY]: protectedTabs });
+}
+
+/** Protect every room of the connected instance that is already open. */
+async function keepOpenRoomsLoaded() {
+    const connection = await getActiveConnection();
+    if (!connection) return;
+    const tabs = await chrome.tabs.query({});
+    for (const tab of tabs) {
+        if (typeof tab.id === 'number' && isRoomUrl(tab.url, connection.origin)) {
+            await protectTab(tab.id, tab.url, connection.origin);
+        }
+    }
+}
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    const url = changeInfo.url || (changeInfo.status === 'complete' ? tab?.url : null);
+    if (!url) return;
+    getActiveConnection()
+        .then(connection => connection && protectTab(tabId, url, connection.origin))
+        .catch(err => console.warn('[WT Sync] Could not protect room tab:', err));
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+    chrome.storage.session.get([PROTECTED_TABS_KEY]).then((stored) => {
+        const protectedTabs = stored[PROTECTED_TABS_KEY] || {};
+        if (!protectedTabs[tabId]) return;
+        delete protectedTabs[tabId];
+        return chrome.storage.session.set({ [PROTECTED_TABS_KEY]: protectedTabs });
+    }).catch(err => console.warn('[WT Sync] Could not forget closed room tab:', err));
+});
+
+chrome.runtime.onStartup.addListener(() => {
+    keepOpenRoomsLoaded().catch(err => console.warn('[WT Sync] Could not protect open rooms:', err));
+});
+chrome.runtime.onInstalled.addListener(() => {
+    keepOpenRoomsLoaded().catch(err => console.warn('[WT Sync] Could not protect open rooms:', err));
 });
 
 // ============================================================================

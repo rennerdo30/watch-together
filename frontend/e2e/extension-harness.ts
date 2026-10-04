@@ -24,6 +24,8 @@ type HarnessOptions = {
   alarms?: Record<string, { periodInMinutes: number; scheduledTime: number }>;
   /** chrome.* namespaces to leave out, as a browser without the permission would. */
   omitApis?: string[];
+  /** Tabs open when the worker starts, as `chrome.tabs.query` reports them. */
+  tabs?: Array<{ id: number; url: string }>;
 };
 
 /**
@@ -37,7 +39,7 @@ type HarnessOptions = {
 export async function loadBackground(page: Page, options: HarnessOptions = {}) {
   const manifest = JSON.parse(readFileSync(path.join(EXTENSION, 'manifest.json'), 'utf8'));
   await page.goto('about:blank');
-  await page.evaluate(({ local, sync, session, fetchRules, alarms, omitApis, manifest }) => {
+  await page.evaluate(({ local, sync, session, fetchRules, alarms, omitApis, tabs, manifest }) => {
     const localState: Record<string, unknown> = structuredClone(local);
     const syncState: Record<string, unknown> = structuredClone(sync);
     const sessionState: Record<string, unknown> = structuredClone(session);
@@ -98,6 +100,8 @@ export async function loadBackground(page: Page, options: HarnessOptions = {}) {
     const onFocusChanged = event();
     const onIdleStateChanged = event();
     const badgeState: Record<string, unknown> = { text: '' };
+    const openTabs = structuredClone(tabs);
+    const tabUpdates: Array<{ tabId: number; props: Record<string, unknown> }> = [];
 
     Object.assign(window, {
       __extensionLocal: localState,
@@ -111,6 +115,7 @@ export async function loadBackground(page: Page, options: HarnessOptions = {}) {
       },
       __removedPermissions: [] as string[],
       __extensionBadge: badgeState,
+      __extensionTabUpdates: tabUpdates,
     });
 
     Object.assign(window, {
@@ -152,7 +157,11 @@ export async function loadBackground(page: Page, options: HarnessOptions = {}) {
         },
         cookies: { async getAll() { return []; } },
         tabs: {
-          async query() { return []; },
+          async query() { return structuredClone(openTabs); },
+          async update(tabId: number, props: Record<string, unknown>) {
+            tabUpdates.push({ tabId, props });
+            return { id: tabId, ...props };
+          },
           onUpdated: onTabUpdated,
           onRemoved: onTabRemoved,
         },
@@ -185,6 +194,7 @@ export async function loadBackground(page: Page, options: HarnessOptions = {}) {
     fetchRules: options.fetchRules ?? [],
     alarms: options.alarms ?? {},
     omitApis: options.omitApis ?? [],
+    tabs: options.tabs ?? [],
     manifest,
   });
 
