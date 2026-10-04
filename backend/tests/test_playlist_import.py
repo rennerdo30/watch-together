@@ -84,7 +84,7 @@ async def test_discovery_uses_requester_cookies_and_caps_flat_extraction(monkeyp
         seen["options"] = options
         return _raw(VIDEO_ID, OTHER_ID)
 
-    monkeypatch.setattr(playlists, "has_cookies_for", lambda user, url: user == "owner@example.com" and url == PLAYLIST)
+    monkeypatch.setattr(playlists, "is_signed_in", lambda user, url: user == "owner@example.com" and url == PLAYLIST)
     monkeypatch.setattr(playlists, "cookie_file", cookies)
     monkeypatch.setattr(playlists, "_extract_flat", extract)
 
@@ -100,7 +100,7 @@ async def test_discovery_uses_requester_cookies_and_caps_flat_extraction(monkeyp
 
 
 async def test_discovery_uses_flat_entry_thumbnails_and_marks_private_rows(monkeypatch):
-    monkeypatch.setattr(playlists, "has_cookies_for", lambda user, url: False)
+    monkeypatch.setattr(playlists, "is_signed_in", lambda user, url: False)
     monkeypatch.setattr(playlists, "_extract_flat", lambda url, options: {
         "_type": "playlist", "title": "List", "entries": [
             {"id": VIDEO_ID, "title": "First", "duration": 42,
@@ -123,7 +123,7 @@ async def test_discovery_never_borrows_another_members_cookies(monkeypatch):
         seen["owner"] = owner
         yield None
 
-    monkeypatch.setattr(playlists, "has_cookies_for", lambda user, url: False)
+    monkeypatch.setattr(playlists, "is_signed_in", lambda user, url: False)
     monkeypatch.setattr(playlists, "cookie_file", cookies)
     monkeypatch.setattr(playlists, "_extract_flat", lambda url, options: _raw(VIDEO_ID))
     await playlists.discover(PLAYLIST, "member@example.com")
@@ -131,7 +131,7 @@ async def test_discovery_never_borrows_another_members_cookies(monkeypatch):
 
 
 async def test_more_than_150_entries_fails_without_partial_preview(monkeypatch):
-    monkeypatch.setattr(playlists, "has_cookies_for", lambda user, url: False)
+    monkeypatch.setattr(playlists, "is_signed_in", lambda user, url: False)
     monkeypatch.setattr(playlists, "_extract_flat", lambda url, options: _raw(*([VIDEO_ID] * 151)))
     with pytest.raises(playlists.PlaylistError) as exc:
         await playlists.discover(PLAYLIST, "owner@example.com")
@@ -139,7 +139,7 @@ async def test_more_than_150_entries_fails_without_partial_preview(monkeypatch):
 
 
 async def test_empty_playlist_has_a_clear_error(monkeypatch):
-    monkeypatch.setattr(playlists, "has_cookies_for", lambda user, url: False)
+    monkeypatch.setattr(playlists, "is_signed_in", lambda user, url: False)
     monkeypatch.setattr(playlists, "_extract_flat", lambda url, options: _raw())
     with pytest.raises(playlists.PlaylistError, match="contains no videos"):
         await playlists.discover(PLAYLIST, "owner@example.com")

@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 from fastapi import WebSocket
 from core.config import (
-    GUEST_IDENTITY, BROWSER_BUSY_OTHER_ROOM, BROWSER_BUSY_LIVE_SHARE,
+    GUEST_IDENTITY, BROWSER_BUSY_OTHER_ROOM, BROWSER_BUSY_LIVE_SHARE, COOKIE_LEND_GRACE_SECONDS,
 )
 from services.database import save_room, get_all_rooms, delete_room
 from services.sponsorblock import SETTINGS_KEY as SPONSORBLOCK_KEY, normalize_settings
@@ -76,19 +76,41 @@ class ConnectionManager:
         # container this process is talking to, and a restart leaves nothing
         # for a remembered session to point at.
         self.browser_sessions: Dict[str, dict] = {}
+        # room_id -> {identity: monotonic time their last connection to it closed}.
+        # Volatile on purpose, like the cookies it is consulted for.
+        self._departed: Dict[str, Dict[str, float]] = {}
 
-    def member_emails(self, room_id: str) -> List[str]:
-        """Identities connected to a room right now, in join order, without duplicates or guests.
+    def cookie_lenders(self, room_id: str) -> List[str]:
+        """Who a resolve for this room may borrow cookies from, in the order they are asked.
 
-        These are the members whose cookies a resolve for this room may run
-        with; someone who has left is not offered.
+        Members connected right now come first, in join order. After them
+        comes anyone whose last connection to the room closed less than
+        COOKIE_LEND_GRACE_SECONDS ago, most recent first: a room left open
+        in a background tab loses its socket whenever Chrome discards or
+        freezes the tab, while the member is still there and their
+        extension still syncing. Guests are never offered.
         """
-        seen: List[str] = []
+        lenders: List[str] = []
         for ws in self.active_connections.get(room_id, []):
             email = getattr(ws, "user_email", None)
-            if email and email != GUEST_IDENTITY and email not in seen:
-                seen.append(email)
-        return seen
+            if email and email != GUEST_IDENTITY and email not in lenders:
+                lenders.append(email)
+
+        self._prune_departed()
+        departed = self._departed.get(room_id, {})
+        for email in sorted(departed, key=departed.get, reverse=True):
+            if email not in lenders:
+                lenders.append(email)
+        return lenders
+
+    def _prune_departed(self) -> None:
+        """Forget departures older than the lending grace period."""
+        cutoff = time.monotonic() - COOKIE_LEND_GRACE_SECONDS
+        for room_id, departed in list(self._departed.items()):
+            for email in [email for email, left_at in departed.items() if left_at < cutoff]:
+                del departed[email]
+            if not departed:
+                del self._departed[room_id]
 
     @staticmethod
     def record_playback_quality(websocket: WebSocket, report: dict,
@@ -519,6 +541,7 @@ class ConnectionManager:
             # Append connection inside lock to prevent race condition
             self.active_connections[room_id].append(websocket)
             setattr(websocket, "user_email", user_email)
+            self._departed.get(room_id, {}).pop(user_email, None)
             # A browser, not a person: the same member in two tabs is two
             # connections, and the share relay authorises a media socket
             # against exactly one of them.
@@ -574,6 +597,8 @@ class ConnectionManager:
             leaver = getattr(websocket, "user_email", GUEST_IDENTITY)
             if leaver not in active_emails:
                 share_relay.drop_viewers_of(room_id, leaver)
+                if leaver != GUEST_IDENTITY:
+                    self._departed.setdefault(room_id, {})[leaver] = time.monotonic()
 
             if room_id in self.room_states:
                 self.room_states[room_id]["members"] = [{"email": email} for email in sorted(list(set(active_emails)))]
@@ -596,6 +621,7 @@ class ConnectionManager:
         """Remove room states that have been empty for longer than TTL (default 5 min).
         Permanent rooms are never cleaned up."""
         now = time.time()
+        self._prune_departed()
         stale_rooms = []
         for rid, state in list(self.room_states.items()):
             # Skip permanent rooms

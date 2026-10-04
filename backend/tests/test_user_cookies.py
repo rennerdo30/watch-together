@@ -23,7 +23,7 @@ from core.config import COOKIE_MEMORY_TTL_SECONDS, COOKIE_STORE_MAX_USERS, GUEST
 from services import user_cookies
 from services.user_cookies import (
     CookieFormatError, choose_cookie_source, cookie_file, get_cookie_header,
-    has_cookies_for, is_shareable, parse_netscape, to_netscape,
+    is_shareable, is_signed_in, parse_netscape, to_netscape,
 )
 from services.cache import get_segment_cache_key, get_segment_disk_key
 
@@ -168,8 +168,62 @@ class TestCookieLookup:
 
     def test_a_short_link_counts_as_the_site_it_serves(self):
         hold_cookies("alice@example.com", [(".youtube.com", "SID", "s")])
-        assert has_cookies_for("alice@example.com", "https://youtu.be/dQw4w9WgXcQ")
-        assert not has_cookies_for("alice@example.com", "https://vimeo.com/1")
+        assert is_signed_in("alice@example.com", "https://youtu.be/dQw4w9WgXcQ")
+        assert not is_signed_in("alice@example.com", "https://vimeo.com/1")
+
+
+# What a signed-out browser holds for each site: every visitor gets these.
+VISITOR_YOUTUBE = [(".youtube.com", "VISITOR_INFO1_LIVE", "v"), (".youtube.com", "YSC", "y"),
+                   (".youtube.com", "PREF", "f=1")]
+VISITOR_TWITCH = [(".twitch.tv", "unique_id", "u"), (".twitch.tv", "server_session_id", "s")]
+
+
+class TestSignedIn:
+    """Holding cookies for a site is not the same as being signed in to it.
+
+    Lending once picked whoever had *any* live cookie for the site. A member
+    whose browser was signed out of YouTube still syncs its visitor cookies,
+    so they could be chosen ahead of a member who was signed in, and the
+    resolve ran as a visitor — which YouTube refuses from a datacenter.
+    """
+
+    WATCH = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+    def test_a_visitor_jar_is_not_a_sign_in(self):
+        hold_cookies("visitor@example.com", VISITOR_YOUTUBE + VISITOR_TWITCH)
+        assert not is_signed_in("visitor@example.com", self.WATCH)
+        assert not is_signed_in("visitor@example.com", "https://youtu.be/dQw4w9WgXcQ")
+        assert not is_signed_in("visitor@example.com", "https://www.twitch.tv/videos/1")
+
+    @pytest.mark.parametrize("name", ["SID", "__Secure-3PSID", "SAPISID", "__Secure-3PAPISID", "LOGIN_INFO"])
+    def test_a_youtube_session_cookie_is(self, name):
+        hold_cookies("member@example.com", VISITOR_YOUTUBE + [(".youtube.com", name, "s")])
+        assert is_signed_in("member@example.com", self.WATCH)
+        assert is_signed_in("member@example.com", "https://music.youtube.com/watch?v=dQw4w9WgXcQ")
+
+    def test_twitch_needs_its_auth_token(self):
+        hold_cookies("member@example.com", VISITOR_TWITCH + [(".twitch.tv", "auth-token", "t")])
+        assert is_signed_in("member@example.com", "https://www.twitch.tv/somechannel")
+
+    def test_an_expired_session_cookie_is_not(self):
+        hold_cookies("member@example.com", VISITOR_YOUTUBE + [
+            (".youtube.com", "SID", "s", int(time.time()) - 60)])
+        assert not is_signed_in("member@example.com", self.WATCH)
+
+    def test_a_site_without_known_session_cookies_counts_any_cookie(self):
+        hold_cookies("member@example.com", [(".kick.com", "kick_session", "k")])
+        assert is_signed_in("member@example.com", "https://kick.com/somechannel")
+
+    def test_a_signed_out_member_is_passed_over_for_a_signed_in_one(self):
+        hold_cookies("visitor@example.com", VISITOR_YOUTUBE)
+        hold_cookies("member@example.com", [(".youtube.com", "SID", "s")])
+        members = ["visitor@example.com", "member@example.com"]
+        assert choose_cookie_source(self.WATCH, None, members) == "member@example.com"
+
+    def test_a_signed_out_requester_borrows_instead_of_using_their_visitor_jar(self):
+        hold_cookies("visitor@example.com", VISITOR_YOUTUBE)
+        hold_cookies("member@example.com", [(".youtube.com", "SID", "s")])
+        assert choose_cookie_source(self.WATCH, "visitor@example.com", ["member@example.com"]) == "member@example.com"
 
 
 class TestLending:

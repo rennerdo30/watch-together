@@ -357,6 +357,24 @@ COOKIE_SHARE_EXTRACTORS = frozenset({
     "twitch:vod", "twitch:clips", "twitch:stream",
     "kick:vod", "kick:clips", "kick:live",
 })
+# Cookies a site sets only for a signed-in account. Every visitor gets some
+# cookies (YouTube's VISITOR_INFO1_LIVE, YSC and PREF), so holding cookies for
+# a site does not make a member someone who can lend a sign-in. A site not
+# listed here counts any live cookie.
+SIGN_IN_COOKIES = {
+    "youtube.com": frozenset({
+        "SID", "__Secure-1PSID", "__Secure-3PSID",
+        "SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID", "LOGIN_INFO",
+    }),
+    "twitch.tv": frozenset({"auth-token"}),
+}
+# How long a member who left a room keeps lending to it. A room left open in
+# a background tab drops its socket whenever Chrome discards or freezes the
+# tab, or the laptop sleeps, while the member's extension goes on syncing;
+# without this the next video anyone else loads runs signed out. It matches
+# the cookie TTL: a browser that has stopped syncing has no cookies to lend
+# after this long anyway.
+COOKIE_LEND_GRACE_SECONDS = COOKIE_MEMORY_TTL_SECONDS
 # Query parameters that put a watch URL into playlist context. yt-dlp runs
 # with `noplaylist`, so the extraction stays a single video either way.
 YOUTUBE_PLAYLIST_PARAMS = frozenset({"list", "index", "start_radio"})
