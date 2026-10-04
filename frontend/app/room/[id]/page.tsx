@@ -1,18 +1,19 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
     Loader2, Users, Link as LinkIcon,
     Plus, SkipForward,
     Play, ListVideo, Settings, X, Palette, ShieldCheck, Bug,
     Crown, Shield, User as UserIcon, ChevronDown, Lock, Copy, Check, Infinity, Sun, ExternalLink, Scissors, Puzzle,
-    MonitorUp, MonitorStop, Globe, Type, Download
+    MonitorUp, MonitorStop, Globe, Type, Download, Bell, BellOff, Volume2, AlertTriangle
 } from 'lucide-react';
 import { BrandMark } from '@/components/brand-mark';
 import { prewarmPosition, prewarmVideo } from '@/lib/prewarm';
 import { StartupTimer, type PlaybackEngine } from '@/lib/playback-timing';
-import { resumePosition } from '@/lib/playback';
+import { resumePosition, type PlaybackStart } from '@/lib/playback';
+import { usePlaybackAttention } from '@/lib/hooks/usePlaybackAttention';
 import { isLiveCatchUpRate } from '@/lib/live-latency';
 import { autoQualityCap, openingPlan } from '@/lib/abr';
 import { readOpeningEstimate } from '@/lib/bandwidth-memory';
@@ -169,6 +170,9 @@ export default function RoomPage() {
     const [actualPlayerTime, setActualPlayerTime] = useState(0); // Real player time for badge display
     const [isPermanent, setIsPermanent] = useState(false); // Room permanent status
     const [roomName, setRoomName] = useState(''); // Admin-set display name; the id stays the address
+    // What the autoplay policy did to this viewer's latest start, as the
+    // player reports it: the tab title and notifications speak from it.
+    const [playbackGate, setPlaybackGate] = useState<PlaybackStart>('started');
     // SponsorBlock: the admin's setting, and the segments of the video the
     // server has looked up. Segments are kept with the video they belong to,
     // because they can arrive while this client is still resolving it.
@@ -191,6 +195,19 @@ export default function RoomPage() {
     // URLs and remounted the player: a rebuffer loop on every reconnect.
     const videoDataRef = useRef<ResolveResponse | null>(null);
     useEffect(() => { videoDataRef.current = videoData; }, [videoData]);
+
+    // A room left open in a background tab all day: what it plays has to
+    // reach a viewer who is not looking, above all when the browser started
+    // it muted or not at all.
+    const attentionVideo = useMemo(() => videoData
+        ? { title: videoData.title, playing: syncState.isPlaying }
+        : null, [videoData, syncState.isPlaying]);
+    const attention = usePlaybackAttention(attentionVideo, playbackGate);
+    // Read from the WebSocket handler, which is created once.
+    const announceRef = useRef(attention.announce);
+    useEffect(() => { announceRef.current = attention.announce; }, [attention.announce]);
+    const currentUserRef = useRef(currentUser);
+    useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
 
     // Layout resizing
     const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
@@ -738,6 +755,11 @@ export default function RoomPage() {
                 setVideoData(nextVideo ?? null);
                 setIsRestoringVideo(false);
                 setLoadingQueueIndex(null);
+                // Whoever queued it is looking at it already.
+                if (nextVideo && nextVideo.added_by !== currentUserRef.current) {
+                    announceRef.current(nextVideo.title,
+                        nextVideo.added_by ? displayName(nextVideo.added_by) : undefined);
+                }
                 break;
             }
             case 'play':
@@ -1274,6 +1296,27 @@ export default function RoomPage() {
                         <Users className="w-3 h-3 text-neutral-500" />
                         <span className="text-xs font-medium ui-numeric text-neutral-300">{members.length}</span>
                     </div>
+                    {attention.notifyState !== 'unsupported' && (
+                        <button
+                            type="button"
+                            onClick={() => attention.notifyState === 'on'
+                                ? attention.disableNotifications()
+                                : void attention.enableNotifications()}
+                            disabled={attention.notifyState === 'denied'}
+                            aria-pressed={attention.notifyState === 'on'}
+                            aria-label="Notify me when a video starts"
+                            title={attention.notifyState === 'denied'
+                                ? 'Notifications are blocked for this site in your browser settings'
+                                : attention.notifyState === 'on'
+                                    ? 'Notifying you when a video starts while this tab is in the background'
+                                    : 'Notify me when a video starts while this tab is in the background'}
+                            className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors disabled:opacity-40 ${attention.notifyState === 'on' ? 'bg-[color:var(--accent-glow)] text-[color:var(--accent-primary)]' : 'hover:bg-neutral-800 text-neutral-400 hover:text-white'}`}
+                        >
+                            {attention.notifyState === 'on'
+                                ? <Bell aria-hidden="true" className="w-4 h-4" />
+                                : <BellOff aria-hidden="true" className="w-4 h-4" />}
+                        </button>
+                    )}
                     <ColorModeToggle className="h-7 w-7 text-neutral-400 hover:bg-neutral-800 hover:text-white" />
                     <button
                         type="button"
@@ -1297,6 +1340,47 @@ export default function RoomPage() {
                     </button>
                 </div>
             </header>
+
+            {/* Chrome's Memory Saver unloaded this tab while it was in the
+                background: it ran no code, so videos started meanwhile
+                went unseen. Only a browser setting prevents it. */}
+            {attention.wasDiscarded && (
+                <div role="alert" className="shrink-0 flex items-start justify-center gap-3 px-3 py-2 text-sm border-b border-amber-500/30 bg-amber-500/10 text-neutral-200">
+                    <AlertTriangle aria-hidden="true" className="w-4 h-4 mt-0.5 shrink-0 text-amber-400" />
+                    <span className="max-w-3xl">
+                        Your browser unloaded this tab to save memory, so videos the room played while it was away did not reach you.
+                        To keep the room live in the background, open <span className="font-mono text-white">chrome://settings/performance</span> and
+                        add this site under <span className="text-white">Always keep these sites active</span>.
+                    </span>
+                    <button
+                        type="button"
+                        onClick={attention.dismissDiscarded}
+                        aria-label="Dismiss the unloaded tab warning"
+                        className="shrink-0 rounded p-0.5 text-neutral-400 hover:text-white"
+                    >
+                        <X aria-hidden="true" className="w-4 h-4" />
+                    </button>
+                </div>
+            )}
+
+            {/* The one click that lets this tab start videos with sound.
+                Asked for while nothing is at stake: the moment someone
+                queues a video, this viewer is usually somewhere else. */}
+            {attention.needsGesture && (
+                <div role="status" className="shrink-0 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 px-3 py-2 text-sm border-b border-[color:var(--accent-primary)]/30 bg-[color:var(--accent-glow)] text-neutral-200">
+                    <Volume2 aria-hidden="true" className="w-4 h-4 text-[color:var(--accent-primary)]" />
+                    <span>Click anywhere in this tab so videos can start with sound when someone adds one.</span>
+                    {attention.notifyState === 'off' && (
+                        <button
+                            type="button"
+                            onClick={() => void attention.enableNotifications()}
+                            className="underline underline-offset-2 text-white hover:text-[color:var(--accent-primary)]"
+                        >
+                            Also notify me
+                        </button>
+                    )}
+                </div>
+            )}
 
             {/* Main Content */}
             <div
@@ -1433,6 +1517,7 @@ export default function RoomPage() {
                                     onSourceExpired={handleSourceExpired}
                                     poster={videoData.thumbnail}
                                     autoPlay={syncState.isPlaying}
+                                    onPlaybackGateChange={setPlaybackGate}
                                     initialTime={syncState.timestamp} // Pass initial sync timestamp
                                     // DASH-specific props
                                     streamType={videoData.stream_type}

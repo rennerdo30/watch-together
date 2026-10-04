@@ -94,6 +94,12 @@ interface CustomPlayerProps {
      * blurry for me" is otherwise unanswerable.
      */
     onQualityReport?: (report: QualityReport) => void;
+    /**
+     * What the autoplay policy did to the latest start: the room tells a
+     * viewer in a background tab, through the tab title, when the video it
+     * started is silent or waiting for them.
+     */
+    onPlaybackGateChange?: (gate: PlaybackStart) => void;
 }
 
 export interface PrewarmRequest {
@@ -209,6 +215,7 @@ export function CustomPlayer({
     chapters,
     shareSource,
     onQualityReport,
+    onPlaybackGateChange,
 }: CustomPlayerProps) {
     // === REFS ===
     const videoRef = useRef<HTMLVideoElement>(null);
@@ -657,6 +664,65 @@ export function CustomPlayer({
         // gesture the policy wanted, so there is no need to start muted.
         video.muted = isMuted;
         setPlaybackGate(await startPlayback(video));
+    }, [isMuted]);
+
+    // === WHAT THE ROOM NEEDS TO KNOW ABOUT THE GATE ===
+    const onPlaybackGateChangeRef = useRef(onPlaybackGateChange);
+    useEffect(() => { onPlaybackGateChangeRef.current = onPlaybackGateChange; });
+    useEffect(() => { onPlaybackGateChangeRef.current?.(playbackGate); }, [playbackGate]);
+
+    // === ANY GESTURE IS THE ONE THE POLICY WANTED ===
+    // A viewer coming back to a muted or held-back room clicks wherever they
+    // happen to click — the chat, the queue — not on the prompt. That click
+    // is the activation the browser was waiting for, so it is spent on the
+    // video.
+    useEffect(() => {
+        if (playbackGate === 'started') return;
+        const onGesture = (event: Event) => {
+            if (event instanceof KeyboardEvent && (event.key === 'Escape' || event.repeat)) return;
+            // Inside the player its own prompts and controls answer, and a
+            // click on Pause must not also turn the sound on.
+            if (event.target instanceof Node && containerRef.current?.contains(event.target)) return;
+            const video = videoRef.current;
+            if (!video) return;
+            if (playbackGate === 'muted-to-start') {
+                if (!video.muted || isMuted) return;
+                video.muted = false;
+                setPlaybackGate('started');
+                return;
+            }
+            if (!video.paused) {
+                setPlaybackGate(video.muted && !isMuted ? 'muted-to-start' : 'started');
+                return;
+            }
+            video.muted = isMuted;
+            void startPlayback(video).then(setPlaybackGate);
+        };
+        window.addEventListener('click', onGesture);
+        window.addEventListener('keydown', onGesture);
+        return () => {
+            window.removeEventListener('click', onGesture);
+            window.removeEventListener('keydown', onGesture);
+        };
+    }, [playbackGate, isMuted]);
+
+    // === BACK IN THE TAB ===
+    // Chrome holds media back in a tab that has not been shown since it
+    // opened, and a start refused while hidden is not retried by anyone. The
+    // room is playing, so the moment the viewer looks, this player joins it.
+    const autoPlayRef = useRef(autoPlay);
+    useEffect(() => { autoPlayRef.current = autoPlay; }, [autoPlay]);
+    useEffect(() => {
+        const onVisible = () => {
+            const video = videoRef.current;
+            if (document.hidden || !video || !autoPlayRef.current) return;
+            if (!video.paused || video.ended || video.readyState < 2) return;
+            void startPlayback(video).then((outcome) => {
+                setPlaybackGate(outcome === 'started' && video.muted && !isMuted ? 'muted-to-start' : outcome);
+            });
+        };
+        document.addEventListener('visibilitychange', onVisible);
+        return () => document.removeEventListener('visibilitychange', onVisible);
     }, [isMuted]);
 
     const handleRestoreSound = useCallback(() => {

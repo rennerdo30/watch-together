@@ -101,6 +101,7 @@ frontend/
     ├── api.ts               # Backend API client
     ├── abr.ts               # Latency-aware bandwidth sampling, surface cap, opening-rung plan
     ├── prewarm.ts           # prewarmPosition: announce a start/jump to /api/prewarm
+    ├── playback-attention.ts # Background tabs: autoplay probe, tab title, start notifications
     ├── playback-timing.ts   # One playback_timing report per start
     └── hooks/               # Custom React hooks (useRoomSettings, etc.)
 ```
