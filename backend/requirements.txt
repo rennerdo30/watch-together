@@ -1,14 +1,14 @@
 annotated-types==0.8.0
 anyio==4.15.1
 click==8.5.0
-fastapi==0.141.1
+fastapi==0.142.2
 h11==0.16.0
 idna==3.20
 pydantic==2.13.5
-pyjwt[crypto]==2.15.0
+pyjwt[crypto]==2.15.1
 starlette==1.7.0
 typing_extensions==4.16.0
-uvicorn[standard]==0.53.0
+uvicorn[standard]==0.54.0
 yt-dlp
 websockets
 httpx
