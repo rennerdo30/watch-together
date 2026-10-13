@@ -716,7 +716,10 @@ export function CustomPlayer({
         const onVisible = () => {
             const video = videoRef.current;
             if (document.hidden || !video || !autoPlayRef.current) return;
-            if (!video.paused || video.ended || video.readyState < 2) return;
+            // play() starts loading as well as playback. A hidden HLS tab may
+            // have parsed its manifest without buffering a frame yet, so
+            // waiting for readyState here would leave it paused forever.
+            if (!video.paused || video.ended) return;
             void startPlayback(video).then((outcome) => {
                 setPlaybackGate(outcome === 'started' && video.muted && !isMuted ? 'muted-to-start' : outcome);
             });
