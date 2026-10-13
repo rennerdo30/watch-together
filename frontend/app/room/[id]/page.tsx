@@ -1,7 +1,9 @@
 "use client";
 
+import { useStoredTheme } from '@/lib/hooks/useStoredTheme';
+
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import {
     Loader2, Users, Link as LinkIcon,
     Plus, SkipForward,
@@ -35,7 +37,7 @@ import { chapterAt, formatChapterTime } from '@/lib/chapters';
 import { LiveChat } from '@/components/live-chat';
 import { RoomLog } from '@/components/room-log';
 import { ErrorBoundary } from '@/components/error-boundary';
-import { THEMES, DEFAULT_THEME, getThemeById, loadCustomTheme, saveCustomTheme, createCustomTheme } from '@/lib/themes';
+import { THEMES, createCustomTheme } from '@/lib/themes';
 import { ColorModeToggle } from '@/components/color-mode-toggle';
 import { displayHost, displayName, looksLikeUrl } from '@/lib/utils';
 import {
@@ -71,7 +73,7 @@ import {
     SIDEBAR_MIN_WIDTH,
 } from '@/lib/constants';
 import toast, { Toaster } from 'react-hot-toast';
-import { useLocalStorageState, parseStoredBoolean } from '@/lib/hooks/useLocalStorageState';
+import { useLocalStorageState, parseStoredBoolean, parsePositiveNumber, parseSidebarWidth } from '@/lib/hooks/useLocalStorageState';
 
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragEndEvent, DragStartEvent, DragOverlay } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
@@ -153,8 +155,8 @@ export default function RoomPage() {
     const playlistInput = youtubePlaylistUrl(inputUrl.trim());
     const [connected, setConnected] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
-    const [activeTheme, setActiveTheme] = useState(DEFAULT_THEME);
-    const [useProxy, setUseProxy] = useState(true);
+    const { activeTheme, setActiveTheme } = useStoredTheme();
+    const [useProxy, setUseProxy] = useLocalStorageState('wt_proxy', true, parseStoredBoolean, String);
     const [sidebarTab, setSidebarTab] = useState<'queue' | 'users' | 'chat' | 'log' | 'chapters'>('queue');
     const [activityLog, setActivityLog] = useState<RoomActivityEvent[]>([]);
     const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
@@ -210,7 +212,9 @@ export default function RoomPage() {
     useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
 
     // Layout resizing
-    const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
+    const [storedSidebarWidth, setStoredSidebarWidth] = useLocalStorageState('wt_sidebar_width', SIDEBAR_DEFAULT_WIDTH, parseSidebarWidth);
+    const [sidebarDraft, setSidebarWidth] = useState<number | null>(null);
+    const sidebarWidth = sidebarDraft ?? storedSidebarWidth;
     const isResizing = useRef(false);
     const [fontSize, setFontSize] = useState(FONT_SIZE_DEFAULT);
     const [isLoadingCookies, setIsLoadingCookies] = useState(true);
@@ -232,9 +236,12 @@ export default function RoomPage() {
     const [isCopyingToken, setIsCopyingToken] = useState(false);
 
     // Custom theme state
-    const [customBgColor, setCustomBgColor] = useState('#09090b');
-    const [customAccentColor, setCustomAccentColor] = useState('#d93a3a');
-    const [showCustomTheme, setShowCustomTheme] = useState(false);
+    const [customBgDraft, setCustomBgColor] = useState<string | null>(null);
+    const customBgColor = customBgDraft ?? (activeTheme.id === 'custom' ? activeTheme.colors.bg : '#09090b');
+    const [customAccentDraft, setCustomAccentColor] = useState<string | null>(null);
+    const customAccentColor = customAccentDraft ?? (activeTheme.id === 'custom' ? activeTheme.colors.accent : '#d93a3a');
+    const [showCustomDraft, setShowCustomTheme] = useState<boolean | null>(null);
+    const showCustomTheme = showCustomDraft ?? activeTheme.id === 'custom';
 
     // DnD Sensors - require a small movement before dragging to allow clicks
     const sensors = useSensors(
@@ -274,22 +281,14 @@ export default function RoomPage() {
     const videoElementRef = useRef<HTMLVideoElement | null>(null);
 
     const syncThresholdRef = useRef(4);
-    const [syncThreshold, setSyncThresholdState] = useState(4);
+    const [syncThreshold, setSyncThresholdState] = useLocalStorageState('w2g-sync-threshold', 4, parsePositiveNumber);
 
     const setSyncThreshold = (val: number) => {
         setSyncThresholdState(val);
         syncThresholdRef.current = val;
-        localStorage.setItem('w2g-sync-threshold', val.toString());
     };
 
-    useEffect(() => {
-        const saved = localStorage.getItem('w2g-sync-threshold');
-        if (saved) {
-            const val = parseFloat(saved);
-            setSyncThresholdState(val);
-            syncThresholdRef.current = val;
-        }
-    }, []);
+    useEffect(() => { syncThresholdRef.current = syncThreshold; }, [syncThreshold]);
 
     // Stable resize handlers stored once in refs to avoid listener identity issues
     const sidebarWidthRef = useRef(sidebarWidth);
@@ -303,13 +302,13 @@ export default function RoomPage() {
         }
     }, []);
 
-    const stopResizing = useCallback(() => {
+    const stopResizing = useCallback(function stopResizing() {
         isResizing.current = false;
         document.removeEventListener('mousemove', handleMouseMove);
         document.removeEventListener('mouseup', stopResizing);
         document.body.style.cursor = 'default';
-        localStorage.setItem('wt_sidebar_width', sidebarWidthRef.current.toString());
-    }, [handleMouseMove]);
+        setStoredSidebarWidth(sidebarWidthRef.current);
+    }, [handleMouseMove, setStoredSidebarWidth]);
 
     const startResizing = useCallback((e: React.MouseEvent) => {
         isResizing.current = true;
@@ -393,33 +392,6 @@ export default function RoomPage() {
 
     useEffect(() => {
         connect();
-        const savedTheme = localStorage.getItem('wt_theme');
-        if (savedTheme) {
-            if (savedTheme === 'custom') {
-                const customTheme = loadCustomTheme();
-                if (customTheme) {
-                    setActiveTheme(customTheme);
-                    setCustomBgColor(customTheme.colors.bg);
-                    setCustomAccentColor(customTheme.colors.accent);
-                    setShowCustomTheme(true);
-                }
-            } else {
-                const t = getThemeById(savedTheme);
-                if (t) setActiveTheme(t);
-            }
-        }
-        const savedProxy = localStorage.getItem('wt_proxy');
-        if (savedProxy !== null) {
-            setUseProxy(savedProxy === 'true');
-        } else {
-            setUseProxy(true); // Default to true
-        }
-        // Load saved sidebar width
-        const savedWidth = localStorage.getItem('wt_sidebar_width');
-        if (savedWidth) {
-            const width = parseInt(savedWidth);
-            if (width >= SIDEBAR_MIN_WIDTH && width <= SIDEBAR_MAX_WIDTH) setSidebarWidth(width);
-        }
 
         return () => {
             if (wsRef.current) wsRef.current.close();
@@ -495,10 +467,8 @@ export default function RoomPage() {
 
     // In development the identity travels as a query parameter, exactly as
     // it does on the room socket.
-    const [devUser, setDevUser] = useState<string | undefined>(undefined);
-    useEffect(() => {
-        setDevUser(new URLSearchParams(window.location.search).get('user') ?? undefined);
-    }, []);
+    const searchParams = useSearchParams();
+    const devUser = searchParams.get('user') ?? undefined;
 
     // `sendMsg` is defined further down; reaching it through a ref keeps
     // these callbacks stable and free of declaration order.
@@ -598,7 +568,11 @@ export default function RoomPage() {
     // before the button is drawn, and says why when the answer is no.
     const [browserStatus, setBrowserStatus] = useState<SharedBrowserStatus | null>(null);
     const [sharedBrowser, setSharedBrowser] = useState<SharedBrowserSession | null>(null);
-    const [browserEmbed, setBrowserEmbed] = useState<{ path: string; control: boolean } | null>(null);
+    const [browserSessionEmbed, setBrowserEmbed] = useState<{ session: SharedBrowserSession; embed: { path: string; control: boolean } } | null>(null);
+    const browserEmbed = sharedBrowser
+        && browserSessionEmbed?.session.room_id === sharedBrowser.room_id
+        && browserSessionEmbed.session.opened_at === sharedBrowser.opened_at
+        ? browserSessionEmbed.embed : null;
     const [browserDialogOpen, setBrowserDialogOpen] = useState(false);
     const [browserError, setBrowserError] = useState<string | null>(null);
 
@@ -625,11 +599,10 @@ export default function RoomPage() {
     // this browser's way in, so every member asks for their own once the
     // room has the browser open.
     useEffect(() => {
-        if (!sharedBrowser) { setBrowserEmbed(null); return; }
+        if (!sharedBrowser) return;
         let cancelled = false;
-        setBrowserError(null);
         void openBrowserSession(BACKEND_ORIGIN, roomId)
-            .then((embed) => { if (!cancelled) setBrowserEmbed(embed); })
+            .then((embed) => { if (!cancelled) { setBrowserEmbed({ session: sharedBrowser, embed }); setBrowserError(null); } })
             .catch(() => {
                 if (!cancelled) setBrowserError('Could not get into the shared browser.');
             });
@@ -1091,9 +1064,7 @@ export default function RoomPage() {
         sendMsg('seek', { timestamp: time });
         setSyncState(prev => ({ ...prev, timestamp: time, lastSync: new Date().toLocaleTimeString() }));
     };
-    useEffect(() => {
-        if (sidebarTab === 'chapters' && !hasChapters) setSidebarTab('queue');
-    }, [sidebarTab, hasChapters]);
+    if (sidebarTab === 'chapters' && !hasChapters) setSidebarTab('queue');
     // A live stream's chat is part of watching it, so it comes to the front
     // when a live video starts — once per stream: a member who switches back
     // to the queue is not pulled away again by every sync.
@@ -1823,6 +1794,7 @@ export default function RoomPage() {
 
                     {playlistDialogUrl && (
                         <PlaylistPreviewDialog
+                            key={`${roomId}:${playlistDialogUrl}`}
                             roomId={roomId}
                             url={playlistDialogUrl}
                             onClose={() => setPlaylistDialogUrl(null)}
@@ -2386,7 +2358,7 @@ export default function RoomPage() {
                                         {THEMES.map(t => (
                                             <button
                                                 key={t.id}
-                                                onClick={() => { setActiveTheme(t); localStorage.setItem('wt_theme', t.id); setShowCustomTheme(false); }}
+                                                onClick={() => { setActiveTheme(t); setShowCustomTheme(false); }}
                                                 className={`p-3 rounded-xl border text-xs font-medium transition-all ${activeTheme.id === t.id && !showCustomTheme
                                                     ? "bg-white/10 border-white/20 text-white"
                                                     : "bg-white/5 border-white/5 text-zinc-500 hover:border-white/10 hover:text-zinc-300"
@@ -2463,8 +2435,6 @@ export default function RoomPage() {
                                                 onClick={() => {
                                                     const custom = createCustomTheme('Custom', customBgColor, customAccentColor);
                                                     setActiveTheme(custom);
-                                                    saveCustomTheme(custom);
-                                                    localStorage.setItem('wt_theme', 'custom');
                                                     toast.success('Custom theme applied!');
                                                 }}
                                                 type="button"
@@ -2501,7 +2471,7 @@ export default function RoomPage() {
                                     type="button"
                                     role="switch"
                                     aria-checked={useProxy}
-                                    onClick={() => { const v = !useProxy; setUseProxy(v); localStorage.setItem('wt_proxy', String(v)); }}
+                                    onClick={() => { const v = !useProxy; setUseProxy(v); }}
                                     className={`w-full p-4 rounded-xl border flex items-center justify-between gap-4 transition-all ${useProxy ? "bg-[color:var(--accent-glow)] border-[color:var(--accent-primary)]" : "bg-zinc-800/30 border-zinc-800"
                                         }`}
                                 >

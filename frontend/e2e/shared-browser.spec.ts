@@ -159,3 +159,37 @@ test('a member who joins while it is open sees it rather than an empty player', 
   await expect(latecomer.getByTestId('shared-browser-frame')).toBeVisible();
   await context.close();
 });
+
+test('announcing the same browser session retains its existing iframe', async ({ page }) => {
+  await stubSharedBrowser(page);
+  let sessionRequests = 0;
+  await page.route('**/api/browser/session?*', (route) => {
+    sessionRequests++;
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ path: '/neko/?embed=1', control: true }),
+    });
+  });
+  let reannounce: (() => void) | undefined;
+  await page.routeWebSocket(/\/ws\/e2e-browser-/, (ws) => {
+    const server = ws.connectToServer();
+    server.onMessage((message) => {
+      const packet = JSON.parse(message.toString());
+      if (packet.type === 'browser_opened') reannounce = () => ws.send(JSON.stringify(packet));
+      ws.send(message);
+    });
+    ws.onMessage((message) => server.send(message));
+  });
+  await joinRoom(page, ROOM(), 'opener@example.com');
+  await page.getByTestId('open-shared-browser').click();
+  await page.getByTestId('confirm-shared-browser').click();
+  const frame = page.getByTestId('shared-browser-frame');
+  await expect(frame).toBeVisible();
+  await frame.evaluate((element) => element.setAttribute('data-session-marker', 'retained'));
+  await expect.poll(() => sessionRequests).toBe(1);
+  expect(reannounce).toBeDefined();
+  reannounce!();
+  // Permission/session refresh still runs; the independent browser stays mounted.
+  await expect.poll(() => sessionRequests).toBe(2);
+  await expect(frame).toHaveAttribute('data-session-marker', 'retained');
+});
