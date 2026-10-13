@@ -195,6 +195,8 @@ export default function AdminPage() {
   }, []);
 
   useEffect(() => {
+    // The loader updates state only after awaiting the network response.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
     const interval = setInterval(load, REFRESH_INTERVAL_MS);
     return () => clearInterval(interval);

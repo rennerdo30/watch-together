@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useSyncExternalStore } from 'react';
+import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '@/lib/constants';
 
 const LOCAL_STORAGE_CHANGE = 'w2g-local-storage-change';
 
@@ -10,6 +11,18 @@ type Serializer<T> = (value: T) => string;
 /** Parser for a flag stored as the strings "true" / "false". */
 export const parseStoredBoolean: Parser<boolean> = (stored, fallback) =>
   stored === null ? fallback : stored === 'true';
+
+export const parseStoredString: Parser<string> = (stored, fallback) => stored ?? fallback;
+
+export const parsePositiveNumber: Parser<number> = (stored, fallback) => {
+  const value = Number(stored);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+};
+
+export const parseSidebarWidth: Parser<number> = (stored, fallback) => {
+  const value = parsePositiveNumber(stored, fallback);
+  return value >= SIDEBAR_MIN_WIDTH && value <= SIDEBAR_MAX_WIDTH ? value : fallback;
+};
 
 /**
  * Hydration-safe React state backed by localStorage.

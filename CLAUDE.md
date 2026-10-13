@@ -103,7 +103,7 @@ frontend/
     ├── prewarm.ts           # prewarmPosition: announce a start/jump to /api/prewarm
     ├── playback-attention.ts # Background tabs: autoplay probe, tab title, start notifications
     ├── playback-timing.ts   # One playback_timing report per start
-    └── hooks/               # Custom React hooks (useRoomSettings, etc.)
+    └── hooks/               # Custom React hooks (useStoredTheme, useLocalStorageState, etc.)
 ```
 
 ## Key Files to Know

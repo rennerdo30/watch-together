@@ -49,6 +49,8 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    // The loader updates state only after awaiting the network response.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadRooms();
     const interval = setInterval(loadRooms, ROOM_LIST_POLL_INTERVAL_MS);
     return () => clearInterval(interval);

@@ -26,16 +26,6 @@ export type Theme = {
     };
 };
 
-export type CustomTheme = {
-    id: 'custom';
-    name: string;
-    colors: {
-        bg: string;
-        bgSecondary: string;
-        accent: string;
-    };
-};
-
 /**
  * The surfaces are the same cool slate in every theme; only the accent
  * differs.
@@ -74,8 +64,7 @@ function slateTheme(
         sidebar: SLATE.sidebar,
         // A static class, not `bg-[${accent}]`: Tailwind can only generate
         // utilities it can see in the source, and an interpolated colour is
-        // invisible to it. The value arrives at runtime through the token,
-        // which `getThemeCSSVars` writes onto the shell.
+        // invisible to it.
         accent: 'bg-[color:var(--accent-primary)]',
         text,
         border: 'border-[color:var(--border-default)]',
@@ -106,19 +95,6 @@ export const DEFAULT_THEME = THEMES[0]; // Signal
 // Helper to get theme by ID
 export function getThemeById(id: string): Theme | undefined {
     return THEMES.find(t => t.id === id);
-}
-
-// Helper to create CSS variables from theme
-export function getThemeCSSVars(theme: Theme | CustomTheme): Record<string, string> {
-    if ('colors' in theme) {
-        return {
-            '--accent-primary': theme.colors.accent,
-            '--accent-glow': 'accentGlow' in theme.colors ? theme.colors.accentGlow : `${theme.colors.accent}26`,
-            '--bg-primary': theme.colors.bg,
-            '--bg-secondary': theme.colors.bgSecondary,
-        };
-    }
-    return {};
 }
 
 // Helper to generate accent glow from hex color
@@ -160,22 +136,4 @@ export function createCustomTheme(name: string, bgColor: string, accentColor: st
             accentGlow: hexToGlow(accentColor),
         }
     };
-}
-
-// Load custom theme from localStorage
-export function loadCustomTheme(): Theme | null {
-    if (typeof window === 'undefined') return null;
-    const stored = localStorage.getItem('wt_custom_theme');
-    if (!stored) return null;
-    try {
-        return JSON.parse(stored) as Theme;
-    } catch {
-        return null;
-    }
-}
-
-// Save custom theme to localStorage
-export function saveCustomTheme(theme: Theme): void {
-    if (typeof window === 'undefined') return;
-    localStorage.setItem('wt_custom_theme', JSON.stringify(theme));
 }
