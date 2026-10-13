@@ -93,7 +93,7 @@ frontend/
 └── lib/
     ├── api.ts               # Backend API client
     ├── abr.ts               # Latency-aware bandwidth sampling for Shaka
-    └── hooks/               # Custom React hooks (useRoomSettings, etc.)
+    └── hooks/               # Custom React hooks (useStoredTheme, useLocalStorageState, etc.)
 ```
 
 ## Key Files to Know

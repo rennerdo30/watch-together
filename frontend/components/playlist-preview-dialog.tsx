@@ -36,9 +36,6 @@ export function PlaylistPreviewDialog({ roomId, url, onClose, onImported }: Play
 
     useEffect(() => {
         const controller = new AbortController();
-        setLoading(true);
-        setError('');
-        setPreview(null);
         void previewPlaylist(roomId, url, controller.signal).then((result) => {
             if (controller.signal.aborted) return;
             setPreview(result);

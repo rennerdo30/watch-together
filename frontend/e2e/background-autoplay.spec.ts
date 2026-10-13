@@ -172,6 +172,11 @@ test('a tab that has not been clicked yet asks for the click, and one anywhere a
 });
 
 test('a browser that already allows sound is not asked for anything', async ({ page }) => {
+  // Model the allowed policy explicitly; headless tabs may defer a real audio
+  // probe when other pages in the full suite have focus.
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'getAutoplayPolicy', { value: () => 'allowed' });
+  });
   await openRoom(page, uniqueRoomId('arm-allowed'), 'sitter@example.com');
   await page.waitForTimeout(1500);
   await expect(page.getByText(/click anywhere in this tab/i)).toHaveCount(0);
