@@ -253,10 +253,21 @@ test('a viewer in another tab is notified when a video starts, and told when it 
     await other.close();
   });
 
-test('a start refused while the tab was hidden is retried the moment the viewer looks',
+for (const beforeFirstFrame of [false, true]) {
+test(`a start refused while the tab was hidden is retried the moment the viewer looks${beforeFirstFrame ? ' before its first frame is buffered' : ''}`,
   async ({ page, browser }) => {
     const roomId = uniqueRoomId('visible-retry');
     await page.addInitScript(BACKGROUND_TAB);
+    if (beforeFirstFrame) {
+      // A manifest can be parsed before HLS has buffered its first frame.
+      // Retrying play must not wait for HAVE_CURRENT_DATA: play itself
+      // permits the browser to start loading the media.
+      await page.addInitScript(() => {
+        Object.defineProperty(HTMLMediaElement.prototype, 'readyState', {
+          configurable: true, get: () => HTMLMediaElement.HAVE_NOTHING,
+        });
+      });
+    }
     // Refused for as long as the tab is hidden, however it is asked.
     await page.addInitScript(`
       const original = HTMLMediaElement.prototype.play;
@@ -282,3 +293,4 @@ test('a start refused while the tab was hidden is retried the moment the viewer 
 
     await other.close();
   });
+}
