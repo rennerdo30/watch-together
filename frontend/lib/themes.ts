@@ -137,4 +137,3 @@ export function createCustomTheme(name: string, bgColor: string, accentColor: st
         }
     };
 }
-
