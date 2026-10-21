@@ -1,10 +1,10 @@
 # Chrome Web Store submission
 
-Use the policy URL after the policy commit is published on `main`:
+Use the public GitHub Pages policy URL:
 
-https://github.com/rennerdo30/watch-together/blob/main/PRIVACY.md
+https://rennerdo30.github.io/watch-together/privacy/
 
-The repository is public, so this URL does not require a Watch Together or
+The documentation site is public, so this URL does not require a Watch Together or
 Cloudflare Access login. Verify it in a signed-out browser before submission.
 Do not use an instance URL protected by Access. Privacy contact: support@renner.dev.
 
@@ -49,7 +49,7 @@ python backend/services/extension_package.py --source extension --browser chrome
 ```
 
 Use a version greater than every version previously uploaded to your listing.
-The manifest currently declares 1.5.1; the dashboard remains the source of truth
+The manifest currently declares 1.5.2; the dashboard remains the source of truth
 for previously uploaded versions. Provide reviewer instructions and a usable
 test instance/account if access is required.
 

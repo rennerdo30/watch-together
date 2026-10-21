@@ -93,7 +93,7 @@ class TestPackager:
             "HTTP", "Limited Use", "Reset", "YouTube watch history",
         ):
             assert disclosure in text
-        url = "https://github.com/rennerdo30/watch-together/blob/main/PRIVACY.md"
+        url = "https://rennerdo30.github.io/watch-together/privacy/"
         for page in ("popup/popup.html", "options/options.html"):
             assert f'href="{url}"' in (EXTENSION / page).read_text(encoding="utf-8")
 

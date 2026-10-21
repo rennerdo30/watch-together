@@ -1,6 +1,6 @@
 # Watch Together
 
-[Extension privacy policy](PRIVACY.md) · [Chrome Web Store submission guide](docs/chrome-web-store.md)
+[Documentation](https://rennerdo30.github.io/watch-together/) · [Extension privacy policy](https://rennerdo30.github.io/watch-together/privacy/) · [Chrome Web Store submission guide](docs/chrome-web-store.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/Docker-Ready-blue?logo=docker)](docker-compose.yml)

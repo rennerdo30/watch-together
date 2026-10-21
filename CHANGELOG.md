@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Public documentation (extension 1.5.2)
+
+- Publish the user guides, deployment documentation and privacy policy on
+  GitHub Pages using the standard Astro Starlight and Galaxy template.
+- Link the extension popup, Settings and Chrome Web Store instructions to
+  the public privacy page. Keep `PRIVACY.md` as its canonical source.
+
 ### Extension privacy and dependency refresh (extension 1.5.1)
 
 - Add a public extension privacy policy with support@renner.dev, links from
