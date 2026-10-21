@@ -56,7 +56,7 @@ services:
           cpus: '2.0'
 
   bgutil-provider:
-    image: brainicism/bgutil-ytdlp-pot-provider:0.7.2
+    image: brainicism/bgutil-ytdlp-pot-provider:2.0.2
     container_name: bgutil-provider
     restart: unless-stopped
     dns: *doh_resolver
@@ -91,7 +91,7 @@ services:
           cpus: '1.0'
 
   nginx:
-    image: nginx:1.27-alpine
+    image: nginx:1.30.6-alpine
     container_name: watch-together-proxy
     ports:
       # Bound to loopback by default: the tunnel reaches nginx over the
@@ -123,7 +123,7 @@ services:
   # --profile browser up -d`, and only after arranging a path for its media
   # (see deploy/README.md — nothing else in this stack needs one).
   neko:
-    image: ghcr.io/m1k1o/neko/chromium:3.1.5
+    image: ghcr.io/m1k1o/neko/chromium:3.2.0
     container_name: watch-together-browser
     profiles: [ browser ]
     restart: unless-stopped
@@ -181,7 +181,7 @@ services:
     # cache each of those lookups was an HTTPS round trip to Cloudflare in
     # front of the fetch itself. --cache-optimistic answers an expired entry
     # at once while refreshing it, so a hot name never waits again.
-    image: adguard/dnsproxy:v0.84.2
+    image: adguard/dnsproxy:v0.86.0
     container_name: watch-together-dns
     restart: unless-stopped
     command: -l 0.0.0.0 -p 53 -u https://1.1.1.1/dns-query -u https://1.0.0.1/dns-query --cache --cache-optimistic
@@ -195,7 +195,7 @@ services:
           cpus: '0.25'
 
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:2026.10.3
     container_name: watch-together-tunnel
     restart: unless-stopped
     dns: *doh_resolver

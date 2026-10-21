@@ -5,7 +5,7 @@
 #   1. Verify SSH access to the host.
 #   2. Rsync the bundle via deploy/sync.sh.
 #   3. Ensure /opt/watch-together/.env exists and has the required keys.
-#   4. docker compose up -d --build (volumes survive).
+#   4. Pull service images, rebuild with fresh bases, then recreate (volumes survive).
 #   5. Wait for the backend to answer on the internal network.
 #   6. Probe https://<WT_HOST>/ and report the status.
 #
@@ -200,7 +200,7 @@ if [ "$RESET_DATA" -eq 1 ]; then
 fi
 
 # ── 5. build and start ─────────────────────────────────────────────────
-bold "[5/6] docker compose up -d --build"
+bold "[5/6] refresh images, build, and recreate containers"
 if [ "$DRY_RUN" -eq 1 ]; then
 	yellow "  (--dry-run — skipping)"
 else
@@ -228,7 +228,7 @@ else
 		red "    Free space first (docker image prune -f; docker builder prune -f; apt-get clean)."
 		exit 1
 	fi
-	$SSH "set -e; cd ${REMOTE} && ${COMPOSE} up -d --build"
+	$SSH "set -e; cd ${REMOTE} && ${COMPOSE} pull --ignore-buildable && ${COMPOSE} build --pull && ${COMPOSE} up -d --no-build"
 	green "  ✓ stack up"
 
 	# Every build leaves the previous images behind untagged, and the build

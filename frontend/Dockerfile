@@ -1,14 +1,14 @@
-FROM node:26-alpine AS builder
+FROM node:26.11.1-alpine AS builder
 
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm install --legacy-peer-deps
+RUN npm ci
 
 COPY . .
 RUN npm run build
 
-FROM node:26-alpine AS runner
+FROM node:26.11.1-alpine AS runner
 
 WORKDIR /app
 

@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Extension privacy and dependency refresh (extension 1.5.1)
+
+- Add a public extension privacy policy with support@renner.dev, links from
+  the popup and Settings, and Chrome Web Store submission instructions.
+- Disclose cookie sharing and default automatic sync in the extension.
+  Require HTTPS for all instance requests and reject saved HTTP connections.
+- Refresh backend and frontend dependencies, Python to 3.15.0, Node to
+  26.11.1, nginx to 1.30.6, the PO-token provider to 2.0.2, neko to 3.2.0,
+  dnsproxy to 0.86.0 and cloudflared to 2026.10.3 (checked October 22, 2026).
+- Use stable yt-dlp releases instead of arbitrary upstream master snapshots.
+  Refresh deployment images and build bases explicitly; install frontend
+  dependencies from the lockfile without bypassing peer checks.
+- TypeScript remains pinned to 6.0.3: the latest stable 7.0.2 builds but
+  fails lint because typescript-eslint does not support its API yet.
+  ESLint 10.13.0 passes lint; upstream Next lint plugins still warn about
+  peer ranges limited to ESLint 9. The latest `braces` 3.0.3 has an unpatched
+  denial-of-service advisory in this development-only dependency chain.
+
 ### Room tabs stay loaded (extension 1.5.0)
 
 - With the extension connected, Chrome's Memory Saver no longer discards an

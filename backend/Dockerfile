@@ -1,9 +1,11 @@
-FROM python:3.14-slim
+FROM python:3.15.0-slim
 
 WORKDIR /app
 
-# Install system dependencies including deno for yt-dlp BotGuard/PO token solving
+# Build tools compile yt-dlp dependencies whose Python 3.15 wheels are not yet
+# available (notably Brotli), including later boot-time dependency refreshes.
 RUN apt-get update && apt-get install -y \
+    build-essential \
     ffmpeg \
     curl \
     unzip \
@@ -32,9 +34,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Install the yt-dlp nightly from master for the latest extractor fixes.
-# start.sh refreshes this on every boot; see YTDLP_AUTO_UPDATE.
-RUN pip install --no-cache-dir -U "yt-dlp[default] @ https://github.com/yt-dlp/yt-dlp/archive/master.tar.gz"
+# Install the stable yt-dlp release with its recommended dependencies.
+RUN pip install --no-cache-dir -U "yt-dlp[default]"
 
 # Install yt-dlp PO token plugins:
 # - yt-dlp-get-pot: Framework for PO token generation

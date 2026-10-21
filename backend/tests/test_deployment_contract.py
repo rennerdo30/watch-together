@@ -40,7 +40,9 @@ class TestBackendImage:
         """An offline or rate-limited host must still start."""
         start = (BACKEND / "start.sh").read_text()
         assert "YTDLP_AUTO_UPDATE" in start
-        assert "yt-dlp/archive/master.tar.gz" in start
+        assert '--upgrade "yt-dlp[default]"' in start
+        assert "archive/master" not in start
+        assert "YTDLP_SOURCE" not in start
         # A failed update is reported, not fatal.
         assert "starting with" in start
         assert start.rstrip().endswith("exec uvicorn main:app --host 0.0.0.0 --port 8000")
@@ -837,7 +839,7 @@ class TestContainersResolveOverHttps:
 
     def test_a_doh_resolver_service_exists(self, compose):
         assert "\n  dns:\n" in compose
-        assert "image: adguard/dnsproxy:v0.84.2" in compose
+        assert "image: adguard/dnsproxy:v0.86.0" in compose
         assert "-l 0.0.0.0 -p 53" in compose
         assert "-u https://1.1.1.1/dns-query" in compose
         assert "-u https://1.0.0.1/dns-query" in compose
@@ -898,7 +900,7 @@ class TestTheSharedBrowserIsOptIn:
 
     def test_the_image_is_pinned_to_a_version(self, neko_block):
         """`latest` on this one would move a browser under a running room."""
-        assert "image: ghcr.io/m1k1o/neko/chromium:3.1.5" in neko_block
+        assert "image: ghcr.io/m1k1o/neko/chromium:3.2.0" in neko_block
 
     def test_it_does_not_start_unless_it_is_asked_for(self, neko_block):
         assert "profiles: [ browser ]" in neko_block
@@ -1059,7 +1061,7 @@ class TestDeploysDoNotFillTheHost:
         """Every build left the previous images dangling: 3.3 GB of them, plus
         1.1 GB of build cache, filled a 19 GB host within a few deploys."""
         text = self.SCRIPT.read_text(encoding="utf-8")
-        build = text.index("${COMPOSE} up -d --build\"")
+        build = text.index("${COMPOSE} build --pull")
         prune = text.index("docker image prune -f >/dev/null", build)
         assert "docker builder prune -f --max-used-space" in text[prune:prune + 200]
         # Never the volumes (other projects' databases share this host), never
@@ -1081,7 +1083,7 @@ class TestDeploysDoNotFillTheHost:
 
     def test_a_build_does_not_start_on_a_nearly_full_disk(self):
         text = self.SCRIPT.read_text(encoding="utf-8")
-        assert text.index("DEPLOY_MIN_FREE_MB * 1024") < text.index("${COMPOSE} up -d --build\"")
+        assert text.index("DEPLOY_MIN_FREE_MB * 1024") < text.index("${COMPOSE} build --pull")
 
 
 class TestExtensionLooksLikeTheApp:
@@ -1204,3 +1206,16 @@ class TestOneBrandMark:
     def test_no_unused_template_assets(self):
         for name in ("next.svg", "vercel.svg", "file.svg", "globe.svg", "window.svg"):
             assert not (self.FRONTEND / "public" / name).exists(), name
+
+
+class TestDeploymentDependencyRefresh:
+    def test_deploy_refreshes_images_before_recreating_containers(self):
+        script = (REPO_ROOT / "deploy/deploy.sh").read_text()
+        assert "${COMPOSE} pull --ignore-buildable" in script
+        assert "${COMPOSE} build --pull" in script
+        assert script.index("${COMPOSE} pull --ignore-buildable") < script.index("${COMPOSE} up -d")
+
+    def test_frontend_build_uses_the_lockfile_without_ignoring_peers(self):
+        dockerfile = (REPO_ROOT / "frontend/Dockerfile").read_text()
+        assert "RUN npm ci" in dockerfile
+        assert "legacy-peer-deps" not in dockerfile

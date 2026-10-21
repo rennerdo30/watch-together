@@ -216,7 +216,7 @@ uvicorn main:app --reload --port 8000
 
 # Terminal 2: Frontend
 cd frontend
-npm install --legacy-peer-deps
+npm ci
 npm run dev
 ```
 

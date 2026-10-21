@@ -5,7 +5,7 @@
 # requirements often enough that a version baked into an image goes stale
 # within days, and the symptom is total resolution failure ("Sign in to
 # confirm you're not a bot", zero formats) rather than a graceful
-# degradation — so the newest nightly is worth fetching on every boot.
+# degradation — so the newest stable release is worth fetching on every boot.
 #
 # Set YTDLP_AUTO_UPDATE=false to pin whatever the image was built with.
 # Failure to update is never fatal: an offline or rate-limited host should
@@ -14,7 +14,6 @@ set -u
 
 YTDLP_AUTO_UPDATE="${YTDLP_AUTO_UPDATE:-true}"
 YTDLP_UPDATE_TIMEOUT="${YTDLP_UPDATE_TIMEOUT:-180}"
-YTDLP_SOURCE="${YTDLP_SOURCE:-https://github.com/yt-dlp/yt-dlp/archive/master.tar.gz}"
 
 log() { echo "[start] $*"; }
 
@@ -24,14 +23,12 @@ current_version() {
 
 if [ "${YTDLP_AUTO_UPDATE,,}" = "true" ]; then
     before="$(current_version)"
-    log "yt-dlp ${before}: checking for a newer nightly"
+    log "yt-dlp ${before}: checking for a newer stable release"
 
-    # --upgrade against the master tarball always reinstalls, which is the
-    # point: the version string only changes when upstream cuts one, but the
-    # extractor code moves daily.
+    # Refresh the stable release and its recommended dependencies from PyPI.
     if timeout "${YTDLP_UPDATE_TIMEOUT}" pip install \
             --no-cache-dir --disable-pip-version-check --quiet \
-            --upgrade "yt-dlp[default] @ ${YTDLP_SOURCE}"; then
+            --upgrade "yt-dlp[default]"; then
         after="$(current_version)"
         if [ "$before" = "$after" ]; then
             log "yt-dlp ${after}: already current"

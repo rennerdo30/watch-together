@@ -53,7 +53,7 @@ services:
       # Room state, caches and the rate limiter are in process memory, so a
       # second worker would split rooms. Startup refuses anything above 1.
       WEB_CONCURRENCY: "1"
-      # Fetch the latest yt-dlp nightly on every start. YouTube breaks
+      # Fetch the latest stable yt-dlp release on every start. YouTube breaks
       # extraction often and the fix usually ships within days, so a version
       # frozen at image build time goes stale quickly. Set to "false" to pin.
       YTDLP_AUTO_UPDATE: ${YTDLP_AUTO_UPDATE:-true}
@@ -93,7 +93,7 @@ services:
 
   bgutil-provider:
     # Solves YouTube BotGuard challenges so yt-dlp can obtain PO tokens.
-    image: brainicism/bgutil-ytdlp-pot-provider:0.7.2
+    image: brainicism/bgutil-ytdlp-pot-provider:2.0.2
     restart: unless-stopped
     dns: *doh_resolver
     depends_on:
@@ -127,7 +127,7 @@ services:
           cpus: '1.0'
 
   nginx:
-    image: nginx:1.27-alpine
+    image: nginx:1.30.6-alpine
     restart: unless-stopped
     dns: *doh_resolver
     depends_on:
@@ -155,7 +155,7 @@ services:
   # WebRTC. Hence the profile — it does not start unless asked for — and
   # hence the two choices in deploy/README.md, neither of which is a default.
   neko:
-    image: ghcr.io/m1k1o/neko/chromium:3.1.5
+    image: ghcr.io/m1k1o/neko/chromium:3.2.0
     profiles: [ browser ]
     restart: unless-stopped
     dns: *doh_resolver
@@ -202,7 +202,7 @@ services:
     # Cloudflare over HTTPS; it reaches 1.1.1.1 by address, so it needs no
     # resolver of its own. Pinned, not `latest`: cloudflared's proxy-dns
     # disappeared in 2026.2.0 and a floating tag crash-looped the stack.
-    image: adguard/dnsproxy:v0.84.2
+    image: adguard/dnsproxy:v0.86.0
     restart: unless-stopped
     # --cache: every proxied segment that misses the cache resolves its
     # googlevideo host first; uncached, that was an HTTPS round trip to
@@ -219,7 +219,7 @@ services:
           cpus: '0.25'
 
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:2026.10.3
     restart: unless-stopped
     dns: *doh_resolver
     depends_on:

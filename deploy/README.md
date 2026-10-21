@@ -103,8 +103,8 @@ the tunnel — but the verified path is still the one to run.
 
 ## yt-dlp stays current
 
-The backend refreshes yt-dlp from the upstream nightly on every container
-start, so a deploy or restart always picks up the newest extractor code.
+The backend refreshes yt-dlp from the latest stable PyPI release on every container
+start, so a deploy or restart checks for the newest stable extractor release.
 YouTube changes its requirements frequently and the failure mode is total —
 zero playable formats, not reduced quality — so a version frozen at image
 build time goes stale within days.
@@ -129,7 +129,7 @@ ssh <host> "cd /opt/watch-together && \
 
 A room can put a **real browser on the server** into its player: everyone
 watches the same page, and whoever holds control types into it. It runs as
-[neko](https://github.com/m1k1o/neko), pinned to `ghcr.io/m1k1o/neko/chromium:3.1.5`.
+[neko](https://github.com/m1k1o/neko), pinned to `ghcr.io/m1k1o/neko/chromium:3.2.0`.
 
 It is **off by default, and it is the only feature here that cannot work on
 the tunnel alone.** cloudflared carries HTTP and WebSocket; neko's picture is
