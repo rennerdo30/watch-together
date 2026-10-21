@@ -2,10 +2,8 @@ FROM python:3.15.0-slim
 
 WORKDIR /app
 
-# Build tools compile yt-dlp dependencies whose Python 3.15 wheels are not yet
-# available (notably Brotli), including later boot-time dependency refreshes.
-RUN apt-get update && apt-get install -y \
-    build-essential \
+# Keep optional desktop/system packages out of this server image.
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
     unzip \
@@ -35,7 +33,12 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Install the stable yt-dlp release with its recommended dependencies.
-RUN pip install --no-cache-dir -U "yt-dlp[default]"
+# Brotli has no Python 3.15 wheel yet. Compile it and remove the temporary
+# compiler toolchain in the same layer so it does not inflate the runtime image.
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential && \
+    pip install --no-cache-dir -U "yt-dlp[default]" && \
+    apt-get purge -y --auto-remove build-essential && \
+    rm -rf /var/lib/apt/lists/*
 
 # Install yt-dlp PO token plugins:
 # - yt-dlp-get-pot: Framework for PO token generation

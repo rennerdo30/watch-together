@@ -1209,6 +1209,11 @@ class TestOneBrandMark:
 
 
 class TestDeploymentDependencyRefresh:
+    def test_backend_image_avoids_recommended_packages_and_retained_build_tools(self):
+        dockerfile = (BACKEND / "Dockerfile").read_text()
+        assert "apt-get install -y --no-install-recommends" in dockerfile
+        assert "apt-get purge -y --auto-remove build-essential" in dockerfile
+
     def test_deploy_refreshes_images_before_recreating_containers(self):
         script = (REPO_ROOT / "deploy/deploy.sh").read_text()
         assert "${COMPOSE} pull --ignore-buildable" in script

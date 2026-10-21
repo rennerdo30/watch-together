@@ -18,6 +18,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Use stable yt-dlp releases instead of arbitrary upstream master snapshots.
   Refresh deployment images and build bases explicitly; install frontend
   dependencies from the lockfile without bypassing peer checks.
+- Exclude recommended OS packages and remove temporary compiler tools after
+  building Python 3.15 dependencies, reducing the upgraded backend image size.
 - TypeScript remains pinned to 6.0.3: the latest stable 7.0.2 builds but
   fails lint because typescript-eslint does not support its API yet.
   ESLint 10.13.0 passes lint; upstream Next lint plugins still warn about
