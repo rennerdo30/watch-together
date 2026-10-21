@@ -76,9 +76,26 @@ class TestPackager:
             files = {name for _, name in extension_package.package_files(EXTENSION, build)}
             for page in ("popup/popup.html", "options/options.html"):
                 html = (EXTENSION / page).read_text(encoding="utf-8")
-                for ref in re.findall(r'(?:href|src)="([^"#:]+)"', html):
+                for attribute, ref in re.findall(r'(href|src)="([^"#:]+)"', html):
+                    if ref.startswith("https://"):
+                        assert attribute == "href", f"{page} must not load remote resources: {ref}"
+                        continue
                     target = posixpath.normpath(posixpath.join(posixpath.dirname(page), ref))
                     assert target in files, f"{page} links {ref}, which the {build.key} build leaves out"
+
+    def test_privacy_policy_is_discoverable_and_covers_sensitive_data(self):
+        policy = REPO_ROOT / "PRIVACY.md"
+        assert policy.is_file(), "the extension handles session credentials and needs a public policy"
+        text = " ".join(policy.read_text(encoding="utf-8").split())
+        for disclosure in (
+            "support@renner.dev", "authentication cookies", "30 minutes",
+            "other members", "chrome.storage.sync", "video URLs",
+            "HTTP", "Limited Use", "Reset", "YouTube watch history",
+        ):
+            assert disclosure in text
+        url = "https://github.com/rennerdo30/watch-together/blob/main/PRIVACY.md"
+        for page in ("popup/popup.html", "options/options.html"):
+            assert f'href="{url}"' in (EXTENSION / page).read_text(encoding="utf-8")
 
     def test_wrong_manifest_version_is_refused(self, tmp_path):
         (tmp_path / "manifest.json").write_text(json.dumps({"manifest_version": 2, "version": "1"}))

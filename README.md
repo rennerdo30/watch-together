@@ -1,5 +1,7 @@
 # Watch Together
 
+[Extension privacy policy](PRIVACY.md) · [Chrome Web Store submission guide](docs/chrome-web-store.md)
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/Docker-Ready-blue?logo=docker)](docker-compose.yml)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org/)

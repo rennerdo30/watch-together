@@ -190,3 +190,10 @@ body {
     font-size: 12px;
     color: var(--text-muted);
 }
+
+footer {
+    padding: 0 12px 12px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    line-height: 1.5;
+}

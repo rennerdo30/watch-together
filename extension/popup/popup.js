@@ -100,7 +100,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         let origin;
         try {
             const parsed = new URL(tab.url);
-            if (!['http:', 'https:'].includes(parsed.protocol)) return;
+            if (parsed.protocol !== 'https:') return;
             origin = parsed.origin;
         } catch {
             return;

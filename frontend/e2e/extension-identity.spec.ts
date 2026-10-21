@@ -2,6 +2,39 @@ import { test, expect } from '@playwright/test';
 
 import { loadBackground, loadExtensionPage } from './extension-harness';
 
+test('HTTP instances cannot receive session credentials, including saved connections', async ({ page }) => {
+  await loadBackground(page, {
+    local: { activeConnection: { origin: 'http://watch.example', token: 'private-token' } },
+  });
+  const result = await page.evaluate(async () => {
+    const worker = window as unknown as {
+      connectInstance(url: string): Promise<{ success: boolean; error?: string }>;
+      getActiveConnection(): Promise<unknown>;
+      instanceFetch(url: string, options: RequestInit): Promise<Response>;
+    };
+    const sent: string[] = [];
+    window.fetch = async (input) => {
+      sent.push(String(input));
+      return new Response('{}', { status: 200 });
+    };
+    let error = '';
+    try {
+      await worker.instanceFetch('http://watch.example/api/extension/sync', {
+        headers: { Authorization: 'Bearer private-token' },
+      });
+    } catch (err) { error = String(err); }
+    return {
+      connection: await worker.getActiveConnection(),
+      attempt: await worker.connectInstance('http://watch.example'),
+      sent, error,
+    };
+  });
+  expect(result.connection).toBeNull();
+  expect(result.attempt).toMatchObject({ success: false, error: expect.stringContaining('HTTPS') });
+  expect(result.error).toContain('HTTPS');
+  expect(result.sent).toEqual([]);
+});
+
 /**
  * Regression coverage for one browser displaying or operating as another
  * Watch Together user.

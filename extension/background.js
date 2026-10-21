@@ -113,7 +113,7 @@ async function getActiveConnection() {
     }
     try {
         const origin = new URL(connection.origin).origin;
-        if (!['http:', 'https:'].includes(new URL(origin).protocol)) return null;
+        if (new URL(origin).protocol !== 'https:') return null;
         return { origin, token: connection.token };
     } catch {
         return null;
@@ -127,6 +127,9 @@ async function clearActiveConnection() {
 
 /** fetch() against the instance, never without a deadline. */
 function instanceFetch(url, init = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+    if (new URL(url).protocol !== 'https:') {
+        throw new Error('Watch Together requires HTTPS to protect cookies and authentication tokens');
+    }
     return fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
 }
 
@@ -363,11 +366,11 @@ function connectInstance(instanceUrl, { syncAfterConnect = true } = {}) {
     let origin;
     try {
         origin = new URL(instanceUrl).origin;
-        if (!['http:', 'https:'].includes(new URL(origin).protocol)) {
+        if (new URL(origin).protocol !== 'https:') {
             throw new Error('unsupported protocol');
         }
     } catch {
-        return Promise.resolve({ success: false, error: 'That does not look like a valid URL' });
+        return Promise.resolve({ success: false, error: 'Connect to a valid HTTPS Watch Together URL' });
     }
 
     const existing = connectionAttempts.get(origin);
