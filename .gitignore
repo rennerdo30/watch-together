@@ -54,3 +54,14 @@ frontend/public/upscaling/
 
 # Scratch worktrees for parallel agents; never part of the repository.
 .claude/worktrees/
+
+# Astro docs build metadata and imports from canonical project Markdown.
+docs/.astro/
+docs/src/content/docs/overview.md
+docs/src/content/docs/privacy.md
+docs/src/content/docs/hosting/overview.md
+docs/src/content/docs/hosting/production.md
+docs/src/content/docs/reference/specification.md
+docs/src/content/docs/contributing.md
+docs/src/content/docs/changelog.md
+docs/src/content/docs/publishing/chrome-web-store.md

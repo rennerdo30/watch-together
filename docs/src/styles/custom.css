@@ -1,0 +1,18 @@
+/**
+ * Custom accent colors
+ * Change these values to customize your theme
+ */
+
+/* Dark mode */
+:root {
+  --sl-color-accent-low: hsl(25, 54%, 15%);
+  --sl-color-accent: hsl(25, 95%, 53%);
+  --sl-color-accent-high: hsl(25, 93%, 78%);
+}
+
+/* Light mode */
+:root[data-theme='light'] {
+  --sl-color-accent-low: hsl(25, 90%, 92%);
+  --sl-color-accent: hsl(25, 95%, 45%);
+  --sl-color-accent-high: hsl(25, 80%, 25%);
+}
