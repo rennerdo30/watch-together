@@ -1,5 +1,7 @@
 'use client';
 
+import { reportClientError, reportPlayerError } from '@/lib/client-errors';
+
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import Hls, { type LevelDetails } from 'hls.js';
 
@@ -235,6 +237,7 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
             };
 
             const handleError = () => {
+                reportClientError({ source: 'media', message: video.error?.message || 'Native playback error', code: video.error?.code });
                 console.error('[Player] Native playback error');
                 callbackRefs.current.onError?.('Failed to load video');
                 setIsLoading(false);
@@ -435,6 +438,7 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
             });
 
             hls.on(Hls.Events.ERROR, (_, data) => {
+                if (data.fatal) reportPlayerError('hls', data, `${data.type}: ${data.details}`);
                 if (data.fatal) {
                     console.error('[HLS] Fatal error:', data);
 

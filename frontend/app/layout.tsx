@@ -1,3 +1,4 @@
+import { ClientErrorReporter } from "@/components/client-error-reporter";
 import type { Metadata, Viewport } from "next";
 import { Inter_Tight, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
@@ -59,6 +60,7 @@ export default function RootLayout({
       <body
         className={`${uiSans.variable} ${uiMono.variable} antialiased`}
       >
+        <ClientErrorReporter />
         {children}
       </body>
     </html>

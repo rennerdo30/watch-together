@@ -27,6 +27,7 @@ from services.metrics import proxy_metrics
 from services import user_cookies
 from services.playback_quality import history as playback_history, verdict as playback_verdict
 from services.startup_timing import history as startup_history
+from services.client_errors import history as client_error_history
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,7 @@ async def admin_overview(request: Request, response: Response):
 
     logger.debug(f"Admin overview served to {user}")
     return {
+        "client_errors": client_error_history.snapshot(),
         "requested_by": user,
         "uptime_seconds": round(time.time() - STARTED_AT, 1),
         "totals": {

@@ -1,5 +1,7 @@
 'use client';
 
+import { reportPlayerError } from '@/lib/client-errors';
+
 import { useRef, useEffect, useCallback, useState } from 'react';
 
 import { startPlayback, type PlaybackStart } from '@/lib/playback';
@@ -450,6 +452,7 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
             const detail = shakaEvent.detail ?? shakaEvent;
             console.error('[ShakaPlayer] Playback error:', describeShakaError(detail));
             if (cancelled) return;
+            if (detail.code !== SHAKA_LOAD_INTERRUPTED) reportPlayerError('shaka', detail, describeShakaError(detail));
             // A signed stream URL the CDN now refuses is not a playback
             // failure to show; it is a stale source to replace. One report
             // per load: once the re-resolve is in, the manifest (same
@@ -790,6 +793,7 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
                 // Superseded by the next video's load: not a failure of either.
                 if ((error as ShakaErrorDetail | undefined)?.code === SHAKA_LOAD_INTERRUPTED) return;
                 const described = describeShakaError(error);
+                reportPlayerError('shaka', error, described);
                 console.error('[ShakaPlayer] Could not load manifest:', described);
                 loadingRef.current = false;
                 setIsLoading(false);

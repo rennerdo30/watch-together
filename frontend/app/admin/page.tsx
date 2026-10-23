@@ -170,6 +170,7 @@ function ClearButton({ label, onClear }: { label: string; onClear: () => Promise
 }
 
 export default function AdminPage() {
+  const [errorFilter, setErrorFilter] = useState('');
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [cache, setCache] = useState<AdminCacheReport | null>(null);
   const [denied, setDenied] = useState(false);
@@ -414,6 +415,49 @@ export default function AdminPage() {
           ) : (
             <p className="text-sm text-neutral-500">Loading…</p>
           )}
+        </SectionCard>
+
+        <SectionCard title="Client errors" icon={<ShieldAlert aria-hidden="true" className="h-4 w-4" />}>
+          <p className="mb-3 text-xs text-neutral-400">
+            Recent browser and player failures, newest first. Identical reports within 30 seconds
+            are counted together. History holds up to 500 events until the backend restarts;
+            redacted first occurrences are also written to the backend log.
+          </p>
+          <input aria-label="Filter client errors" placeholder="Filter by viewer, room, code or message"
+            value={errorFilter} onChange={event => setErrorFilter(event.target.value)}
+            className="mb-3 w-full rounded border border-white/10 bg-neutral-900 p-2 text-sm" />
+          {overview?.client_errors?.length ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="ui-label text-neutral-500"><tr>
+                  <th className="p-2">Last seen</th><th className="p-2">Viewer / room</th>
+                  <th className="p-2">Source / code</th><th className="p-2">HTTP</th>
+                  <th className="p-2">Count</th><th className="p-2">Error</th>
+                </tr></thead>
+                <tbody className="divide-y divide-white/5">
+                  {[...overview.client_errors].reverse().filter(event =>
+                    [event.member, event.room, event.source, event.code, event.http_status, event.message]
+                      .join(' ').toLowerCase().includes(errorFilter.toLowerCase())
+                  ).map((event, index) => (
+                    <tr key={`${event.at}-${index}`}>
+                      <td className="p-2 whitespace-nowrap">{timeFormatter.format(event.last_at * 1000)}</td>
+                      <td className="p-2">{event.member}<div className="text-neutral-500">{event.room || 'Outside a room'}</div></td>
+                      <td className="p-2">{event.source} {event.code ?? ''}</td>
+                      <td className="p-2">{event.http_status ?? '—'}</td>
+                      <td className="p-2">{event.count}</td>
+                      <td className="p-2 max-w-lg break-words">
+                        <details><summary className="cursor-pointer">{event.message}</summary>
+                          <p className="mt-2 font-mono">{event.resource}</p>
+                          <p className="mt-2">{event.user_agent}</p>
+                          <pre className="mt-2 whitespace-pre-wrap break-all">{event.stack}</pre>
+                        </details>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : <p className="text-sm text-neutral-500">No client errors reported.</p>}
         </SectionCard>
 
         <SectionCard title="Picture changes" icon={<Gauge aria-hidden="true" className="h-4 w-4" />}>

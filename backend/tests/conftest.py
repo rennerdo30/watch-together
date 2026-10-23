@@ -175,3 +175,11 @@ def reset_room_state():
     manager.active_connections.clear()
     manager._room_locks.clear()
     manager._departed.clear()
+
+
+@pytest.fixture(autouse=True)
+def empty_client_errors():
+    from services.client_errors import history
+    history.reset()
+    yield
+    history.reset()

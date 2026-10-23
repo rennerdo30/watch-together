@@ -77,6 +77,7 @@ from api.routes.cookies import router as cookies_router
 from api.routes.rooms import router as rooms_router
 from api.routes.tokens import router as tokens_router
 from api.routes.extension import router as extension_router
+from api.routes.client_errors import router as client_errors_router
 from api.routes.admin import router as admin_router
 from api.routes.user_settings import router as user_settings_router
 from api.routes.browser import router as browser_router
@@ -560,6 +561,7 @@ app.include_router(rooms_router)
 app.include_router(tokens_router)
 app.include_router(extension_router)
 app.include_router(admin_router)
+app.include_router(client_errors_router)
 app.include_router(user_settings_router)
 app.include_router(browser_router)
 app.include_router(playlists_router)

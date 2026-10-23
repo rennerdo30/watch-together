@@ -327,7 +327,23 @@ export interface AdminSharedBrowser {
     rooms: string[];
 }
 
+export interface AdminClientError {
+    at: number;
+    last_at: number;
+    count: number;
+    member: string;
+    room: string;
+    source: string;
+    message: string;
+    code: number | null;
+    http_status: number | null;
+    resource: string;
+    stack: string;
+    user_agent: string;
+}
+
 export interface AdminOverview {
+    client_errors: AdminClientError[];
     requested_by: string;
     uptime_seconds: number;
     totals: { rooms: number; viewers: number };
