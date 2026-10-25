@@ -3,7 +3,7 @@
   "name": "Watch Together Cookie Sync",
   "version": "1.5.2",
   "description": "Sync cookies from YouTube, Twitch, Kick and other sites to Watch Together while your browser is open",
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA9KhfLQQYW0mPdmNgEjgLJwGJltnXMuAuPDa+fNEzMRj+wSzjLYcls70eedRmBtFzeLdcdBIwI5jUEJwVtVwQKyS2XMRBtHZe7EqjixTGRM7rJlOWFm2jn39NR47acmfQ/UgDVBu2VnxkkCxQijHJc+d1CgSIbE7+FNIQlAPRFFn+WYOTM9aOW2Fd5fvTKohHVID+iVEw6WTRmJJERr2Df94Z2oouy4h50CbzHj1YlapSkXDErjw5IKZmm0Iy6Gcvq56H+qAfo3C5qF3eVg8U14qL2W+tVia1sWJSwwYLcgds+c0e0SluwdK/1wwVT1ajXK7pFIqFk+1Fw7V7ietoFwIDAQAB",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyT9AOuLWl8AspTzz8BWRgdzVjnbjddQnDNgEGTee3BS0KI3vCOsLq94adbN0jFWe+2ZPjeiBU4BcTnyzPTVrZUKgJIMdxlUiaDDxcZ9KTgVmmIjWBeuoOCqblq5AmAU6QwczZc5NneU6CUQuKE9VVvHDy82YupaWkTrcJdrSpFg35+i+vTxKAdH5Ro/tUx5dVdJx8Q4bA/0wWyE7fQScf9KSh4YIL90EegM4LzKeuLwrMulJx2vIFSTfHcAn1XJ/gTe5LLFmtWFfdYWnohh5DfNj5wuVpRrP1Xy70u57gjLZGTa60hG/7/hFpgFiiTULi0Ypiok7xfGqqkxcg7cJrQIDAQAB",
   "permissions": [
     "cookies",
     "storage",

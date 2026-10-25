@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Store identity (extension 1.5.2)
+
+- Use the published Chrome Web Store item's public key so unpacked Chrome
+  installs use the same extension ID as the store installation.
+
 ### Public documentation (extension 1.5.2)
 
 - Publish the user guides, deployment documentation and privacy policy on

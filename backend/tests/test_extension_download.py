@@ -188,6 +188,17 @@ class TestTheExtensionKeepsItsIdentity:
         decoded = base64.b64decode(key, validate=True)
         assert len(decoded) > 200 and decoded[:2] == b"\x30\x82"
 
+    def test_chrome_identity_matches_the_published_store_item(self):
+        """Unpacked and Web Store installs must use the owner's dashboard key."""
+        import base64
+        import hashlib
+
+        archive = extension_package.build_archive(EXTENSION, extension_package.BUILDS["chrome"])
+        key = base64.b64decode(read_manifest(archive)["key"], validate=True)
+        fingerprint = hashlib.sha256(key).hexdigest()[:32]
+        extension_id = "".join(chr(ord("a") + int(nibble, 16)) for nibble in fingerprint)
+        assert extension_id == "beonlkadfoclpnfigngknbjfoifibagn"
+
     def test_the_firefox_build_states_its_own_id(self):
         archive = extension_package.build_archive(EXTENSION, extension_package.BUILDS["firefox"])
         manifest = read_manifest(archive)
