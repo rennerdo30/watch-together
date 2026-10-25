@@ -48,3 +48,6 @@ next-env.d.ts
 
 # Generated local frame interpolation assets
 /public/framegen/
+
+# Generated local audio processing
+/public/audio/

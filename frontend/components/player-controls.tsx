@@ -48,8 +48,11 @@ interface PlayerControlsProps {
     onSeekHoverRest?: (time: number) => void;
     normalizationActive?: boolean;
     onToggleNormalization?: () => void;
-    normalizationGain?: number;
-    onNormalizationGainChange?: (val: number) => void;
+    nightModeActive?: boolean;
+    onToggleNightMode?: () => void;
+    normalizationStatus?: string;
+    nightModeGain?: number;
+    onNightModeGainChange?: (val: number) => void;
     /** Every channel folded into one, so both speakers carry the same mix. */
     monoAudio?: boolean;
     onToggleMono?: () => void;
@@ -107,8 +110,11 @@ export function PlayerControls({
     onSeekHoverRest,
     normalizationActive,
     onToggleNormalization,
-    normalizationGain,
-    onNormalizationGainChange,
+    nightModeActive,
+    onToggleNightMode,
+    normalizationStatus,
+    nightModeGain,
+    onNightModeGainChange,
     monoAudio,
     onToggleMono,
     qualityMode,
@@ -396,8 +402,8 @@ export function PlayerControls({
                             <button
                                 type="button"
                                 onClick={onToggleNormalization}
-                                title="Audio normalization"
-                                aria-label="Audio normalization"
+                                title="Normalize volume"
+                                aria-label="Normalize volume shortcut"
                                 aria-pressed={Boolean(normalizationActive)}
                                 className={cn(
                                     "w-8 h-8 rounded-full flex items-center justify-center transition-all",
@@ -563,15 +569,34 @@ export function PlayerControls({
                             </div>
                         )}
 
-                        {/* Normalization Gain */}
-                        {normalizationActive && onNormalizationGainChange && typeof normalizationGain === 'number' && (
+                        {onToggleNormalization && (
+                            <div className="px-3 py-2 border-b border-white/5 mb-2">
+                                <button type="button" aria-label="Normalize volume" aria-pressed={Boolean(normalizationActive)} onClick={onToggleNormalization}
+                                    className="flex w-full items-center justify-between gap-2 text-xs text-white rounded-md focus-visible:outline-2 focus-visible:outline-[color:var(--accent-primary)]">
+                                    <span>Normalize volume</span><span>{normalizationActive ? 'On' : 'Off'}</span>
+                                </button>
+                                <p className="mt-2 text-[10px] leading-relaxed text-zinc-400">Matches loudness across videos gradually. Runs locally, with silence gating and peak protection.</p>
+                                {normalizationActive && <p role="status" aria-label="Volume normalization status" className="mt-2 text-[10px] leading-relaxed text-amber-200/90">{normalizationStatus}</p>}
+                            </div>
+                        )}
+                        {onToggleNightMode && (
+                            <div className="px-3 py-2 border-b border-white/5 mb-2">
+                                <button type="button" aria-label="Night mode" aria-pressed={Boolean(nightModeActive)} onClick={onToggleNightMode}
+                                    className="flex w-full items-center justify-between gap-2 text-xs text-white rounded-md focus-visible:outline-2 focus-visible:outline-[color:var(--accent-primary)]">
+                                    <span>Night mode</span><span>{nightModeActive ? 'On' : 'Off'}</span>
+                                </button>
+                                <p className="mt-2 text-[10px] leading-relaxed text-zinc-400">Reduces the difference between quiet dialogue and loud action.</p>
+                            </div>
+                        )}
+                        {/* Night mode make-up gain */}
+                        {nightModeActive && onNightModeGainChange && typeof nightModeGain === 'number' && (
                             <div className="px-3 py-2 border-b border-white/5 mb-2">
                                 <div className="flex justify-between items-center mb-2">
                                     <span className="text-[10px] font-medium text-[color:var(--accent-primary)] flex items-center gap-1">
                                         <Ear className="w-3 h-3" /> Gain
                                     </span>
                                     <span className="text-[10px] text-zinc-400">
-                                        {(20 * Math.log10(normalizationGain)).toFixed(1)} dB
+                                        {(20 * Math.log10(nightModeGain)).toFixed(1)} dB
                                     </span>
                                 </div>
                                 <input
@@ -579,9 +604,9 @@ export function PlayerControls({
                                     min="0.5"
                                     max="3.0"
                                     step="0.1"
-                                    aria-label="Normalization gain"
-                                    value={normalizationGain}
-                                    onChange={(e) => onNormalizationGainChange(parseFloat(e.target.value))}
+                                    aria-label="Night mode gain"
+                                    value={nightModeGain}
+                                    onChange={(e) => onNightModeGainChange(parseFloat(e.target.value))}
                                     className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-[color:var(--accent-primary)]"
                                 />
                             </div>

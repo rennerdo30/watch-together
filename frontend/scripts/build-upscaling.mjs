@@ -76,3 +76,9 @@ for (const file of ['rt_v7s.bin', 'rt_v7s.json']) {
 await copyFile(path.join(root, 'node_modules/framegen/LICENSE'), path.join(framegenOutput, 'LICENSE.txt'));
 await copyFile(path.join(root, 'lib/framegen/WEIGHTS_LICENSE.md'), path.join(framegenOutput, 'WEIGHTS_LICENSE.md'));
 console.log('Built local frame interpolation worker and model.');
+
+const audioOutput = path.join(root, 'public/audio/v1');
+await mkdir(audioOutput, { recursive: true });
+await build({ absWorkingDir: root, entryPoints: ['lib/audio/normalizer.worklet.ts'],
+  outdir: audioOutput, bundle: true, minify: true, format: 'iife', platform: 'browser', target: 'es2022' });
+console.log('Built local loudness normalization worklet.');

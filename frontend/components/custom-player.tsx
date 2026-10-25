@@ -309,10 +309,12 @@ export function CustomPlayer({
         'w2g-player-volume', 1, parseStoredVolume);
     const [isMuted, setIsMuted] = useLocalStorageState(
         'w2g-player-muted', false, parseStoredBoolean);
-    const [isNormalizationEnabled, setIsNormalizationEnabled] = useLocalStorageState(
+    const [isNightModeEnabled, setIsNightModeEnabled] = useLocalStorageState(
         'w2g-player-normalization', true, parseStoredBoolean);
-    const [normalizationGain, setNormalizationGain] = useLocalStorageState(
+    const [nightModeGain, setNightModeGain] = useLocalStorageState(
         'w2g-player-normalization-gain', 1, parseStoredGain);
+    const [isLoudnessEnabled, setIsLoudnessEnabled] = useLocalStorageState(
+        'w2g-player-loudness-normalization', false, parseStoredBoolean);
     // Mono is one viewer's choice about their own speakers, so it is stored
     // per browser and never sent to the room.
     const [isMonoEnabled, setIsMonoEnabled] = useLocalStorageState(
@@ -376,8 +378,9 @@ export function CustomPlayer({
     // Both engines carry audio on the video element.
     const audio = useAudioProcessing({
         sourceElement: mediaElement,
-        normalize: isNormalizationEnabled,
-        gain: normalizationGain,
+        nightMode: isNightModeEnabled,
+        normalizeLoudness: isLoudnessEnabled,
+        gain: nightModeGain,
         mono: isMonoEnabled,
         prepareDelay: framegenMode !== 'off' && framegenCapability.ready && !isLive && !isShareMode,
         delayMs: framegenDelay,
@@ -794,13 +797,13 @@ export function CustomPlayer({
         }
     }, [isMseMode, shakaPlayer, hlsPlayer]);
 
-    const toggleNormalization = useCallback(() => {
-        setIsNormalizationEnabled(!isNormalizationEnabled);
-    }, [isNormalizationEnabled, setIsNormalizationEnabled]);
+    const toggleNightMode = useCallback(() => {
+        setIsNightModeEnabled(!isNightModeEnabled);
+    }, [isNightModeEnabled, setIsNightModeEnabled]);
 
-    const updateNormalizationGain = useCallback((val: number) => {
-        setNormalizationGain(val);
-    }, [setNormalizationGain]);
+    const updateNightModeGain = useCallback((val: number) => {
+        setNightModeGain(val);
+    }, [setNightModeGain]);
 
     const toggleMono = useCallback(() => {
         setIsMonoEnabled(!isMonoEnabled);
@@ -1045,9 +1048,9 @@ export function CustomPlayer({
                             </>
                         )}
                         <div className="flex justify-between border-t border-white/5 pt-1.5 mt-1.5">
-                            <span className="text-zinc-500">Normalization</span>
-                            <span className={cn("text-right", audio.normalizeActive ? "text-emerald-400" : "text-zinc-500")}>
-                                {audio.normalizeActive ? 'Active' : 'Off'}
+                            <span className="text-zinc-500">Night mode</span>
+                            <span className={cn("text-right", audio.nightModeActive ? "text-emerald-400" : "text-zinc-500")}>
+                                {audio.nightModeActive ? 'Active' : 'Off'}
                             </span>
                         </div>
                         <div className="flex justify-between">
@@ -1093,10 +1096,13 @@ export function CustomPlayer({
                 enhancementMode={enhancementMode}
                 onEnhancementModeChange={setEnhancementMode}
                 enhancementStatus={enhancementStatus.message}
-                normalizationActive={isNormalizationEnabled}
-                onToggleNormalization={toggleNormalization}
-                normalizationGain={normalizationGain}
-                onNormalizationGainChange={updateNormalizationGain}
+                normalizationActive={isLoudnessEnabled}
+                onToggleNormalization={() => setIsLoudnessEnabled(!isLoudnessEnabled)}
+                normalizationStatus={audio.loudnessStatus === 'active' ? `Active · ${audio.loudnessGainDb >= 0 ? '+' : ''}${audio.loudnessGainDb.toFixed(1)} dB adjustment` : audio.loudnessStatus === 'unavailable' ? 'Unavailable — original audio continues' : 'Preparing local loudness measurement…'}
+                nightModeActive={isNightModeEnabled}
+                onToggleNightMode={toggleNightMode}
+                nightModeGain={nightModeGain}
+                onNightModeGainChange={updateNightModeGain}
                 monoAudio={isMonoEnabled}
                 onToggleMono={toggleMono}
                 qualityMode={isMseMode ? qualityMode : undefined}

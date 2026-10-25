@@ -2,15 +2,17 @@
 
 import { useRef, useEffect, useCallback, useState } from 'react';
 
+import { reportClientError } from '@/lib/client-errors';
 import { createMonoDownmix } from '@/lib/mono-audio';
 
 export interface UseAudioProcessingOptions {
     /** The media element to process (video or audio) */
     sourceElement: HTMLMediaElement | null;
     /** Level the audio with a compressor and make-up gain ("night mode") */
-    normalize: boolean;
+    nightMode: boolean;
     /** Make-up gain applied after the compressor (default 1.0) */
     gain: number;
+    normalizeLoudness?: boolean;
     /** Fold every channel into one, played identically by both speakers */
     mono: boolean;
     /** Fixed local presentation buffer used by frame interpolation. */
@@ -20,21 +22,25 @@ export interface UseAudioProcessingOptions {
 
 export interface UseAudioProcessingReturn {
     /** Whether the compressor is in the path right now */
-    normalizeActive: boolean;
+    nightModeActive: boolean;
     /** Whether the downmix is in the path right now */
     monoActive: boolean;
     delayReady: boolean;
+    loudnessStatus: 'off' | 'starting' | 'active' | 'unavailable';
+    loudnessGainDb: number;
 }
 
 // Global WeakMap to track which elements have MediaElementSourceNodes
 // This is CRITICAL because createMediaElementSource() can only be called once per element
+const normalizerModules = new WeakMap<AudioContext, Promise<void>>();
+
 const connectedElements = new WeakMap<HTMLMediaElement, {
     sourceNode: MediaElementAudioSourceNode;
     audioContext: AudioContext;
 }>();
 
 /**
- * Compressor settings for night mode / normalization
+ * Compressor settings for night mode
  */
 const COMPRESSOR_CONFIG = {
     threshold: -24,    // dB - signals above this get compressed
@@ -47,8 +53,8 @@ const COMPRESSOR_CONFIG = {
 /**
  * Custom hook for the player's audio graph (Web Audio API).
  *
- * Both stages are optional and independent: volume levelling for night
- * listening, and a mono downmix. They share one AudioContext and one
+ * Independent stages: Night mode compression, mono downmix, streaming
+ * loudness normalization and optional frame-generation audio delay. They share one AudioContext and one
  * MediaElementAudioSourceNode because a media element can be the source of
  * exactly one such node, ever — a second hook owning a second graph for the
  * same element is impossible, not merely wasteful.
@@ -61,7 +67,7 @@ const COMPRESSOR_CONFIG = {
  *   never spends one of the browser's handful of AudioContexts
  */
 export function useAudioProcessing(options: UseAudioProcessingOptions): UseAudioProcessingReturn {
-    const { sourceElement, normalize, gain, mono, delayMs = 0, prepareDelay = false } = options;
+    const { sourceElement, nightMode, gain, mono, normalizeLoudness = false, delayMs = 0, prepareDelay = false } = options;
 
     // Refs for audio nodes (persist across renders)
     const audioContextRef = useRef<AudioContext | null>(null);
@@ -77,6 +83,10 @@ export function useAudioProcessing(options: UseAudioProcessingOptions): UseAudio
     const delayRef = useRef<DelayNode | null>(null);
     const delayMsRef = useRef(delayMs);
     const [audioRunning, setAudioRunning] = useState(false);
+    const normalizerRef = useRef<AudioWorkletNode | null>(null);
+    const [normalizerReady, setNormalizerReady] = useState(false);
+    const [normalizerFailed, setNormalizerFailed] = useState(false);
+    const [loudnessGainDb, setLoudnessGainDb] = useState(0);
 
     // State
     const [isConnected, setIsConnected] = useState(false);
@@ -126,10 +136,11 @@ export function useAudioProcessing(options: UseAudioProcessingOptions): UseAudio
         gainNodeRef.current?.disconnect();
         monoNodeRef.current?.disconnect();
         delayRef.current?.disconnect();
+        normalizerRef.current?.disconnect();
 
         let tail: AudioNode = source;
 
-        if (normalize) {
+        if (nightMode) {
             if (!compressorRef.current) {
                 const compressor = ctx.createDynamicsCompressor();
                 compressor.threshold.value = COMPRESSOR_CONFIG.threshold;
@@ -156,6 +167,10 @@ export function useAudioProcessing(options: UseAudioProcessingOptions): UseAudio
             tail = monoNodeRef.current;
         }
 
+        if (normalizeLoudness && normalizerReady && normalizerRef.current) {
+            tail.connect(normalizerRef.current);
+            tail = normalizerRef.current;
+        }
         if (prepareDelay || delayRef.current) {
             delayRef.current ??= ctx.createDelay(0.5);
             delayRef.current.delayTime.value = delayMsRef.current / 1000;
@@ -167,7 +182,7 @@ export function useAudioProcessing(options: UseAudioProcessingOptions): UseAudio
         if (ctx.state === 'suspended') {
             ctx.resume();
         }
-    }, [normalize, mono, prepareDelay]);
+    }, [nightMode, mono, prepareDelay, normalizeLoudness, normalizerReady]);
 
     /**
      * Connect source element to audio graph. Idempotent: the source node for a
@@ -228,7 +243,7 @@ export function useAudioProcessing(options: UseAudioProcessingOptions): UseAudio
         // Nothing switched on and nothing built yet: leave the element alone.
         // Once a source node exists the element's audio only reaches the
         // speakers through the graph, so it must still be routed.
-        if (!normalize && !mono && !prepareDelay && !audioContextRef.current) return;
+        if (!nightMode && !normalizeLoudness && !mono && !prepareDelay && !audioContextRef.current) return;
 
         // Deferred so the connection does not run inside the effect that
         // renders the element, and a burst of toggles settles into one rebuild.
@@ -238,7 +253,7 @@ export function useAudioProcessing(options: UseAudioProcessingOptions): UseAudio
             setIsConnected(connected);
         }, 0);
         return () => window.clearTimeout(timerId);
-    }, [sourceElement, normalize, mono, prepareDelay, isSupported, connectSource, applyRouting]);
+    }, [sourceElement, nightMode, normalizeLoudness, mono, prepareDelay, isSupported, connectSource, applyRouting]);
 
     useEffect(() => {
         delayMsRef.current = delayMs;
@@ -246,6 +261,63 @@ export function useAudioProcessing(options: UseAudioProcessingOptions): UseAudio
             delayRef.current.delayTime.setValueAtTime(Math.min(0.12, Math.max(0, delayMs / 1000)), audioContextRef.current.currentTime);
         }
     }, [delayMs]);
+
+    // The module is loaded only after local opt-in. Base routing stays audible
+    // while it loads, and a failed processor is removed from the signal path.
+    useEffect(() => {
+        if (!normalizeLoudness || !isConnected || !sourceElement) return;
+        const context = audioContextRef.current;
+        if (!context) return;
+        let cancelled = false;
+        void (async () => {
+            try {
+                if (!normalizerRef.current) {
+                    if (!normalizerModules.has(context)) {
+                        const workletLoad = context.audioWorklet.addModule('/audio/v1/normalizer.worklet.js');
+                        normalizerModules.set(context, workletLoad);
+                        void workletLoad.catch(() => normalizerModules.delete(context));
+                    }
+                    await normalizerModules.get(context);
+                    if (cancelled || context.state === 'closed') return;
+                    const node = new AudioWorkletNode(context, 'w2g-loudness-normalizer', {
+                        numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2],
+                        channelCount: 2, channelCountMode: 'explicit', channelInterpretation: 'speakers',
+                    });
+                    node.port.onmessage = ({ data }) => {
+                        if (normalizerRef.current === node && Number.isFinite(data.gainDb)) setLoudnessGainDb(data.gainDb);
+                    };
+                    node.addEventListener('processorerror', () => {
+                        if (normalizerRef.current !== node) return;
+                        normalizerRef.current = null; node.disconnect(); node.port.close();
+                        setNormalizerFailed(true); setNormalizerReady(false);
+                        reportClientError({ source: 'media', message: 'Volume normalization processor failed; original audio routing restored' });
+                    });
+                    normalizerRef.current = node;
+                }
+                normalizerRef.current.port.postMessage({ type: 'volume', volume: sourceElement.muted ? 0 : sourceElement.volume });
+                normalizerRef.current.port.postMessage({ type: 'reset' });
+                setNormalizerFailed(false); setNormalizerReady(true);
+            } catch { if (!cancelled) { setNormalizerFailed(true); setNormalizerReady(false); reportClientError({ source: 'media', message: 'Volume normalization could not load; original audio routing retained' }); } }
+        })();
+        return () => {
+            cancelled = true;
+            const node = normalizerRef.current;
+            if (node) {
+                node.port.postMessage({ type: 'dispose' }); node.disconnect(); node.port.close();
+                normalizerRef.current = null;
+            }
+            setNormalizerReady(false);
+        };
+    }, [normalizeLoudness, isConnected, sourceElement]);
+
+    useEffect(() => {
+        if (!sourceElement) return;
+        const reset = () => normalizerRef.current?.port.postMessage({ type: 'reset' });
+        const volume = () => normalizerRef.current?.port.postMessage({ type: 'volume', volume: sourceElement.muted ? 0 : sourceElement.volume });
+        sourceElement.addEventListener('volumechange', volume);
+        for (const event of ['seeking', 'emptied', 'loadeddata']) sourceElement.addEventListener(event, reset);
+        return () => { sourceElement.removeEventListener('volumechange', volume); for (const event of ['seeking', 'emptied', 'loadeddata']) sourceElement.removeEventListener(event, reset); };
+    }, [sourceElement]);
 
     // === EFFECT: Update gain value ===
     useEffect(() => {
@@ -304,14 +376,21 @@ export function useAudioProcessing(options: UseAudioProcessingOptions): UseAudio
             gainNodeRef.current = null;
             monoNodeRef.current = null;
             delayRef.current = null;
+            if (normalizerRef.current) {
+                normalizerRef.current.port.onmessage = null;
+                normalizerRef.current.disconnect(); normalizerRef.current.port.close(); normalizerRef.current = null;
+            }
+            setNormalizerReady(false);
             connectedElementRef.current = null;
             setIsConnected(false);
         };
     }, [sourceElement]);
 
     return {
-        normalizeActive: normalize && isConnected,
+        nightModeActive: nightMode && isConnected,
         monoActive: mono && isConnected,
         delayReady: prepareDelay && isConnected && audioRunning,
+        loudnessStatus: !normalizeLoudness ? 'off' : normalizerFailed || !isSupported ? 'unavailable' : normalizerReady && isConnected ? 'active' : 'starting',
+        loudnessGainDb,
     };
 }
