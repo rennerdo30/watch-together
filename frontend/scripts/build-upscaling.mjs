@@ -64,3 +64,15 @@ for (const variant of ['internal', 'compat_internal']) {
 await writeFile(path.join(output, 'LICENSE-WebSR.txt'), await readFile(path.join(websr, 'LICENSE')));
 await copyFile(path.join(root, 'lib/upscaling/THIRD_PARTY_NOTICES.txt'), path.join(output, 'THIRD_PARTY_NOTICES.txt'));
 console.log('Built local upscaling workers, models, and WASM runtime.');
+
+// Frame interpolation is opt-in; package and models are version-pinned and self-hosted.
+const framegenOutput = path.join(root, 'public/framegen/v1');
+await mkdir(framegenOutput, { recursive: true });
+await build({ absWorkingDir: root, entryPoints: ['lib/framegen/interpolation.worker.ts'],
+  outdir: framegenOutput, bundle: true, minify: true, format: 'iife', platform: 'browser', target: 'es2022', legalComments: 'linked' });
+for (const file of ['rt_v7s.bin', 'rt_v7s.json']) {
+  await copyFile(path.join(root, 'node_modules/framegen/weights', file), path.join(framegenOutput, file));
+}
+await copyFile(path.join(root, 'node_modules/framegen/LICENSE'), path.join(framegenOutput, 'LICENSE.txt'));
+await copyFile(path.join(root, 'lib/framegen/WEIGHTS_LICENSE.md'), path.join(framegenOutput, 'WEIGHTS_LICENSE.md'));
+console.log('Built local frame interpolation worker and model.');

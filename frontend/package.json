@@ -20,6 +20,7 @@
     "@litertjs/core": "2.5.3",
     "@websr/websr": "0.0.16",
     "clsx": "^2.1.1",
+    "framegen": "1.4.0",
     "hls.js": "^1.7.3",
     "lucide-react": "^1.61.0",
     "next": "^16.4.2",

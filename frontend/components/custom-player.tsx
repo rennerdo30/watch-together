@@ -20,6 +20,7 @@ import {
     PLAYER_STATS_REFRESH_MS, QUALITY_REPORT_INTERVAL_MS,
     SHARE_LIVE_EDGE_CHECK_MS, SHARE_LIVE_EDGE_MAX_SECONDS, SHAKA_PREFERRED_VIDEO_CODECS,
 } from '@/lib/constants';
+import { useFrameGeneration, useFramegenPreference, useFramegenCapability } from './player/hooks/useFrameGeneration';
 import { useVideoEnhancement } from './player/hooks/useVideoEnhancement';
 
 interface CustomPlayerProps {
@@ -241,8 +242,9 @@ export function CustomPlayer({
     // manifest, so the browser muxes audio and video against a single clock.
     const isMseMode = !isShareMode && streamType === 'dash' && !!manifestUrl;
     const src = typeof url === 'string' ? url : url.src;
-    const { hostRef: enhancementHostRef, mode: enhancementMode, setMode: setEnhancementMode, status: enhancementStatus } =
-        useVideoEnhancement(mediaElement, isMseMode ? manifestUrl! : src);
+    const [framegenMode, setFramegenMode] = useFramegenPreference();
+    const [framegenDelay, setFramegenDelay] = useState(0);
+    const framegenCapability = useFramegenCapability(mediaElement, isMseMode ? manifestUrl! : src, framegenMode);
 
     // === UI STATE ===
     const [showControls, setShowControls] = useState(true);
@@ -377,7 +379,15 @@ export function CustomPlayer({
         normalize: isNormalizationEnabled,
         gain: normalizationGain,
         mono: isMonoEnabled,
+        prepareDelay: framegenMode !== 'off' && framegenCapability.ready && !isLive && !isShareMode,
+        delayMs: framegenDelay,
     });
+
+    const { hostRef: framegenHostRef, status: framegenStatus } = useFrameGeneration(mediaElement, isMseMode ? manifestUrl! : src,
+        audio.delayReady, setFramegenDelay, framegenMode, !!isLive || isShareMode);
+    const framegenOwnsPicture = framegenMode !== 'off' && framegenCapability.ready && framegenStatus.state !== 'unavailable';
+    const { hostRef: enhancementHostRef, mode: enhancementMode, setMode: setEnhancementMode, status: enhancementStatus } =
+        useVideoEnhancement(mediaElement, isMseMode ? manifestUrl! : src, framegenOwnsPicture);
 
     const isBuffering = isMseMode ? shakaPlayer.isBuffering : hlsPlayer.isBuffering;
 
@@ -863,6 +873,8 @@ export function CustomPlayer({
                 }}
             />
 
+            <div ref={framegenHostRef} data-frame-generation={framegenStatus.state}
+                className="absolute inset-0 pointer-events-none z-[1]" aria-hidden="true" />
             <div ref={enhancementHostRef} data-video-enhancement={enhancementStatus.state} data-enhancement-backend={enhancementStatus.backend}
                 className="absolute inset-0 pointer-events-none" aria-hidden="true" />
 
@@ -1075,6 +1087,9 @@ export function CustomPlayer({
                 seekableForDVR={isLive ? seekableRange : undefined}
                 visible={showControls || !isPlaying || showSettings}
                 onPointerOverChange={(over) => { pointerOverControlsRef.current = over; }}
+                framegenMode={framegenMode}
+                onFramegenModeChange={setFramegenMode}
+                framegenStatus={framegenCapability.ready ? framegenStatus.message : framegenCapability.message}
                 enhancementMode={enhancementMode}
                 onEnhancementModeChange={setEnhancementMode}
                 enhancementStatus={enhancementStatus.message}

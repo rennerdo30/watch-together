@@ -7,12 +7,12 @@ import type { EnhancementController, EnhancementStatus } from '@/lib/upscaling/c
 
 const OFF: EnhancementStatus = { state: 'off', message: 'Off' };
 
-export function useVideoEnhancement(video: HTMLVideoElement | null, source: string) {
+export function useVideoEnhancement(video: HTMLVideoElement | null, source: string, suspended = false) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [mode, setMode] = useLocalStorageState<UpscaleMode>('w2g-player-upscaling-beta', 'off', parseUpscaleMode);
   const [status, setStatus] = useState<EnhancementStatus>(OFF);
   useEffect(() => {
-    if (!video || !hostRef.current || mode === 'off') return;
+    if (!video || !hostRef.current || mode === 'off' || suspended) return;
     const host = hostRef.current;
     let cancelled = false;
     let controller: EnhancementController | undefined;
@@ -23,6 +23,6 @@ export function useVideoEnhancement(video: HTMLVideoElement | null, source: stri
       if (!cancelled) setStatus({ state: 'unavailable', message: 'Enhancement could not load; original playback continues' });
     });
     return () => { cancelled = true; controller?.dispose(); };
-  }, [video, source, mode]);
-  return { hostRef, mode, setMode, status: mode === 'off' ? OFF : status };
+  }, [video, source, mode, suspended]);
+  return { hostRef, mode, setMode, status: mode === 'off' ? OFF : suspended ? { state: 'idle' as const, message: 'Upscaling paused while motion smoothing is selected' } : status };
 }

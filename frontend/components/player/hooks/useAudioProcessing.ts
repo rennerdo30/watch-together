@@ -13,6 +13,9 @@ export interface UseAudioProcessingOptions {
     gain: number;
     /** Fold every channel into one, played identically by both speakers */
     mono: boolean;
+    /** Fixed local presentation buffer used by frame interpolation. */
+    delayMs?: number;
+    prepareDelay?: boolean;
 }
 
 export interface UseAudioProcessingReturn {
@@ -20,6 +23,7 @@ export interface UseAudioProcessingReturn {
     normalizeActive: boolean;
     /** Whether the downmix is in the path right now */
     monoActive: boolean;
+    delayReady: boolean;
 }
 
 // Global WeakMap to track which elements have MediaElementSourceNodes
@@ -57,7 +61,7 @@ const COMPRESSOR_CONFIG = {
  *   never spends one of the browser's handful of AudioContexts
  */
 export function useAudioProcessing(options: UseAudioProcessingOptions): UseAudioProcessingReturn {
-    const { sourceElement, normalize, gain, mono } = options;
+    const { sourceElement, normalize, gain, mono, delayMs = 0, prepareDelay = false } = options;
 
     // Refs for audio nodes (persist across renders)
     const audioContextRef = useRef<AudioContext | null>(null);
@@ -70,6 +74,9 @@ export function useAudioProcessing(options: UseAudioProcessingOptions): UseAudio
     // it out of the routing callbacks, which must not be rebuilt for a volume
     // change (that would tear down and re-create the graph mid-playback).
     const gainRef = useRef(gain);
+    const delayRef = useRef<DelayNode | null>(null);
+    const delayMsRef = useRef(delayMs);
+    const [audioRunning, setAudioRunning] = useState(false);
 
     // State
     const [isConnected, setIsConnected] = useState(false);
@@ -91,6 +98,9 @@ export function useAudioProcessing(options: UseAudioProcessingOptions): UseAudio
                 return null;
             }
             audioContextRef.current = new AudioContextClass();
+            const context = audioContextRef.current;
+            context.onstatechange = () => setAudioRunning(context.state === 'running');
+            setAudioRunning(context.state === 'running');
             return audioContextRef.current;
         } catch (e) {
             console.error('[AudioProcessing] Failed to create AudioContext:', e);
@@ -115,6 +125,7 @@ export function useAudioProcessing(options: UseAudioProcessingOptions): UseAudio
         compressorRef.current?.disconnect();
         gainNodeRef.current?.disconnect();
         monoNodeRef.current?.disconnect();
+        delayRef.current?.disconnect();
 
         let tail: AudioNode = source;
 
@@ -145,12 +156,18 @@ export function useAudioProcessing(options: UseAudioProcessingOptions): UseAudio
             tail = monoNodeRef.current;
         }
 
+        if (prepareDelay || delayRef.current) {
+            delayRef.current ??= ctx.createDelay(0.5);
+            delayRef.current.delayTime.value = delayMsRef.current / 1000;
+            tail.connect(delayRef.current);
+            tail = delayRef.current;
+        }
         tail.connect(ctx.destination);
 
         if (ctx.state === 'suspended') {
             ctx.resume();
         }
-    }, [normalize, mono]);
+    }, [normalize, mono, prepareDelay]);
 
     /**
      * Connect source element to audio graph. Idempotent: the source node for a
@@ -211,7 +228,7 @@ export function useAudioProcessing(options: UseAudioProcessingOptions): UseAudio
         // Nothing switched on and nothing built yet: leave the element alone.
         // Once a source node exists the element's audio only reaches the
         // speakers through the graph, so it must still be routed.
-        if (!normalize && !mono && !audioContextRef.current) return;
+        if (!normalize && !mono && !prepareDelay && !audioContextRef.current) return;
 
         // Deferred so the connection does not run inside the effect that
         // renders the element, and a burst of toggles settles into one rebuild.
@@ -221,7 +238,14 @@ export function useAudioProcessing(options: UseAudioProcessingOptions): UseAudio
             setIsConnected(connected);
         }, 0);
         return () => window.clearTimeout(timerId);
-    }, [sourceElement, normalize, mono, isSupported, connectSource, applyRouting]);
+    }, [sourceElement, normalize, mono, prepareDelay, isSupported, connectSource, applyRouting]);
+
+    useEffect(() => {
+        delayMsRef.current = delayMs;
+        if (delayRef.current && audioContextRef.current) {
+            delayRef.current.delayTime.setValueAtTime(Math.min(0.12, Math.max(0, delayMs / 1000)), audioContextRef.current.currentTime);
+        }
+    }, [delayMs]);
 
     // === EFFECT: Update gain value ===
     useEffect(() => {
@@ -279,6 +303,7 @@ export function useAudioProcessing(options: UseAudioProcessingOptions): UseAudio
             compressorRef.current = null;
             gainNodeRef.current = null;
             monoNodeRef.current = null;
+            delayRef.current = null;
             connectedElementRef.current = null;
             setIsConnected(false);
         };
@@ -287,5 +312,6 @@ export function useAudioProcessing(options: UseAudioProcessingOptions): UseAudio
     return {
         normalizeActive: normalize && isConnected,
         monoActive: mono && isConnected,
+        delayReady: prepareDelay && isConnected && audioRunning,
     };
 }

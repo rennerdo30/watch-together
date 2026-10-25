@@ -1,5 +1,7 @@
 'use client';
 
+import { parseFramegenMode, type FramegenMode } from '@/lib/framegen/policy';
+
 import { useEffect, useId, useRef, useState } from 'react';
 import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, Settings, Activity, PictureInPicture, Ear, Headphones } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -59,6 +61,9 @@ interface PlayerControlsProps {
     isLive?: boolean;
     syncThreshold?: number;
     onSyncThresholdChange?: (val: number) => void;
+    framegenMode?: FramegenMode;
+    onFramegenModeChange?: (mode: FramegenMode) => void;
+    framegenStatus?: string;
     enhancementMode?: UpscaleMode;
     onEnhancementModeChange?: (mode: UpscaleMode) => void;
     enhancementStatus?: string;
@@ -112,6 +117,9 @@ export function PlayerControls({
     isLive,
     syncThreshold,
     onSyncThresholdChange,
+    framegenMode = 'off',
+    onFramegenModeChange,
+    framegenStatus,
     enhancementMode = 'off',
     onEnhancementModeChange,
     enhancementStatus,
@@ -121,6 +129,7 @@ export function PlayerControls({
     onPointerOverChange,
 }: PlayerControlsProps) {
     const enhancementSelectId = useId();
+    const framegenSelectId = useId();
     const qualityModeSelectId = useId();
     const audioTrackSelectId = useId();
     // Where on the seek bar the pointer is, as a fraction, or null when away.
@@ -513,6 +522,18 @@ export function PlayerControls({
                                         {enhancementStatus}
                                     </p>
                                 )}
+                            </div>
+                        )}
+                        {onFramegenModeChange && (
+                            <div className="px-3 py-2 border-b border-white/5 mb-2">
+                                <label className="block text-xs text-white mb-2" htmlFor={framegenSelectId}>Motion smoothing (beta)</label>
+                                <select id={framegenSelectId} aria-label="Motion smoothing (beta)" value={framegenMode}
+                                    onChange={event => onFramegenModeChange(parseFramegenMode(event.target.value))}
+                                    className="w-full rounded-md border border-white/15 bg-zinc-800 px-2 py-2 text-xs text-white">
+                                    <option value="off">Off</option><option value="30">30 fps</option><option value="60">60 fps</option>
+                                </select>
+                                <p className="mt-2 text-[10px] leading-relaxed text-zinc-400">Local AI for personal, non-commercial use. Adds 120 ms of picture/audio delay. Temporarily replaces upscaling; may increase battery use.</p>
+                                {framegenMode !== 'off' && <p role="status" aria-label="Motion smoothing status" className="mt-2 text-[10px] leading-relaxed text-amber-200/90">{framegenStatus}</p>}
                             </div>
                         )}
                         {/* Mono audio */}
