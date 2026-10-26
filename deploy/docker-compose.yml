@@ -219,7 +219,8 @@ services:
           cpus: '0.25'
 
   cloudflared:
-    image: cloudflare/cloudflared:2026.10.3
+    image: cloudflare/cloudflared:latest
+    pull_policy: always
     restart: unless-stopped
     dns: *doh_resolver
     depends_on:

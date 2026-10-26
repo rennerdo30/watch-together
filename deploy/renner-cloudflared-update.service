@@ -1,0 +1,16 @@
+[Unit]
+Description=Update running Cloudflared Compose services only
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/flock -n /run/lock/renner-cloudflared-update.lock /usr/bin/python3 /usr/local/lib/renner-cloudflared-autoupdate.py
+TimeoutStartSec=15min
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/run/lock
