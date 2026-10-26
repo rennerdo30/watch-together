@@ -192,6 +192,7 @@ test('mono routes the playing element through the downmix, with levelling off',
     // Levelling off: mono has to stand up a graph by itself.
     await page.addInitScript(() => {
       localStorage.setItem('w2g-player-normalization', 'false');
+      localStorage.setItem('w2g-player-loudness-normalization', 'false');
     });
     await openRoom(page, 'mono-alone');
 
@@ -232,7 +233,7 @@ test('mono survives a reload and sits after the normalization stage',
       return chain.map((node) => node.type);
     }, { timeout: 15_000 }).toEqual([
       'MediaElementAudioSourceNode', 'DynamicsCompressorNode', 'GainNode', 'GainNode',
-      'AudioDestinationNode',
+      'AudioWorkletNode', 'AudioDestinationNode',
     ]);
 
     await settingsButton(page).click();

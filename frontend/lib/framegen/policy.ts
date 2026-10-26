@@ -13,7 +13,7 @@ export function outputTimes(a: number, b: number, fps: number): number[] {
 }
 export function processingSize(width: number, height: number) {
   if (!Number.isFinite(width + height) || width <= 0 || height <= 0 || width > 3840 || height > 2160) return null;
-  const scale = Math.min(1, 960 / width, 540 / height);
+  const scale = Math.min(1, 1920 / width, 1080 / height);
   return { width: Math.max(16, Math.ceil(width * scale / 16) * 16), height: Math.max(16, Math.ceil(height * scale / 16) * 16) };
 }
 export interface GeneratedFrame { time: number; frame: ImageBitmap }

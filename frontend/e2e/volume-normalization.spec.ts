@@ -32,7 +32,6 @@ test('the shipped worklet levels quiet/loud stereo audio with bounded peaks', as
 });
 
 test('normalization and Night mode are independent, local, and preserve the media source', async ({ page }) => {
-  const requests: string[] = []; page.on('request', r => { if (r.url().includes('/audio/')) requests.push(r.url()); });
   const manifests = await stubAdaptiveStream(page, 'https://youtu.be/volume-fixture');
   await page.goto(`/room/e2e-volume-${Date.now().toString(36)}?user=volume@example.com`);
   await expect(page.getByLabel('Connected to the room')).toBeVisible();
@@ -42,13 +41,11 @@ test('normalization and Night mode are independent, local, and preserve the medi
   await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.readyState)).toBeGreaterThanOrEqual(2);
   await video.evaluate((v: HTMLVideoElement) => { v.pause(); v.dataset.identity = 'original'; });
   const baseline = manifests.length;
-  expect(requests).toEqual([]);
   await page.getByRole('button', { name: 'Quality and sync settings', exact: true }).click();
   const normalize = page.getByRole('button', { name: 'Normalize volume', exact: true });
   const night = page.getByRole('button', { name: 'Night mode', exact: true });
-  await expect(normalize).toHaveAttribute('aria-pressed', 'false');
+  await expect(normalize).toHaveAttribute('aria-pressed', 'true');
   await expect(night).toHaveAttribute('aria-pressed', 'true');
-  await normalize.click();
   await expect(page.getByRole('status', { name: 'Volume normalization status' })).toContainText('Active');
   await night.click();
   await expect(night).toHaveAttribute('aria-pressed', 'false');
@@ -61,6 +58,10 @@ test('normalization and Night mode are independent, local, and preserve the medi
   await page.getByRole('button', { name: 'Quality and sync settings', exact: true }).click();
   await expect(normalize).toHaveAttribute('aria-pressed', 'true'); await expect(night).toHaveAttribute('aria-pressed', 'false');
   await normalize.click(); await expect(normalize).toHaveAttribute('aria-pressed', 'false');
+  await page.reload(); await expect(page.getByLabel('Connected to the room')).toBeVisible();
+  await page.getByRole('button', { name: 'Quality and sync settings', exact: true }).click();
+  await expect(normalize).toHaveAttribute('aria-pressed', 'false');
+  await expect(night).toHaveAttribute('aria-pressed', 'false');
 });
 
 test('a worklet loading failure keeps original audio routing available', async ({ page }) => {
@@ -77,7 +78,6 @@ test('a worklet loading failure keeps original audio routing available', async (
   await expect(page.locator('video[data-stream-type="mse"]')).toHaveCount(1);
   await page.locator('video[data-stream-type="mse"]').evaluate((v: HTMLVideoElement) => v.pause());
   await page.getByRole('button', { name: 'Quality and sync settings', exact: true }).click();
-  await page.getByRole('button', { name: 'Normalize volume', exact: true }).click();
   await expect(page.getByRole('status', { name: 'Volume normalization status' })).toContainText('Unavailable');
   await expect(page.getByRole('button', { name: 'Night mode', exact: true })).toHaveAttribute('aria-pressed', 'true');
 });
@@ -125,7 +125,7 @@ test('processor failure bypasses the dead node and Off/on creates one fresh audi
     }
     return { speakers: false, worklets, doubled };
   });
-  await toggle.click(); await expect(status).toContainText('Active');
+  await expect(status).toContainText('Active');
   await expect.poll(chain).toEqual({ speakers: true, worklets: 1, doubled: false });
   await page.evaluate(() => (window as unknown as { __volumeNodes: AudioWorkletNode[] }).__volumeNodes.at(-1)!.dispatchEvent(new Event('processorerror')));
   await expect(status).toContainText('Unavailable');

@@ -143,3 +143,56 @@ test('worker failure returns to original and disabling during startup never resu
   await page.waitForTimeout(200);
   await expect(layer.locator('canvas')).toHaveCount(0);
 });
+
+for (const [hdWidth, hdHeight] of [[1280, 720], [1920, 1088]]) {
+  test(`real WebGPU interpolation at ${hdWidth}×${hdHeight} retains motion and orientation`, async ({ page }) => {
+    test.setTimeout(180000);
+    await page.goto('/');
+    const capable = await page.evaluate(async () => (await navigator.gpu?.requestAdapter())?.features.has('shader-f16') ?? false);
+    test.skip(!capable, 'No float16 WebGPU adapter in this browser');
+    const result = await page.evaluate(async ({ hdWidth, hdHeight }) => {
+      const worker = new Worker('/framegen/v1/interpolation.worker.js');
+      let id = 0;
+      const request = (payload: object, transfer: Transferable[] = []) => new Promise<Record<string, unknown>>((resolve, reject) => {
+        const current = ++id;
+        const timeout = setTimeout(() => reject(new Error('GPU test timeout')), 60000);
+        worker.onmessage = ({ data }) => {
+          if (data.type === 'fatal') { clearTimeout(timeout); reject(new Error(data.error)); return; }
+          if (data.id !== current) return;
+          clearTimeout(timeout); if (data.error) reject(new Error(data.error)); else resolve(data);
+        };
+        worker.onerror = e => reject(new Error(e.message));
+        worker.postMessage({ ...payload, id: current }, transfer);
+      });
+      try {
+        await request({ type: 'init', width: hdWidth, height: hdHeight });
+        const make = async (x: number) => {
+          const c = new OffscreenCanvas(64, 64); const ctx = c.getContext('2d')!;
+          ctx.fillStyle = '#0000ff'; ctx.fillRect(0, 0, 64, 64);
+          ctx.fillStyle = '#ff0000'; ctx.fillRect(x, 8, 16, 16);
+          const hd = new OffscreenCanvas(hdWidth, hdHeight); hd.getContext('2d')!.drawImage(c, 0, 0, hdWidth, hdHeight);
+          return createImageBitmap(hd);
+        };
+        const a = await make(12); await request({ type: 'frame', frame: a, time: 0, fps: 60, reset: true }, [a]);
+        const b = await make(20); const reply = await request({ type: 'frame', frame: b, time: 1 / 24, fps: 60 }, [b]);
+        const frames = reply.frames as { time: number; frame: ImageBitmap }[];
+        const values = frames.map(({ time, frame }) => {
+          const c = new OffscreenCanvas(64, 64), ctx = c.getContext('2d')!; if (frame.width !== hdWidth || frame.height !== hdHeight) throw new Error("HD output was downscaled"); ctx.drawImage(frame, 0, 0, 64, 64); frame.close();
+          const pixels = ctx.getImageData(0, 0, 64, 64).data;
+          let redX = 0, redY = 0, weight = 0;
+          for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
+            const r = pixels[(y * 64 + x) * 4]; redX += x * r; redY += y * r; weight += r;
+          }
+          return { time, x: redX / weight, y: redY / weight, blue: pixels[(56 * 64 + 32) * 4 + 2] };
+        });
+        return { values };
+      } finally { worker.terminate(); }
+    }, { hdWidth, hdHeight });
+    expect(result.values).toHaveLength(3);
+    expect(result.values[0].x).toBeCloseTo(19.5, 0);
+    expect(result.values[1].x).toBeGreaterThan(result.values[0].x + 1);
+    expect(result.values[2].x).toBeGreaterThan(result.values[1].x + 1);
+    for (const sample of result.values) { expect(sample.y).toBeGreaterThan(12); expect(sample.y).toBeLessThan(21); expect(sample.blue).toBeGreaterThan(240); }
+  });
+
+}

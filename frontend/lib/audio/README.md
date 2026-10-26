@@ -2,7 +2,7 @@
 
 **Normalize volume** and **Night mode** are independent local preferences:
 
-- Normalize volume is off by default. It measures K-weighted stereo energy in
+- Normalize volume and Night mode are on by default (saved Off choices are respected). Normalization measures K-weighted stereo energy in
   400 ms windows at 100 ms steps, then uses up to three seconds of gated history
   to adjust toward -18 LUFS. Boost is capped at +12 dB and attenuation at -24 dB;
   gain rises at no more than 1 dB/s and falls at no more than 6 dB/s.

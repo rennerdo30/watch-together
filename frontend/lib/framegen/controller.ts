@@ -144,7 +144,7 @@ export class FramegenController {
       this.context.drawImage(due.frame, 0, 0); due.frame.close();
       this.canvas.style.visibility = 'visible'; this.delay(FRAMEGEN_DELAY_MS);
       this.lastPresentation = performance.now();
-      this.status('active', `${Math.round(1 / this.interval)} → ${this.fps} fps · local AI · up to 540p processing`);
+      this.status('active', `${Math.round(1 / this.interval)} → ${this.fps} fps · local AI · ${this.canvas.width}×${this.canvas.height} processing`);
     } else if (this.lastPresentation && performance.now() - this.lastPresentation > 250) {
       this.hide(); this.reset = true; this.status('idle', 'Waiting for fresh frames');
     }

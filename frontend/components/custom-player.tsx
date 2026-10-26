@@ -314,7 +314,7 @@ export function CustomPlayer({
     const [nightModeGain, setNightModeGain] = useLocalStorageState(
         'w2g-player-normalization-gain', 1, parseStoredGain);
     const [isLoudnessEnabled, setIsLoudnessEnabled] = useLocalStorageState(
-        'w2g-player-loudness-normalization', false, parseStoredBoolean);
+        'w2g-player-loudness-normalization', true, parseStoredBoolean);
     // Mono is one viewer's choice about their own speakers, so it is stored
     // per browser and never sent to the room.
     const [isMonoEnabled, setIsMonoEnabled] = useLocalStorageState(

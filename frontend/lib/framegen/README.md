@@ -21,8 +21,10 @@ Upstream: https://github.com/MONZikWasTaken/Framegen.
 
 A worker buffers two frames and samples an exact 30/60 fps media-time grid at
 arbitrary interpolation times (24→30 is not a speed change). Processing is capped
-at approximately 960×540, padded to multiples of 16, and presented through a
-canvas. Lower-resolution processing can soften the picture on large displays.
+at up to 1920×1080, padded to multiples of 16 (1920×1088 for Full HD), and
+presented through a canvas. 720p sources retain 1280×720 processing; larger
+sources are scaled down to the Full HD bound. Real-time throughput depends on
+the GPU; sustained overload returns to original playback.
 A small scene-difference sample bypasses neural interpolation for static frames
 and hard cuts; detection is heuristic and does not eliminate all artifacts.
 

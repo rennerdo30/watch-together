@@ -17,6 +17,8 @@ test('processing sizes are bounded, aligned and reject invalid dimensions', () =
   expect(processingSize(0, 1080)).toBeNull();
   expect(processingSize(8000, 4000)).toBeNull();
   const size = processingSize(1920, 1080)!;
-  expect(size.width).toBeLessThanOrEqual(960); expect(size.height).toBeLessThanOrEqual(544);
+  expect(size).toEqual({ width: 1920, height: 1088 });
+  expect(processingSize(1280, 720)).toEqual({ width: 1280, height: 720 });
+  expect(processingSize(3840, 2160)).toEqual(size);
   expect(size.width % 16).toBe(0); expect(size.height % 16).toBe(0);
 });
