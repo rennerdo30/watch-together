@@ -71,7 +71,7 @@ class CloudflaredUpdateTests(unittest.TestCase):
                       "com.docker.compose.project.working_dir": directory,
                       "com.docker.compose.project.config_files": str(config),
                       "com.docker.compose.project.environment_file": str(env), "com.docker.compose.config-hash": "fixture-hash"}
-            with patch.object(updater, "command", side_effect=["cloudflare/cloudflared:latest sha256:old true", json.dumps(labels), "cloudflare/cloudflared:latest", "cloudflared fixture-hash", "full-container-id", "full-container-id"]):
+            with patch.object(updater, "command", side_effect=["cloudflare/cloudflared:latest sha256:old true", json.dumps(labels), "postgres:18\ncloudflare/cloudflared:latest", "cloudflared fixture-hash", "full-container-id", "full-container-id"]):
                 target = updater.describe("fixture")
             self.assertIn(str(env), target["compose"])
             self.assertIn(str(config), target["compose"])

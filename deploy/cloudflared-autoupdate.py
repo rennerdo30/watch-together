@@ -40,7 +40,9 @@ def describe(container):
             raise RuntimeError("Compose configuration file is unavailable")
         args.extend(["-f", file])
     configured = command([*args, "config", "--images", service], cwd=cwd)
-    if configured != fields[0]:
+    # `config --images SERVICE` also lists that service's dependencies. The
+    # service hash below binds the selected service to its running config.
+    if fields[0] not in configured.splitlines():
         raise RuntimeError("Compose service no longer selects the expected Cloudflared image")
     config_hash = command([*args, "config", "--hash", service], cwd=cwd).split()
     if len(config_hash) != 2 or config_hash[0] != service or config_hash[1] != labels.get("com.docker.compose.config-hash"):
