@@ -14,3 +14,5 @@ ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=true
 ReadWritePaths=/run/lock
+StateDirectory=renner-cloudflared-updates
+StateDirectoryMode=0700

@@ -30,6 +30,7 @@ install -m 0755 deploy/cloudflared-autoupdate.py /usr/local/lib/renner-cloudflar
 install -m 0644 deploy/renner-cloudflared-update.service /etc/systemd/system/
 install -m 0644 deploy/renner-cloudflared-update.timer /etc/systemd/system/
 systemctl daemon-reload
+flock -n /run/lock/renner-cloudflared-update.lock python3 /usr/local/lib/renner-cloudflared-autoupdate.py --enroll
 systemctl enable --now renner-cloudflared-update.timer
 systemctl start renner-cloudflared-update.service
 ```
@@ -46,5 +47,14 @@ The first timer check is ten to twenty-five minutes after boot. Manual checks us
 `systemctl start renner-cloudflared-update.service`, sharing the timer's lock.
 Run the offline tests with `python -m unittest discover -s deploy -p
 'test_cloudflared_autoupdate.py'` in the repository's Python environment.
+
+After an intentional application deployment or Compose/environment change, run
+`flock -n /run/lock/renner-cloudflared-update.lock python3 /usr/local/lib/renner-cloudflared-autoupdate.py --enroll`.
+Compose resolves shared network
+namespaces into container IDs, so its runtime hash can differ from its source
+hash. Enrollment records both hashes in root-only systemd state; the timer
+refuses unknown hash pairs and never approves changed configuration itself.
+Enrollment does not pull an image or restart a container. No credential values
+are stored in that state file.
 
 Reference: [Cloudflare's Docker update instructions](https://developers.cloudflare.com/tunnel/guides/update-cloudflared/).

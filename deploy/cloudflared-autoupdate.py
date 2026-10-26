@@ -2,6 +2,7 @@
 """Refresh only running Compose-managed Cloudflared containers using :latest."""
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -9,6 +10,19 @@ import time
 
 IMAGES = {"cloudflare/cloudflared:latest", "docker.io/cloudflare/cloudflared:latest"}
 MINIMUM_VERSION = (2026, 10, 3)
+STATE = Path("/var/lib/renner-cloudflared-updates/baselines.json")
+
+
+def baseline(key, value=None):
+    records = json.loads(STATE.read_text()) if STATE.exists() else {}
+    if value is not None:
+        STATE.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        records[key] = value
+        temporary = STATE.with_suffix(".tmp")
+        temporary.write_text(json.dumps(records, sort_keys=True) + "\n")
+        temporary.chmod(0o600)
+        os.replace(temporary, STATE)
+    return records.get(key)
 
 
 def command(args, *, cwd=None, timeout=180):
@@ -19,7 +33,7 @@ def command(args, *, cwd=None, timeout=180):
     return result.stdout.strip()
 
 
-def describe(container):
+def describe(container, *, enroll=False, expected_source=None):
     fields = command(["docker", "inspect", "--format", "{{.Config.Image}} {{.Image}} {{.State.Running}}", container]).split()
     if len(fields) != 3 or fields[0] not in IMAGES or fields[2] != "true":
         return None
@@ -44,16 +58,29 @@ def describe(container):
     # service hash below binds the selected service to its running config.
     if fields[0] not in configured.splitlines():
         raise RuntimeError("Compose service no longer selects the expected Cloudflared image")
-    config_hash = command([*args, "config", "--hash", service], cwd=cwd).split()
-    if len(config_hash) != 2 or config_hash[0] != service or config_hash[1] != labels.get("com.docker.compose.config-hash"):
-        raise RuntimeError("Compose service configuration differs from the running deployment")
+    # The positional service also activates its Compose profile for hash output.
+    config_hash = command([*args, "config", "--hash", service, service], cwd=cwd).split()
+    if len(config_hash) != 2 or config_hash[0] != service:
+        raise RuntimeError("Compose service hash is unavailable")
     siblings = command(["docker", "ps", "-aq", "--no-trunc", "--filter", "label=com.docker.compose.project=" + project,
                         "--filter", "label=com.docker.compose.service=" + service]).splitlines()
     full_id = command(["docker", "inspect", "--format", "{{.Id}}", container])
     if siblings != [full_id]:
         raise RuntimeError("Automatic updates require exactly one container per Cloudflared service")
+    hashes = {"source": config_hash[1], "running": labels.get("com.docker.compose.config-hash")}
+    key = project + "/" + service
+    # Compose resolves network_mode:service into a container ID during `up`, so
+    # its stored hash can differ from `config --hash`. Explicit operator
+    # enrollment binds both hashes after a controlled deployment, without
+    # storing environment values. The timer never enrolls changed settings.
+    if enroll:
+        if expected_source is not None and hashes["source"] != expected_source:
+            raise RuntimeError("Compose source changed during replacement")
+        baseline(key, hashes)
+    elif hashes["source"] != hashes["running"] and baseline(key) != hashes:
+        raise RuntimeError("Compose configuration changed or requires explicit enrollment")
     return {"id": container, "project": project, "service": service, "cwd": cwd,
-            "compose": args, "image": fields[0], "running_image": fields[1]}
+            "compose": args, "image": fields[0], "running_image": fields[1], "source_hash": hashes["source"]}
 
 
 def verify_version(output):
@@ -89,6 +116,9 @@ def refresh(target, *, dry_run=False):
         state = command(["docker", "inspect", "--format", "{{.State.Running}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}", container])
         ready_checks = ready_checks + 1 if state in ("true none", "true healthy") and result.returncode == 0 and "Registered tunnel connection" in result.stdout + result.stderr else 0
         if ready_checks >= 2:
+            # Record Compose's newly resolved network-namespace hash only after
+            # this updater's controlled replacement has connected successfully.
+            describe(container, enroll=True, expected_source=target["source_hash"])
             print(name + ": updated; tunnel connected", flush=True)
             return
         time.sleep(2)
@@ -97,25 +127,27 @@ def refresh(target, *, dry_run=False):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dry-run", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true")
+    mode.add_argument("--enroll", action="store_true", help="Record configuration hashes after an operator-controlled deployment; do not update images")
     args = parser.parse_args(argv)
     targets = []
     failed = False
     for container in command(["docker", "ps", "-q"]).splitlines():
         try:
-            target = describe(container)
+            target = describe(container, enroll=args.enroll)
             if target:
                 targets.append(target)
         except (RuntimeError, subprocess.SubprocessError, OSError, ValueError):
             print("Cloudflared discovery failed; check Compose metadata locally", flush=True)
             failed = True
-    if not args.dry_run:
+    if not args.dry_run and not args.enroll:
         for image in sorted({target["image"] for target in targets}):
             command(["docker", "pull", image], timeout=300)
             verify_version(command(["docker", "run", "--rm", "--network", "none", image, "--version"]))
     for target in targets:
         try:
-            refresh(target, dry_run=args.dry_run)
+            refresh(target, dry_run=args.dry_run or args.enroll)
         except (RuntimeError, subprocess.SubprocessError, OSError, ValueError):
             print(target["project"] + ": Cloudflared update failed; inspect service locally", flush=True)
             failed = True

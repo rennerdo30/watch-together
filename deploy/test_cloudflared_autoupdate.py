@@ -12,10 +12,17 @@ spec.loader.exec_module(updater)
 
 
 class CloudflaredUpdateTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        state = patch.object(updater, "STATE", Path(directory.name) / "state.json")
+        state.start()
+        self.addCleanup(state.stop)
+
     def target(self):
         return {"id": "old", "project": "fixture", "service": "cloudflared", "cwd": "/fixture",
                 "compose": ["docker", "compose", "--project-name", "fixture", "-f", "/fixture/compose.yml"],
-                "image": "cloudflare/cloudflared:latest", "running_image": "sha256:old"}
+                "image": "cloudflare/cloudflared:latest", "running_image": "sha256:old", "source_hash": "source-hash"}
 
     def test_databases_and_pinned_images_are_never_eligible(self):
         for image in ("postgres:latest", "app:latest", "cloudflare/cloudflared:2026.10.3"):
@@ -36,6 +43,13 @@ class CloudflaredUpdateTests(unittest.TestCase):
     def test_dry_run_never_pulls_or_recreates(self):
         with patch.object(updater, "command") as run:
             updater.refresh(self.target(), dry_run=True)
+            run.assert_not_called()
+
+    def test_dry_run_cannot_be_combined_with_enrollment(self):
+        with patch.object(updater, "command") as run:
+            with self.assertRaises(SystemExit) as error:
+                updater.main(["--dry-run", "--enroll"])
+            self.assertEqual(2, error.exception.code)
             run.assert_not_called()
 
     def test_replacement_targets_only_the_tunnel_and_verifies_readiness(self):
@@ -94,10 +108,33 @@ class CloudflaredUpdateTests(unittest.TestCase):
                       "com.docker.compose.project.working_dir": directory,
                       "com.docker.compose.project.config_files": str(config), "com.docker.compose.config-hash": "expected"}
             initial = ["cloudflare/cloudflared:latest sha256:old true", json.dumps(labels), "cloudflare/cloudflared:latest"]
-            with patch.object(updater, "command", side_effect=initial + ["cloudflared different"]):
+            with patch.object(updater, "command", side_effect=initial + ["cloudflared different", "full", "full"]):
                 with self.assertRaises(RuntimeError):
                     updater.describe("fixture")
             with patch.object(updater, "command", side_effect=initial + ["cloudflared expected", "running\nstopped", "running"]):
+                with self.assertRaises(RuntimeError):
+                    updater.describe("fixture")
+
+    def test_network_namespace_hashes_require_explicit_enrollment(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "compose.yml"
+            config.touch()
+            labels = {"com.docker.compose.project": "fixture", "com.docker.compose.service": "cloudflared",
+                      "com.docker.compose.project.working_dir": directory,
+                      "com.docker.compose.project.config_files": str(config), "com.docker.compose.config-hash": "runtime-network-hash"}
+            outputs = ["cloudflare/cloudflared:latest sha256:old true", json.dumps(labels), "cloudflare/cloudflared:latest",
+                       "cloudflared source-hash", "full", "full"]
+            with patch.object(updater, "command", side_effect=outputs):
+                with self.assertRaises(RuntimeError):
+                    updater.describe("fixture")
+            with patch.object(updater, "command", side_effect=outputs):
+                updater.describe("fixture", enroll=True)
+            with patch.object(updater, "command", side_effect=outputs):
+                self.assertIsNotNone(updater.describe("fixture"))
+            changed = outputs.copy()
+            changed[3] = "cloudflared changed-source-hash"
+            with patch.object(updater, "command", side_effect=changed):
                 with self.assertRaises(RuntimeError):
                     updater.describe("fixture")
 
