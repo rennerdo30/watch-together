@@ -89,6 +89,7 @@ class CloudflaredUpdateTests(unittest.TestCase):
                 target = updater.describe("fixture")
             self.assertIn(str(env), target["compose"])
             self.assertIn(str(config), target["compose"])
+            self.assertEqual("*", target["compose"][target["compose"].index("--profile") + 1])
             self.assertNotIn("--build", target["compose"])
 
     def test_stale_registration_cannot_hide_a_crashed_container(self):

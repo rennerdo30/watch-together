@@ -44,7 +44,9 @@ def describe(container, *, enroll=False, expected_source=None):
     files = labels.get(prefix + ".config_files", "").split(",")
     if not project or not service or not cwd or not Path(cwd).is_dir():
         raise RuntimeError("Cloudflared is missing valid Compose project metadata")
-    args = ["docker", "compose", "--project-name", project, "--project-directory", cwd]
+    # Profile-gated running tunnels must remain visible to `config --hash`.
+    # Recreation still names exactly one service with --no-deps.
+    args = ["docker", "compose", "--project-name", project, "--project-directory", cwd, "--profile", "*"]
     for env in filter(None, labels.get(prefix + ".environment_file", "").split(",")):
         if not Path(env).is_file():
             raise RuntimeError("Compose environment file is unavailable")
