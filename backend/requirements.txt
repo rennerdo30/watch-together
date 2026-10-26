@@ -1,7 +1,7 @@
 annotated-types==0.8.0
 anyio==4.15.1
 click==8.5.0
-fastapi==0.158.0
+fastapi==0.161.1
 h11==0.16.0
 idna==3.20
 pydantic==2.14.1
@@ -9,7 +9,7 @@ pyjwt[crypto]==2.15.1
 starlette==1.9.0
 typing_extensions==4.16.0
 uvicorn[standard]==0.54.0
-yt-dlp==2026.8.19
+yt-dlp==2026.10.21
 websockets==17.3
 httpx==0.28.1
 aiofiles==25.1.0
