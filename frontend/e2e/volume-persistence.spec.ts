@@ -43,7 +43,7 @@ async function playUrl(page: import('@playwright/test').Page, url: string) {
 }
 
 async function setVolume(page: import('@playwright/test').Page, value: number) {
-  const slider = page.getByLabel('Volume');
+  const slider = page.getByRole('slider', { name: 'Volume', exact: true });
   await expect(slider).toBeAttached();
   // The slider expands when its volume-control group is hovered.
   await page.getByLabel(/^(Mute|Unmute)$/).hover();
@@ -76,7 +76,7 @@ test('the next video keeps the volume displayed by the slider, on the same eleme
     await expect(page.locator('header').getByRole('link', { name: /open adaptive fixture/i }))
       .toHaveAttribute('href', SECOND);
 
-    const slider = page.getByLabel('Volume');
+    const slider = page.getByRole('slider', { name: 'Volume', exact: true });
     await expect(slider).toHaveValue('0.25');
     expect(await page.evaluate(() => localStorage.getItem('w2g-player-volume')))
       .toBe('0.25');
