@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { createRoomSender } from '../lib/room-sender';
 
 const USER = 'resume@example.com';
 const room = () => `/room/e2e-session-${Date.now()}?user=${encodeURIComponent(USER)}`;
@@ -45,6 +46,8 @@ test('a silent socket after sleep reconnects and receives a fresh room snapshot'
   await expect(page.getByLabel('Connected to the room', { exact: true })).toBeVisible();
   const before = connections;
   await page.clock.fastForward(25_000);
+  expect(connections).toBe(before);
+  await page.clock.runFor(15_000);
   await expect.poll(() => connections).toBeGreaterThan(before);
   await expect(page.getByText('Recovered room', { exact: true })).toBeVisible();
 });
@@ -112,4 +115,57 @@ test('an administrator-closed socket stays closed after resume and watchdog tick
   await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));
   await page.clock.fastForward(65_000);
   expect(connections).toBe(before);
+});
+
+
+test('a paused tab gets a fresh ping grace period without disconnecting a responsive socket', async ({ page }) => {
+  let connections = 0;
+  let reply = () => {};
+  const actions: unknown[] = [];
+  await page.clock.install();
+  await page.routeWebSocket(/\/ws\/e2e-session-/, ws => {
+    connections++;
+    reply = () => ws.send(JSON.stringify({ type: 'pong', payload: { client_time: 0 } }));
+    ws.onMessage(message => {
+      const parsed = JSON.parse(String(message));
+      if (parsed.type === 'queue_add') actions.push(parsed.payload);
+    });
+  });
+  await page.route('**/api/me?**', route => route.fulfill({ json: { authenticated: true, email: USER } }));
+  await page.route('**/api/resolve**', route => route.fulfill({ json: { original_url: 'https://youtu.be/still-connected', title: 'Still connected', stream_url: 'https://media.test/video.mp4' } }));
+  await page.goto(room());
+  await expect(page.getByLabel('Connected to the room', { exact: true })).toBeVisible();
+  const before = connections;
+  // Chrome coalesces timers after a suspended tab. Silence during the pause
+  // must not be mistaken for a failed ping sent after it woke up.
+  await page.clock.fastForward(65_000);
+  await page.getByPlaceholder('Paste video URL...').fill('https://youtu.be/still-connected');
+  await page.getByRole('button', { name: 'Queue', exact: true }).click();
+  await expect.poll(() => actions.length).toBe(1);
+  await expect(page.getByText('Room connection is recovering. Please try again once connected.', { exact: true })).toHaveCount(0);
+  reply();
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(page.getByLabel('Connected to the room', { exact: true })).toBeVisible();
+  expect(connections).toBe(before);
+});
+
+test('failed background playback reports do not warn the viewer', () => {
+  const warnings: string[] = [];
+  const attempts: string[] = [];
+  const sender = createRoomSender(type => { attempts.push(type); return false; }, () => warnings.push('recovering'));
+  for (const type of ['playback_quality', 'playback_ready', 'playback_timing']) sender.send(type, {});
+  expect(attempts).toHaveLength(3);
+  expect(warnings).toEqual([]);
+});
+
+test('failed user actions warn once until the connection recovers', () => {
+  let warnings = 0;
+  const sender = createRoomSender(() => false, () => { warnings++; });
+  sender.send('queue_add', { url: 'https://youtu.be/example' });
+  sender.send('queue_reorder', {});
+  sender.send('play', {});
+  expect(warnings).toBe(1);
+  sender.connected();
+  sender.send('queue_add', {});
+  expect(warnings).toBe(2);
 });

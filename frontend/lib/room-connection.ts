@@ -1,6 +1,7 @@
 /** Recover a room after sleep, browser restore, or an expired Access session. */
 const PING_MS = 5_000;
 const STALE_MS = 20_000;
+const PING_GRACE_MS = 15_000;
 const SESSION_MS = 60_000;
 const RECONNECT_MS = 3_000;
 const RELOAD_KEY = 'wt-session-reload';
@@ -23,23 +24,26 @@ export class RoomConnection {
     private probe: Promise<void> | null = null;
     private abort: AbortController | null = null;
     private lastMessage = 0;
+    private lastTick = 0;
+    private pingStarted: number | null = null;
     private lastSessionCheck = 0;
     private identity: string | null | undefined;
 
     constructor(private readonly options: Options) { }
 
     start() {
+        this.lastTick = Date.now();
         this.open();
         void this.checkSession();
         this.timer = setInterval(() => {
             if (this.stopped) return;
             if (Date.now() - this.lastSessionCheck >= SESSION_MS) void this.checkSession();
-            if (Date.now() - this.lastMessage >= STALE_MS) {
-                this.open();
-                void this.checkSession();
-            } else if (this.socket?.readyState === WebSocket.OPEN) {
-                this.ping();
-            }
+            const now = Date.now();
+            // A delayed timer after sleep says nothing about whether the
+            // socket responds now. Start a new ping grace period on wake.
+            if (now - this.lastTick > PING_MS * 2) this.pingStarted = null;
+            this.lastTick = now;
+            this.checkConnection();
         }, PING_MS);
         window.addEventListener('pageshow', this.pageshow);
         window.addEventListener('online', this.resume);
@@ -61,10 +65,9 @@ export class RoomConnection {
 
     send(type: string, payload?: unknown): boolean {
         if (this.stopped) return false;
-        if (this.socket?.readyState !== WebSocket.OPEN || Date.now() - this.lastMessage >= STALE_MS) {
-            this.resume();
-            return false; // Never replay votes/queue mutations after reconnecting.
-        }
+        // Connection lifecycle owns retries. Background reports must not
+        // accelerate reconnects, and user actions must never be replayed.
+        if (this.socket?.readyState !== WebSocket.OPEN) return false;
         this.socket.send(JSON.stringify({ type, payload }));
         return true;
     }
@@ -85,6 +88,7 @@ export class RoomConnection {
         clearTimeout(this.retry);
         this.disconnect();
         this.lastMessage = Date.now();
+        this.pingStarted = null;
         const socket = new WebSocket(this.options.socketUrl);
         this.socket = socket;
         socket.onopen = () => {
@@ -94,6 +98,7 @@ export class RoomConnection {
         };
         socket.onmessage = event => {
             this.lastMessage = Date.now();
+            this.pingStarted = null;
             this.options.onMessage(event.data);
         };
         socket.onclose = event => {
@@ -112,16 +117,36 @@ export class RoomConnection {
         this.socket?.send(JSON.stringify({ type: 'ping', payload: { client_time: performance.now() } }));
     }
 
+    private checkConnection() {
+        if (this.stopped) return;
+        const now = Date.now();
+        if (this.socket?.readyState === WebSocket.OPEN) {
+            if (this.pingStarted !== null) {
+                if (now - this.pingStarted >= PING_GRACE_MS) {
+                    this.open();
+                    void this.checkSession();
+                }
+            } else {
+                if (now - this.lastMessage >= STALE_MS) this.pingStarted = now;
+                this.ping();
+            }
+        } else if (!this.socket || this.socket.readyState === WebSocket.CLOSED ||
+            this.socket.readyState === WebSocket.CLOSING || now - this.lastMessage >= STALE_MS) {
+            this.open();
+        }
+    }
+
     private pageshow = (event: PageTransitionEvent) => {
-        if (!event.persisted) return; // start() already checks a new/restored document.
-        void this.checkSession().then(() => this.open());
+        if (event.persisted) this.resume();
     };
 
     private resume = () => {
         if (this.stopped) return;
         void this.checkSession();
-        if (!this.socket || this.socket.readyState === WebSocket.CLOSED ||
-            this.socket.readyState === WebSocket.CLOSING || Date.now() - this.lastMessage >= STALE_MS) this.open();
+        const now = Date.now();
+        if (now - this.lastTick > PING_MS * 2) this.pingStarted = null;
+        this.lastTick = now;
+        this.checkConnection();
     };
 
     private visible = () => { if (!document.hidden) this.resume(); };

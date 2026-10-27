@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Avoid unnecessary room recovery warnings
+
+- Probe quiet sockets with a fresh ping and a grace period before reconnecting,
+  including after browser timers were suspended; keep sending on open sockets.
+- Keep background playback reports silent during reconnection and show failed
+  user actions only once per disconnection instead of repeatedly interrupting.
+
 ### Recover restored rooms and expired sessions
 
 - Revalidate the session when a room loads, returns from the back/forward

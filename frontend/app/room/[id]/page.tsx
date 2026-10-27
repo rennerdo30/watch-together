@@ -1,5 +1,6 @@
 "use client";
 
+import { createRoomSender } from '@/lib/room-sender';
 import { RoomConnection } from '@/lib/room-connection';
 
 import { useStoredTheme } from '@/lib/hooks/useStoredTheme';
@@ -263,6 +264,11 @@ export default function RoomPage() {
     const playerRef = useRef<RoomPlayer | null>(null);
     const internalUpdateCount = useRef(0); // Counter to prevent feedback loops during sync
 
+    const roomSender = useMemo(() => createRoomSender(
+        (type, payload) => connectionRef.current?.send(type, payload) ?? false,
+        () => toast.error('Room connection is recovering. Please try again once connected.', { id: 'room-recovery' }),
+    ), []);
+
     // Latency tracking for sync compensation
     const latencyRef = useRef<number>(0); // Average latency in ms
     // When this viewer last moved the playhead themselves. A heartbeat with
@@ -351,7 +357,10 @@ export default function RoomPage() {
             socketUrl: getWsUrl(roomId) + suffix,
             sessionUrl: `${BACKEND_ORIGIN}/api/me${suffix}`,
             onMessage: data => messageHandlerRef.current(data),
-            onConnected: setConnected,
+            onConnected: connected => {
+                setConnected(connected);
+                if (connected) roomSender.connected();
+            },
             onSessionExpired: () => setSessionExpired(true),
         });
         connectionRef.current = connection;
@@ -360,7 +369,7 @@ export default function RoomPage() {
             connection.stop();
             if (connectionRef.current === connection) connectionRef.current = null;
         };
-    }, [roomId]);
+    }, [roomId, roomSender]);
 
     // Load saved cookies when user is available
     useEffect(() => {
@@ -910,11 +919,7 @@ export default function RoomPage() {
         };
     });
 
-    const sendMsg = (type: string, payload?: unknown) => {
-        if (!connectionRef.current?.send(type, payload)) {
-            toast.error('Room connection is recovering. Please try again once connected.');
-        }
-    };
+    const sendMsg = roomSender.send;
     useEffect(() => { sendMsgRef.current = sendMsg; });
 
     // Leaving the room, or closing the tab, releases the capture: the
