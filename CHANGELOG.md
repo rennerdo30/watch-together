@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Reauthenticate disconnected rooms
+
+- Check for an expired Access login only after the room socket has closed.
+  A confirmed login failure reloads through sign-in, with a reload-loop guard.
+- Leave healthy room sockets and media playback alone during focus, resume,
+  and long idle periods; discard late auth responses after reconnection.
+
 ### Withdraw automatic room-session recovery
 
 - Roll back automatic session reloads, socket watchdogs and recovery warnings

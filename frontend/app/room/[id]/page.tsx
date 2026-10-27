@@ -1,5 +1,7 @@
 "use client";
 
+import { createRoomAuthRecovery } from '@/lib/room-auth-recovery';
+
 import { useStoredTheme } from '@/lib/hooks/useStoredTheme';
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
@@ -258,6 +260,8 @@ export default function RoomPage() {
 
     // WS & Player Refs
     const wsRef = useRef<WebSocket | null>(null);
+    const authRecoveryRef = useRef<ReturnType<typeof createRoomAuthRecovery> | null>(null);
+    const [signInRequired, setSignInRequired] = useState(false);
     const playerRef = useRef<RoomPlayer | null>(null);
     const internalUpdateCount = useRef(0); // Counter to prevent feedback loops during sync
     const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
@@ -359,6 +363,8 @@ export default function RoomPage() {
         wsRef.current = ws;
 
         ws.onopen = () => {
+            if (wsRef.current !== ws) return;
+            setSignInRequired(false);
             setConnected(true);
             if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
 
@@ -377,6 +383,7 @@ export default function RoomPage() {
             catch (e) { console.error("Failed to parse WS message", e); }
         };
         ws.onclose = (event) => {
+            if (wsRef.current !== ws) return;
             setConnected(false);
             if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
             // An admin close is final. Reconnecting here recreated the room
@@ -385,17 +392,34 @@ export default function RoomPage() {
                 roomClosedRef.current = true;
                 return;
             }
+            void authRecoveryRef.current?.check();
             reconnectTimer.current = setTimeout(connect, 3000);
         };
         ws.onerror = () => ws.close();
     };
 
     useEffect(() => {
+        const user = new URLSearchParams(window.location.search).get('user');
+        const suffix = user ? `?user=${encodeURIComponent(user)}` : '';
+        const recovery = createRoomAuthRecovery({
+            url: `${BACKEND_ORIGIN}/api/me${suffix}`,
+            disconnected: () => !roomClosedRef.current && wsRef.current?.readyState === WebSocket.CLOSED,
+            onSignInRequired: () => setSignInRequired(true),
+        });
+        authRecoveryRef.current = recovery;
         connect();
 
         return () => {
-            if (wsRef.current) wsRef.current.close();
+            recovery.dispose();
+            authRecoveryRef.current = null;
+            const ws = wsRef.current;
+            wsRef.current = null;
+            if (ws) {
+                ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
+                ws.close();
+            }
             if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+            if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
         };
     }, [roomId]);
 
@@ -1207,6 +1231,12 @@ export default function RoomPage() {
                     fontWeight: 500
                 }
             }} />
+            {signInRequired && !connected && (
+                <div role="alert" className="flex shrink-0 items-center justify-center gap-3 bg-amber-950 px-3 py-2 text-sm text-amber-100">
+                    Sign in to reconnect to the room.
+                    <button type="button" className="font-semibold underline" onClick={() => window.location.reload()}>Sign in again</button>
+                </div>
+            )}
             {/* Header */}
             <header className={`app-header h-12 border-b ${activeTheme.border} flex items-center gap-2 px-3 shrink-0 ${activeTheme.header} backdrop-blur-md z-50`}>
                 <div className="flex items-center gap-2">
