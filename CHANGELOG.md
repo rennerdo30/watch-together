@@ -6,22 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-### Avoid unnecessary room recovery warnings
+### Withdraw automatic room-session recovery
 
-- Probe quiet sockets with a fresh ping and a grace period before reconnecting,
-  including after browser timers were suspended; keep sending on open sockets.
-- Keep background playback reports silent during reconnection and show failed
-  user actions only once per disconnection instead of repeatedly interrupting.
-
-### Recover restored rooms and expired sessions
-
-- Revalidate the session when a room loads, returns from the back/forward
-  cache, regains focus or connectivity, and periodically while left open.
-- Reload the current page through the sign-in flow when authentication
-  expires; prevent automatic reload loops and provide a sign-in button.
-- Reconnect silent room sockets after sleep and request a fresh room state.
-  Warn when an action cannot be sent rather than silently losing it; do not
-  replay votes or queue changes after recovery.
+- Roll back automatic session reloads, socket watchdogs and recovery warnings
+  while investigating reports of interrupted playback.
 
 ### Store identity (extension 1.5.2)
 
