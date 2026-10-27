@@ -1,5 +1,7 @@
 "use client";
 
+import { RoomConnection } from '@/lib/room-connection';
+
 import { useStoredTheme } from '@/lib/hooks/useStoredTheme';
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
@@ -122,9 +124,7 @@ interface WsMessage {
 }
 
 // An admin force-close ends the room for good: the server says so in-band
-// (a room_closed message) and closes the socket with this code. Either
-// signal means "do not reconnect" — reconnecting recreates the room.
-const ROOM_CLOSED_WS_CODE = 4001;
+// (a room_closed message). Stop the connection before navigating away.
 const ROOM_CLOSED_REDIRECT_DELAY_MS = 2000;
 
 /** Which engine plays a resolved video; see CustomPlayer. */
@@ -257,12 +257,11 @@ export default function RoomPage() {
     const [activeDragId, setActiveDragId] = useState<string | null>(null);
 
     // WS & Player Refs
-    const wsRef = useRef<WebSocket | null>(null);
+    const connectionRef = useRef<RoomConnection | null>(null);
+    const messageHandlerRef = useRef<(data: string) => void>(() => {});
+    const [sessionExpired, setSessionExpired] = useState(false);
     const playerRef = useRef<RoomPlayer | null>(null);
     const internalUpdateCount = useRef(0); // Counter to prevent feedback loops during sync
-    const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
-    // Set when the server closes the room for good; blocks the reconnect.
-    const roomClosedRef = useRef(false);
 
     // Latency tracking for sync compensation
     const latencyRef = useRef<number>(0); // Average latency in ms
@@ -277,7 +276,6 @@ export default function RoomPage() {
     // sign of life: the modal hides the header, the input already shows what
     // was typed, and the address deliberately never changes.
     const pendingRenameRef = useRef<string | null>(null);
-    const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
     const videoElementRef = useRef<HTMLVideoElement | null>(null);
 
     const syncThresholdRef = useRef(4);
@@ -345,57 +343,22 @@ export default function RoomPage() {
         setActiveDragId(null);
     };
 
-    const connect = () => {
-        if (!roomId || typeof window === "undefined") return;
-        let url = getWsUrl(roomId);
-        const searchParams = new URLSearchParams(window.location.search);
-        const mockUser = searchParams.get('user');
-        if (mockUser) url += `?user=${encodeURIComponent(mockUser)}`;
-
-        if (wsRef.current) wsRef.current.close();
-        if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
-
-        const ws = new WebSocket(url);
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-            setConnected(true);
-            if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
-
-            // Start ping interval for latency measurement
-            pingIntervalRef.current = setInterval(() => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ type: 'ping', payload: { client_time: performance.now() } }));
-                }
-            }, 5000); // Ping every 5 seconds
-
-            // Send initial ping
-            ws.send(JSON.stringify({ type: 'ping', payload: { client_time: performance.now() } }));
-        };
-        ws.onmessage = (event) => {
-            try { handleWsMessage(JSON.parse(event.data)); }
-            catch (e) { console.error("Failed to parse WS message", e); }
-        };
-        ws.onclose = (event) => {
-            setConnected(false);
-            if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
-            // An admin close is final. Reconnecting here recreated the room
-            // seconds after it was closed, making the close look like a no-op.
-            if (roomClosedRef.current || event.code === ROOM_CLOSED_WS_CODE) {
-                roomClosedRef.current = true;
-                return;
-            }
-            reconnectTimer.current = setTimeout(connect, 3000);
-        };
-        ws.onerror = () => ws.close();
-    };
-
     useEffect(() => {
-        connect();
-
+        const params = new URLSearchParams(window.location.search);
+        const user = params.get('user');
+        const suffix = user ? `?user=${encodeURIComponent(user)}` : '';
+        const connection = new RoomConnection({
+            socketUrl: getWsUrl(roomId) + suffix,
+            sessionUrl: `${BACKEND_ORIGIN}/api/me${suffix}`,
+            onMessage: data => messageHandlerRef.current(data),
+            onConnected: setConnected,
+            onSessionExpired: () => setSessionExpired(true),
+        });
+        connectionRef.current = connection;
+        connection.start();
         return () => {
-            if (wsRef.current) wsRef.current.close();
-            if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+            connection.stop();
+            if (connectionRef.current === connection) connectionRef.current = null;
         };
     }, [roomId]);
 
@@ -815,8 +778,7 @@ export default function RoomPage() {
                 }
                 break;
             case 'room_closed': {
-                roomClosedRef.current = true;
-                if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+                connectionRef.current?.stop();
                 const message = typeof payload.message === 'string' && payload.message
                     ? payload.message
                     : 'This room was closed by an administrator';
@@ -941,9 +903,16 @@ export default function RoomPage() {
         setTimeout(() => { internalUpdateCount.current = Math.max(0, internalUpdateCount.current - 1); }, 300);
     };
 
+    useEffect(() => {
+        messageHandlerRef.current = data => {
+            try { handleWsMessage(JSON.parse(data)); }
+            catch (error) { console.error('Failed to parse WS message', error); }
+        };
+    });
+
     const sendMsg = (type: string, payload?: unknown) => {
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify({ type, payload }));
+        if (!connectionRef.current?.send(type, payload)) {
+            toast.error('Room connection is recovering. Please try again once connected.');
         }
     };
     useEffect(() => { sendMsgRef.current = sendMsg; });
@@ -1207,6 +1176,12 @@ export default function RoomPage() {
                     fontWeight: 500
                 }
             }} />
+            {sessionExpired && (
+                <div role="alert" className="flex items-center justify-center gap-3 bg-amber-950 px-3 py-2 text-sm text-amber-100">
+                    Your session expired. Sign in again to receive room updates.
+                    <button type="button" className="underline font-semibold" onClick={() => window.location.reload()}>Sign in again</button>
+                </div>
+            )}
             {/* Header */}
             <header className={`app-header h-12 border-b ${activeTheme.border} flex items-center gap-2 px-3 shrink-0 ${activeTheme.header} backdrop-blur-md z-50`}>
                 <div className="flex items-center gap-2">

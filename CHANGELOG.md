@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Recover restored rooms and expired sessions
+
+- Revalidate the session when a room loads, returns from the back/forward
+  cache, regains focus or connectivity, and periodically while left open.
+- Reload the current page through the sign-in flow when authentication
+  expires; prevent automatic reload loops and provide a sign-in button.
+- Reconnect silent room sockets after sleep and request a fresh room state.
+  Warn when an action cannot be sent rather than silently losing it; do not
+  replay votes or queue changes after recovery.
+
 ### Store identity (extension 1.5.2)
 
 - Use the published Chrome Web Store item's public key so unpacked Chrome

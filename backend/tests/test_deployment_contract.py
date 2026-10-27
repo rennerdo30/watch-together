@@ -607,15 +607,15 @@ class TestAdminCloseIsNotResurrected:
         text = self.ROOM_PAGE.read_text()
         assert "case 'room_closed'" in text, "the close notice is not handled"
 
-        handler = text.split("ws.onclose", 1)[1]
-        handler = handler.split("};", 1)[0]
-        assert "setTimeout(connect" in handler, "the reconnect moved; update this test"
-        guard_at = handler.index("roomClosedRef")
-        reconnect_at = handler.index("setTimeout(connect")
-        assert guard_at < reconnect_at, (
-            "onclose reconnects unconditionally: an admin-closed room is "
-            "recreated three seconds after it was closed"
-        )
+        notice = text.split("case 'room_closed'", 1)[1].split("break;", 1)[0]
+        assert "connectionRef.current?.stop()" in notice
+        connection = (REPO_ROOT / "frontend/lib/room-connection.ts").read_text()
+        handler = connection.split("socket.onclose = event", 1)[1].split("socket.onerror", 1)[0]
+        guard_at = handler.index("event.code === ROOM_CLOSED_WS_CODE")
+        reconnect_at = handler.index("setTimeout")
+        assert guard_at < reconnect_at
+        assert "this.stop(); return;" in handler[guard_at:reconnect_at]
+
 
 
 class TestAdminPanelSelfHeals:
