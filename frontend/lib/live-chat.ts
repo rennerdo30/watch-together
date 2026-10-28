@@ -14,7 +14,10 @@ interface LiveVideo {
   is_live: boolean;
 }
 
-type Adapter = (url: URL, video: LiveVideo, parent: string) => ChatSource | undefined;
+/** The page's colour scheme: an embedded chat is drawn to match it. */
+export type ChatScheme = 'light' | 'dark';
+
+type Adapter = (url: URL, video: LiveVideo, parent: string, scheme: ChatScheme) => ChatSource | undefined;
 const hostIs = (url: URL, host: string) => url.hostname === host || url.hostname.endsWith(`.${host}`);
 
 /** Only external HTTPS pages may run in the chat frame. Never embed our own app. */
@@ -27,17 +30,17 @@ export function chatUrl(value: string, appOrigin: string): string | undefined {
 }
 
 const adapters: Adapter[] = [
-  (url, _video, parent) => {
+  (url, _video, parent, scheme) => {
     if (!hostIs(url, 'twitch.tv')) return;
     const channel = url.pathname.match(/^\/([a-zA-Z0-9_]+)\/?$/)?.[1];
     if (!channel || ['directory', 'videos', 'downloads', 'settings'].includes(channel.toLowerCase())) return;
     return {
       provider: 'Twitch',
       openUrl: `https://www.twitch.tv/popout/${channel}/chat?popout=`,
-      embedUrl: `https://www.twitch.tv/embed/${channel}/chat?parent=${encodeURIComponent(parent)}&darkpopout`,
+      embedUrl: `https://www.twitch.tv/embed/${channel}/chat?parent=${encodeURIComponent(parent)}${scheme === 'dark' ? '&darkpopout' : ''}`,
     };
   },
-  (url, _video, parent) => {
+  (url, _video, parent, scheme) => {
     let id: string | null | undefined;
     if (hostIs(url, 'youtu.be')) id = url.pathname.split('/')[1];
     else if (hostIs(url, 'youtube.com')) {
@@ -47,7 +50,8 @@ const adapters: Adapter[] = [
     const openUrl = `https://www.youtube.com/live_chat?v=${id}`;
     return {
       provider: 'YouTube', openUrl,
-      embedUrl: `${openUrl}&embed_domain=${encodeURIComponent(parent)}`,
+      // Without `dark_theme` YouTube draws its light chat beside a dark room.
+      embedUrl: `${openUrl}&embed_domain=${encodeURIComponent(parent)}${scheme === 'dark' ? '&dark_theme=1' : ''}`,
       note: 'YouTube does not support embedded chat on mobile web. Use Open chat there.',
     };
   },
@@ -67,14 +71,14 @@ const adapters: Adapter[] = [
   },
 ];
 
-export function resolveLiveChat(video: LiveVideo | null, appOrigin: string): ChatSource | undefined {
+export function resolveLiveChat(video: LiveVideo | null, appOrigin: string, scheme: ChatScheme = 'dark'): ChatSource | undefined {
   if (!video?.is_live) return;
   const source = chatUrl(video.webpage_url || video.original_url || '', appOrigin);
   if (!source) return;
   const url = new URL(source);
   const parent = new URL(appOrigin).hostname;
   for (const adapter of adapters) {
-    const match = adapter(url, video, parent);
+    const match = adapter(url, video, parent, scheme);
     if (match) return match;
   }
   // Any provider remains usable even when it offers no embeddable chat.

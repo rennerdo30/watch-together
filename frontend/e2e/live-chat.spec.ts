@@ -8,8 +8,13 @@ test('provider adapters handle canonical URLs, self-hosting, unknown sites and u
   const live = (original_url: string, extra = {}) => resolveLiveChat({ original_url, is_live: true, ...extra }, APP);
   expect(live('https://m.twitch.tv/zarbex')?.embedUrl).toBe('https://www.twitch.tv/embed/zarbex/chat?parent=w2g.renner.dev&darkpopout');
   for (const url of ['https://youtu.be/abcdefghijk', 'https://www.youtube.com/watch?v=abcdefghijk', 'https://youtube.com/live/abcdefghijk']) {
-    expect(live(url)?.embedUrl).toBe('https://www.youtube.com/live_chat?v=abcdefghijk&embed_domain=w2g.renner.dev');
+    expect(live(url)?.embedUrl).toBe('https://www.youtube.com/live_chat?v=abcdefghijk&embed_domain=w2g.renner.dev&dark_theme=1');
   }
+  // The chat follows the page's scheme: YouTube's was light beside a dark
+  // room, Twitch's dark beside a light one.
+  const light = (original_url: string) => resolveLiveChat({ original_url, is_live: true }, APP, 'light');
+  expect(light('https://youtu.be/abcdefghijk')?.embedUrl).toBe('https://www.youtube.com/live_chat?v=abcdefghijk&embed_domain=w2g.renner.dev');
+  expect(light('https://m.twitch.tv/zarbex')?.embedUrl).toBe('https://www.twitch.tv/embed/zarbex/chat?parent=w2g.renner.dev');
   expect(live('https://short.example/x', { webpage_url: 'https://live.example/', extractor_key: 'Owncast' })?.embedUrl).toBe('https://live.example/embed/chat/readwrite');
   expect(live('https://kick.com/example')?.openUrl).toBe('https://kick.com/popout/example/chat');
   expect(live('https://video.example/live/1')?.openUrl).toBe('https://video.example/live/1');
@@ -42,10 +47,16 @@ async function play(page: Page, url: string) {
 }
 
 test('live chat comes to the front on a stream, follows it and unloads when closed', async ({ page }, testInfo) => {
+  await page.addInitScript(() => localStorage.setItem('wt_color_mode', 'dark'));
   await openStream(page, 'https://twitch.tv/zarbex');
   // A live stream opens on its chat; nobody has to go looking for it.
   await expect(page.getByRole('tab', { name: 'Live chat' })).toHaveAttribute('aria-selected', 'true');
   const frame = page.getByTitle('Twitch live chat', { exact: true });
+  await expect(frame).toHaveAttribute('src', 'https://www.twitch.tv/embed/zarbex/chat?parent=localhost&darkpopout');
+  // It follows the page when the scheme changes.
+  await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'));
+  await expect(frame).toHaveAttribute('src', 'https://www.twitch.tv/embed/zarbex/chat?parent=localhost');
+  await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
   await expect(frame).toHaveAttribute('src', 'https://www.twitch.tv/embed/zarbex/chat?parent=localhost&darkpopout');
   // One compact row of tools above the provider's own chat; the note that
   // chat runs ahead lives on its title instead of taking up the panel.

@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { ExternalLink, Link2, RotateCw } from 'lucide-react';
 import type { ResolveResponse } from '@/lib/api';
 import { chatUrl, resolveLiveChat } from '@/lib/live-chat';
+import { useResolvedColorMode } from '@/components/color-mode-toggle';
 
 const AHEAD_NOTE = 'Chat updates live and may run ahead of the video.';
 
@@ -19,7 +20,8 @@ const toolButton = 'flex h-7 w-7 items-center justify-center rounded-md text-neu
  */
 export function LiveChat({ video }: { video: ResolveResponse | null }) {
   const origin = typeof window === 'undefined' ? '' : window.location.origin;
-  const source = origin ? resolveLiveChat(video, origin) : undefined;
+  const scheme = useResolvedColorMode();
+  const source = origin ? resolveLiveChat(video, origin, scheme) : undefined;
   const storageKey = `wt-live-chat:${video?.original_url ?? ''}`;
   const [customUrl, setCustomUrl] = useState(() => {
     try { return chatUrl(sessionStorage.getItem(storageKey) || '', origin) || ''; }

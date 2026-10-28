@@ -4,6 +4,7 @@ import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { Monitor, Moon, Sun } from 'lucide-react';
 import {
     COLOR_MODES,
+    COLOR_MODE_ATTRIBUTE,
     DARK_SCHEME_QUERY,
     applyColorMode,
     getServerColorMode,
@@ -11,6 +12,7 @@ import {
     storeColorMode,
     subscribeColorMode,
     type ColorMode,
+    type ResolvedColorMode,
 } from '@/lib/color-mode';
 
 const MODE_ICONS = { system: Monitor, light: Sun, dark: Moon } as const;
@@ -29,6 +31,23 @@ const MODE_SHORT_LABELS: Record<ColorMode, string> = {
  * Keeps the `data-theme` attribute in sync with the stored preference and, when
  * the preference is "system", with the OS setting.
  */
+const readResolvedMode = (): ResolvedColorMode =>
+    document.documentElement.getAttribute(COLOR_MODE_ATTRIBUTE) === 'light' ? 'light' : 'dark';
+
+function subscribeResolvedMode(onChange: () => void): () => void {
+    const observer = new MutationObserver(onChange);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: [COLOR_MODE_ATTRIBUTE] });
+    return () => observer.disconnect();
+}
+
+/**
+ * The scheme actually shown (a "system" preference resolved), read from the
+ * attribute `applyColorMode` writes, so it follows the toggle and the OS.
+ */
+export function useResolvedColorMode(): ResolvedColorMode {
+    return useSyncExternalStore(subscribeResolvedMode, readResolvedMode, () => 'dark');
+}
+
 export function useColorMode() {
     const mode = useSyncExternalStore(
         subscribeColorMode,
