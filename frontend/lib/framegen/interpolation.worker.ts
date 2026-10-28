@@ -57,8 +57,8 @@ const VERTEX = `
   }`;
 
 function pipelineFor(fragment: string, format: GPUTextureFormat) {
-  const module = device.createShaderModule({ code: VERTEX + fragment });
-  return device.createRenderPipeline({ layout: 'auto', vertex: { module, entryPoint: 'vs' }, fragment: { module, entryPoint: 'fs', targets: [{ format }] } });
+  const shader = device.createShaderModule({ code: VERTEX + fragment });
+  return device.createRenderPipeline({ layout: 'auto', vertex: { module: shader, entryPoint: 'vs' }, fragment: { module: shader, entryPoint: 'fs', targets: [{ format }] } });
 }
 
 function releaseSize() {
