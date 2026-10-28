@@ -260,12 +260,21 @@ self.onmessage = async ({ data }) => {
         const ms = await buildModel(sizes[sizeIndex], data.mids, report);
         if (ms <= data.budgetMs || sizeIndex === sizes.length - 1) break;
       }
-      self.postMessage({ id: data.id, size, tunes });
+      self.postMessage({ id: data.id, size, tunes, baselineMs: tunes[tuneKey(size)]?.ms });
     } else if (data.type === 'step-down') {
       if (sizeIndex >= sizes.length - 1) throw new Error('GPU cannot keep up');
       sizeIndex++;
       await buildModel(sizes[sizeIndex], data.mids, message => self.postMessage({ type: 'progress', message }));
-      self.postMessage({ id: data.id, size, tunes });
+      self.postMessage({ id: data.id, size, tunes, baselineMs: tunes[tuneKey(size)]?.ms });
+    } else if (data.type === 'probe') {
+      // One source frame's work, timed, with nothing on screen: tells the page
+      // whether the GPU is still shared (see lib/gpu-contention.ts).
+      if (!model) throw new Error('Frame generation is not ready');
+      const started = performance.now();
+      model.prepPair(inputs[0], inputs[1]);
+      for (let k = 0; k < data.mids; k++) model.runT((k + 1) / (data.mids + 1), pool[k]);
+      await device.queue.onSubmittedWorkDone();
+      self.postMessage({ id: data.id, ms: performance.now() - started });
     } else if (data.type === 'frame') {
       self.postMessage({ id: data.id, ...await frame(data) });
     } else if (data.type === 'snapshot') {

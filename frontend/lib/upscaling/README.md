@@ -79,6 +79,17 @@ Classic workers are intentional: LiteRT uses importScripts and resolves WASM
 relative to the worker URL. Runtime files must live alongside the worker. Bump
 ASSET_ROOT and the build output path together when changing the worker protocol.
 
+## Sharing the GPU (a game on another screen)
+
+A page cannot see other programs or the GPU's load. It can see its own work:
+`lib/gpu-contention.ts` compares each frame's cost with the cost on an idle GPU
+(motion smoothing: the first-use measurement; upscaling: the median of its first
+30 frames). Work sustained at twice that, and at least 4 ms more, means the GPU
+is shared, typically with a game. Processing then steps aside, the original
+picture shows, and a notice over the player says why. A probe every three
+seconds times the same work; two normal probes bring processing back. Slowness
+from contention does not lower the size or drop the neural model for good.
+
 ## Verification and beta limits
 
 ```

@@ -2,6 +2,9 @@
 
 import { useRef, useEffect, useState, useCallback } from 'react';
 import { cn } from '@/lib/utils';
+
+/** How long the "GPU is busy" notice stays over the player. */
+const GPU_NOTICE_MS = 8000;
 import { Loader2, Info, Activity, Play, VolumeX } from 'lucide-react';
 import { PlayerControls } from './player-controls';
 import { QualityOption } from '@/lib/api';
@@ -396,6 +399,19 @@ export function CustomPlayer({
         useVideoEnhancement(mediaElement, isMseMode ? manifestUrl! : src, framegenOwnsPicture);
 
     const isBuffering = isMseMode ? shakaPlayer.isBuffering : hlsPlayer.isBuffering;
+
+    // Motion smoothing or upscaling stepped aside for another app on the GPU
+    // (lib/gpu-contention.ts): say so once, over the player, for a few seconds.
+    const pausedForGpu = [framegenStatus.busyGpu && 'Motion smoothing', enhancementStatus.busyGpu && 'Video enhancement']
+        .filter(Boolean).join(' and ');
+    const [gpuNotice, setGpuNotice] = useState('');
+    useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- a timed notice for an external change
+        setGpuNotice(pausedForGpu);
+        if (!pausedForGpu) return;
+        const timer = setTimeout(() => setGpuNotice(''), GPU_NOTICE_MS);
+        return () => clearTimeout(timer);
+    }, [pausedForGpu]);
 
     // === A LIVE SHARE IS HANDED TO THE ELEMENT DIRECTLY ===
     // No engine, no manifest, no proxy: either the capture itself on
@@ -925,6 +941,12 @@ export function CustomPlayer({
                         </div>
                     </div>
                 </section>
+            )}
+
+            {gpuNotice && (
+                <div role="status" className="pointer-events-none absolute right-3 top-3 z-30 max-w-xs rounded-xl border border-white/10 bg-black/75 px-3 py-2 text-xs leading-snug text-white/90 backdrop-blur-md">
+                    <span className="font-medium text-white">{gpuNotice} paused.</span> Your GPU is busy with another app, such as a game. It resumes on its own.
+                </div>
             )}
 
             {/* Loading Overlay */}

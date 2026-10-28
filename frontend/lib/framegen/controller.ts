@@ -3,8 +3,14 @@ import {
   FrameRateEstimate, needsGeneration, processingSizes, type ProcessingSize, type TuneCache,
 } from './policy';
 import { reportClientError } from '@/lib/client-errors';
-export interface FramegenStatus { state: 'off' | 'starting' | 'idle' | 'active' | 'unavailable'; message: string }
-interface Reply { count?: number; ms?: number; error?: string; size?: ProcessingSize; tunes?: TuneCache }
+import { CONTENTION_PROBE_MS, GPU_BUSY_MESSAGE, GpuContention } from '@/lib/gpu-contention';
+export interface FramegenStatus {
+  state: 'off' | 'starting' | 'idle' | 'active' | 'unavailable';
+  message: string;
+  /** Stepped aside because another app is using the GPU heavily. */
+  busyGpu?: boolean;
+}
+interface Reply { count?: number; ms?: number; error?: string; size?: ProcessingSize; tunes?: TuneCache; baselineMs?: number }
 
 /** Consecutive slow or skipped source frames before the worker steps down a size. */
 const SLOW_LIMIT = 8;
@@ -47,6 +53,10 @@ export class FramegenController {
   private presentPending = false;
   /** Set while a frame is in flight; the step-down runs once it returns. */
   private stepDownWanted = false;
+  private contention = new GpuContention();
+  private probeTimer?: ReturnType<typeof setTimeout>;
+  /** Upload and read-back on top of the measured model cost of one source frame. */
+  private static readonly FRAME_OVERHEAD_MS = 2;
   private size?: ProcessingSize;
   private statusKey = '';
   private nativeFullscreen = false;
@@ -76,10 +86,34 @@ export class FramegenController {
       on(video, 'loadeddata', ready);
     }
   }
-  private status(state: FramegenStatus['state'], message: string) {
+  private status(state: FramegenStatus['state'], message: string, busyGpu = false) {
     if (this.disposed) return;
     const key = state + message;
-    if (key !== this.statusKey) { this.statusKey = key; this.notify({ state, message }); }
+    if (key !== this.statusKey) { this.statusKey = key; this.notify({ state, message, busyGpu }); }
+  }
+  private rebase(baselineMs: number | undefined) {
+    this.contention.rebase(baselineMs === undefined ? undefined : baselineMs + FramegenController.FRAME_OVERHEAD_MS);
+  }
+  /** Another app took the GPU: show the original picture and check back now and then. */
+  private stepAside() {
+    this.ready = false; this.invalidate();
+    this.status('idle', GPU_BUSY_MESSAGE, true);
+    const probe = () => {
+      this.probeTimer = undefined;
+      if (this.disposed || this.failed) return;
+      if (this.busy || this.blocked()) { this.probeTimer = setTimeout(probe, CONTENTION_PROBE_MS); return; }
+      this.busy = true;
+      void this.request({ type: 'probe', mids: this.mids }, [], 5000)
+        .then(result => {
+          if (this.contention.probe(result.ms ?? Infinity)) {
+            this.slow = 0; this.missed = 0; this.ready = true;
+            this.status('idle', 'GPU is free again — smoothing resumes');
+          } else this.probeTimer = setTimeout(probe, CONTENTION_PROBE_MS);
+        })
+        .catch(error => { if (!this.disposed && !this.failed) this.fail(error instanceof Error ? error.message : 'Frame generation failed'); })
+        .finally(() => { this.busy = false; });
+    };
+    this.probeTimer = setTimeout(probe, CONTENTION_PROBE_MS);
   }
   private hide() { this.canvas.style.visibility = 'hidden'; this.delay(0); }
   private invalidate() {
@@ -126,7 +160,7 @@ export class FramegenController {
       // Tuning a size the first time takes a few seconds per size.
       const reply = await this.request({ type: 'init', sizes, mids: this.mids, budgetMs: FRAMEGEN_BUDGET_MS, tunes: readTunes(), canvas: offscreen }, [offscreen], 120000);
       if (this.disposed || this.failed) return;
-      storeTunes(reply.tunes); this.size = reply.size; this.ready = true;
+      storeTunes(reply.tunes); this.size = reply.size; this.rebase(reply.baselineMs); this.ready = true;
       this.status('idle', 'Ready — play the video to smooth motion');
       this.capture(); this.present();
     } catch (error) {
@@ -139,7 +173,7 @@ export class FramegenController {
     try {
       const reply = await this.request({ type: 'step-down', mids: this.mids }, [], 120000);
       if (this.disposed || this.failed) return;
-      storeTunes(reply.tunes); this.size = reply.size; this.slow = 0; this.missed = 0; this.ready = true;
+      storeTunes(reply.tunes); this.size = reply.size; this.rebase(reply.baselineMs); this.slow = 0; this.missed = 0; this.ready = true;
     } catch (error) {
       this.fail(error instanceof Error ? error.message : 'GPU cannot keep up');
     } finally { this.busy = false; }
@@ -168,8 +202,13 @@ export class FramegenController {
       void this.request({ type: 'frame', frame, time: metadata.mediaTime, fps: this.fps, reset }, [frame])
         .then(result => {
           if (this.disposed || this.failed || epoch !== this.epoch) return;
+          if (this.contention.observe(result.ms ?? 0)) { this.stepAside(); return; }
           this.slow = (result.ms ?? 0) > this.interval * 1000 * SLOW_SHARE ? this.slow + 1 : Math.max(0, this.slow - 1);
-          if (this.slow >= SLOW_LIMIT) this.stepDownWanted = true;
+          // Slow because the GPU is shared is not a reason to lower the size for good.
+          if (this.slow >= SLOW_LIMIT) {
+            if (this.contention.slowerThanIdle) { this.slow = 0; this.contention.busy = true; this.stepAside(); }
+            else this.stepDownWanted = true;
+          }
         })
         .catch(error => {
           frame.close();
@@ -202,6 +241,7 @@ export class FramegenController {
     }
   }
   private stop() {
+    if (this.probeTimer !== undefined) clearTimeout(this.probeTimer);
     if (this.callback !== undefined) this.video.cancelVideoFrameCallback(this.callback);
     if (this.raf !== undefined) cancelAnimationFrame(this.raf);
     if (this.pending) { clearTimeout(this.pending.timer); this.pending.reject(new Error('Frame generator stopped')); this.pending = undefined; }

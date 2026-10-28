@@ -1,12 +1,15 @@
 import { ASSET_ROOT, ContentSelection, RenderBudget, neuralFits, outputSize, type ContentMode, type UpscaleMode } from './policy';
 import { LocalWorker } from './worker-client';
 import { SpatialRenderer } from './spatial';
+import { CONTENTION_PROBE_MS, GPU_BUSY_MESSAGE, GpuContention } from '@/lib/gpu-contention';
 
 export interface EnhancementStatus {
   state: 'off' | 'starting' | 'active' | 'idle' | 'unavailable';
   message: string;
   backend?: 'neural' | 'spatial';
   content?: ContentMode;
+  /** Stepped aside because another app is using the GPU heavily. */
+  busyGpu?: boolean;
 }
 
 /** Presentation only. Never writes src, currentTime, playbackRate, volume or
@@ -29,6 +32,9 @@ export class EnhancementController {
   private allowNeural = true;
   private stopped = false;
   private budget = new RenderBudget();
+  /** Learns this renderer's idle cost from its first frames. */
+  private contention = new GpuContention();
+  private nextProbe = 0;
   private lastTime = -1;
   private frameInterval = 1000 / 30;
   private lastMetadata?: { mediaTime: number; presentedFrames: number };
@@ -75,10 +81,10 @@ export class EnhancementController {
     void this.draw();
   }
 
-  private report(state: EnhancementStatus['state'], message: string) {
+  private report(state: EnhancementStatus['state'], message: string, busyGpu = false) {
     if (this.disposed) return;
     const backend = this.renderer instanceof LocalWorker ? 'neural' : this.renderer ? 'spatial' : undefined;
-    const status: EnhancementStatus = { state, message, backend, content: this.content };
+    const status: EnhancementStatus = { state, message, backend, content: this.content, busyGpu };
     const key = JSON.stringify(status);
     if (key !== this.lastStatus) { this.lastStatus = key; this.notify(status); }
   }
@@ -109,6 +115,7 @@ export class EnhancementController {
     this.canvas?.remove(); this.canvas = undefined;
     this.neuralKey = '';
     this.budget = new RenderBudget();
+    this.contention.rebase();
   }
 
   private async createRenderer() {
@@ -211,6 +218,11 @@ export class EnhancementController {
       this.schedule(); return;
     }
     if (!this.dirty && this.lastTime === this.video.currentTime) { this.schedule(); return; }
+    // Stepped aside for another app: the original picture, and a test frame now and then.
+    const probing = this.contention.busy;
+    if (probing && performance.now() < this.nextProbe) {
+      this.hide(); this.report('idle', GPU_BUSY_MESSAGE, true); this.schedule(); return;
+    }
     this.dirty = false; this.busy = true;
     const epoch = this.epoch;
     const sourceTime = this.video.currentTime;
@@ -238,7 +250,17 @@ export class EnhancementController {
       if (this.disposed || epoch !== this.epoch) return;
       const elapsed = performance.now() - start;
       this.lastTime = sourceTime;
-      if (!changed && !this.video.paused && this.budget.observe(elapsed, this.frameInterval)) {
+      if (probing) {
+        if (!this.contention.probe(elapsed)) {
+          this.nextProbe = performance.now() + CONTENTION_PROBE_MS;
+          this.hide(); this.report('idle', GPU_BUSY_MESSAGE, true); return;
+        }
+      } else if (!changed && !this.video.paused && this.contention.observe(elapsed)) {
+        this.nextProbe = performance.now() + CONTENTION_PROBE_MS;
+        this.hide(); this.report('idle', GPU_BUSY_MESSAGE, true); return;
+      }
+      // Slow because the GPU is shared is no reason to give up the neural model.
+      if (!changed && !this.video.paused && !this.contention.slowerThanIdle && this.budget.observe(elapsed, this.frameInterval)) {
         if (renderer instanceof LocalWorker) this.degrade();
         else this.fail('Enhancement paused to keep playback smooth. Turn Off and on to retry.');
         return;
