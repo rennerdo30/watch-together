@@ -15,6 +15,11 @@ import type { ShakaAudioTrack } from './player/hooks';
 import { PlayerSettingsMenu } from './player-settings-menu';
 
 
+/** Every button in the control bar: one size, one hover, icons at 20 px. */
+const CONTROL_BUTTON = 'flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/10 hover:text-white [&_svg]:h-5 [&_svg]:w-5';
+/** The same button while its feature is on. */
+const CONTROL_BUTTON_ON = 'flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[color:var(--accent-glow)] text-[color:var(--accent-primary)] transition-colors [&_svg]:h-5 [&_svg]:w-5';
+
 interface PlayerControlsProps {
     isPlaying: boolean;
     isMuted: boolean;
@@ -329,7 +334,7 @@ export function PlayerControls({
                             onClick={onPlayToggle}
                             aria-label={isPlaying ? 'Pause' : 'Play'}
                             title={isPlaying ? 'Pause' : 'Play'}
-                            className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-all hover:scale-105 active:scale-95"
+                            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/15 text-white transition-colors hover:bg-white/25"
                         >
                             {isPlaying ? <Pause aria-hidden="true" className="w-5 h-5" /> : <Play aria-hidden="true" className="w-5 h-5 ml-0.5" />}
                         </button>
@@ -341,9 +346,9 @@ export function PlayerControls({
                                 onClick={onMuteToggle}
                                 aria-label={isMuted || volume === 0 ? 'Unmute' : 'Mute'}
                                 title={isMuted || volume === 0 ? 'Unmute' : 'Mute'}
-                                className="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-white/80 hover:text-white transition-all"
+                                className={CONTROL_BUTTON}
                             >
-                                {isMuted || volume === 0 ? <VolumeX aria-hidden="true" className="w-4 h-4" /> : <Volume2 aria-hidden="true" className="w-4 h-4" />}
+                                {isMuted || volume === 0 ? <VolumeX aria-hidden="true" /> : <Volume2 aria-hidden="true" />}
                             </button>
                             <div className="w-0 group-hover:w-20 overflow-hidden transition-all duration-300">
                                 <input
@@ -360,7 +365,7 @@ export function PlayerControls({
                         </div>
 
                         {/* Time Display */}
-                        <div className="text-xs text-white/80 font-medium tabular-nums ml-1">
+                        <div className="ml-1 text-sm font-medium tabular-nums text-white/90">
                             {isLive ? (
                                 <span className="text-red-400">LIVE</span>
                             ) : (
@@ -394,7 +399,7 @@ export function PlayerControls({
                     </div>
 
                     {/* Right Side */}
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-0.5">
                         {/* Audio Normalization */}
                         {onToggleNormalization && (
                             <button
@@ -403,14 +408,11 @@ export function PlayerControls({
                                 title="Normalize volume"
                                 aria-label="Normalize volume shortcut"
                                 aria-pressed={Boolean(normalizationActive)}
-                                className={cn(
-                                    "w-8 h-8 rounded-full flex items-center justify-center transition-all",
-                                    normalizationActive
-                                        ? "bg-[color:var(--accent-glow)] text-[color:var(--accent-primary)]"
-                                        : "hover:bg-white/10 text-white/60 hover:text-white"
-                                )}
+                                // A shortcut for the switch in Settings > Sound; a phone's bar
+                                // has room for the essentials only.
+                                className={cn(normalizationActive ? CONTROL_BUTTON_ON : CONTROL_BUTTON, "max-sm:hidden")}
                             >
-                                <Ear aria-hidden="true" className="w-4 h-4" />
+                                <Ear aria-hidden="true" />
                             </button>
                         )}
 
@@ -421,14 +423,9 @@ export function PlayerControls({
                             title="Playback statistics"
                             aria-label="Playback statistics"
                             aria-pressed={showStats}
-                            className={cn(
-                                "w-8 h-8 rounded-full flex items-center justify-center transition-all",
-                                showStats
-                                    ? "bg-emerald-500/20 text-emerald-400"
-                                    : "hover:bg-white/10 text-white/60 hover:text-white"
-                            )}
+                            className={showStats ? CONTROL_BUTTON_ON : CONTROL_BUTTON}
                         >
-                            <Activity aria-hidden="true" className="w-4 h-4" />
+                            <Activity aria-hidden="true" />
                         </button>
 
                         {/* Settings */}
@@ -438,14 +435,9 @@ export function PlayerControls({
                             title="Player settings"
                             aria-label="Player settings"
                             aria-expanded={showSettings}
-                            className={cn(
-                                "w-8 h-8 rounded-full flex items-center justify-center transition-all",
-                                showSettings
-                                    ? "bg-white/20 text-white"
-                                    : "hover:bg-white/10 text-white/60 hover:text-white"
-                            )}
+                            className={cn(CONTROL_BUTTON, showSettings && "bg-white/15 text-white")}
                         >
-                            <Settings aria-hidden="true" className={cn("w-4 h-4 transition-transform", showSettings && "rotate-90")} />
+                            <Settings aria-hidden="true" className={cn("transition-transform", showSettings && "rotate-90")} />
                         </button>
 
                         {/* PiP */}
@@ -454,9 +446,9 @@ export function PlayerControls({
                             onClick={onPiPToggle}
                             title="Picture in picture"
                             aria-label="Picture in picture"
-                            className="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-white/60 hover:text-white transition-all"
+                            className={cn(CONTROL_BUTTON, "max-sm:hidden")}
                         >
-                            <PictureInPicture aria-hidden="true" className="w-4 h-4" />
+                            <PictureInPicture aria-hidden="true" />
                         </button>
 
                         {/* Fullscreen */}
@@ -465,9 +457,9 @@ export function PlayerControls({
                             onClick={onFullscreenToggle}
                             title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
                             aria-label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-                            className="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-white/60 hover:text-white transition-all"
+                            className={CONTROL_BUTTON}
                         >
-                            {isFullscreen ? <Minimize aria-hidden="true" className="w-4 h-4" /> : <Maximize aria-hidden="true" className="w-4 h-4" />}
+                            {isFullscreen ? <Minimize aria-hidden="true" /> : <Maximize aria-hidden="true" />}
                         </button>
                     </div>
                 </div>

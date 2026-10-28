@@ -33,3 +33,21 @@ test('on a phone the room name field keeps its height above the button', async (
   const field = page.getByRole('textbox', { name: 'Room name' });
   expect((await field.boundingBox())!.height).toBeGreaterThanOrEqual(40);
 });
+
+test('on a phone the player controls fit inside the player', async ({ page }) => {
+  // 36 px buttons for every control pushed fullscreen past the right edge.
+  const { stubAdaptiveStream } = await import('./adaptive-fixture');
+  await page.setViewportSize({ width: 390, height: 844 });
+  const url = 'https://youtu.be/phone-controls';
+  await stubAdaptiveStream(page, url);
+  await page.goto(`/room/e2e-phone-controls-${Date.now().toString(36)}?user=phone@example.com`);
+  await expect(page.getByLabel('Connected to the room')).toBeVisible({ timeout: 15_000 });
+  await page.getByPlaceholder('Paste video URL...').fill(url);
+  await page.getByPlaceholder('Paste video URL...').press('Enter');
+  const video = page.locator('video[data-stream-type="mse"]');
+  await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.readyState)).toBeGreaterThanOrEqual(2);
+  await video.evaluate((v: HTMLVideoElement) => v.pause());
+  const stage = (await video.boundingBox())!;
+  const fullscreen = (await page.getByRole('button', { name: 'Fullscreen', exact: true }).boundingBox())!;
+  expect(fullscreen.x + fullscreen.width).toBeLessThanOrEqual(stage.x + stage.width);
+});

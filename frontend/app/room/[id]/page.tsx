@@ -1216,17 +1216,19 @@ export default function RoomPage() {
                     >
                         <BrandMark className="w-8 h-8" />
                     </button>
-                    <div className="flex flex-col pl-1 min-w-0">
-                        <h1 className="font-semibold text-white leading-none text-sm truncate">{APP_NAME}</h1>
-                        <div className="flex items-center gap-1.5 mt-0.5">
-                            <span className="font-medium text-neutral-400 text-xs truncate" title={roomId}>{roomName || roomId}</span>
+                    {/* The room is what this page is about; the app's name is the
+                        logo's job, and stays as the small line underneath. */}
+                    <div className="flex min-w-0 flex-col pl-1">
+                        <div className="flex min-w-0 items-center gap-2">
+                            <h1 className="truncate text-sm font-semibold leading-tight text-white" title={roomId}>{roomName || roomId}</h1>
                             <span
                                 role="status"
                                 aria-label={connected ? 'Connected to the room' : 'Disconnected from the room'}
                                 title={connected ? 'Connected' : 'Disconnected'}
-                                className={`w-1.5 h-1.5 shrink-0 rounded-full ${connected ? "bg-emerald-500" : "bg-red-500 animate-pulse"}`}
+                                className={`h-1.5 w-1.5 shrink-0 rounded-full ${connected ? "bg-emerald-500" : "bg-red-500 animate-pulse"}`}
                             />
                         </div>
+                        <span className="text-xs leading-tight text-neutral-500">{APP_NAME}</span>
                     </div>
                 </div>
 
@@ -1361,7 +1363,7 @@ export default function RoomPage() {
                 {/* Player Area */}
                 <div className="flex-1 flex flex-col p-3 min-w-0 min-h-0 overflow-hidden gap-2.5">
                     {/* Video Player */}
-                    <div className="on-dark flex-1 min-h-0 relative rounded-xl overflow-hidden bg-black border border-neutral-800 shadow-2xl">
+                    <div className="on-dark flex-1 min-h-0 relative rounded-xl overflow-hidden bg-black border border-white/10 shadow-2xl">
                         {/* Loading the next video never hides the one playing: a small
                             pill in the corner while it plays on, a centred spinner only
                             when there is nothing to watch meanwhile. */}
@@ -1955,7 +1957,7 @@ export default function RoomPage() {
                 {/* Resizable Sidebar */}
                 <aside
                     aria-label="Queue, audience, live chat and room log"
-                    className="app-surface border-t lg:border-t-0 lg:border-l border-neutral-800 flex flex-col shrink-0 bg-neutral-900/30 h-[42dvh] w-full lg:h-auto lg:w-[var(--sidebar-width)]"
+                    className="app-surface border-t lg:border-t-0 lg:border-l border-white/10 flex flex-col shrink-0 bg-neutral-900/30 h-[42dvh] w-full lg:h-auto lg:w-[var(--sidebar-width)]"
                 >
                     {/* Compact Tabs */}
                     <div role="tablist" aria-label="Sidebar sections" className={`grid ${hasChapters ? 'grid-cols-5' : 'grid-cols-4'} p-1.5 gap-1 border-b border-white/10 shrink-0`}>
@@ -2114,14 +2116,14 @@ export default function RoomPage() {
                                             />
                                         ) : null}
                                     </DragOverlay>
-                                    <div className="p-2 border-t border-neutral-800 shrink-0 bg-neutral-900/40">
+                                    <div className="shrink-0 border-t border-white/10 p-2">
                                         <button
                                             type="button"
                                             disabled={queue.length === 0}
                                             onClick={() => sendMsg('video_ended')}
-                                            className="w-full h-9 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white font-medium rounded-lg text-xs transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:hover:bg-neutral-800 disabled:hover:text-neutral-300"
+                                            className={`${BUTTON_SECONDARY} w-full`}
                                         >
-                                            <SkipForward aria-hidden="true" className="w-3.5 h-3.5" />
+                                            <SkipForward aria-hidden="true" className="h-4 w-4" />
                                             Play next
                                         </button>
                                     </div>
@@ -2129,7 +2131,7 @@ export default function RoomPage() {
                             </DndContext>
                         ) : (
 
-                            <div className="h-full overflow-y-auto p-2 space-y-1 custom-scrollbar">
+                            <div className="h-full overflow-y-auto p-2 space-y-0.5 custom-scrollbar">
                                 {members.length === 0 && (
                                     <p className="px-4 py-10 text-center text-xs text-neutral-400">
                                         Nobody else is here yet. Share the room link to invite someone.
@@ -2141,18 +2143,21 @@ export default function RoomPage() {
                                     const isAdmin = myRole === 'admin';
 
                                     return (
-                                        <div key={m.email} className={`group flex items-center gap-2 p-1.5 rounded-lg bg-neutral-800/10 border border-[color:var(--border-default)]`}>
-                                            <div className={`w-6 h-6 rounded-md flex items-center justify-center text-2xs font-semibold ui-numeric on-accent bg-[color:var(--accent-primary)]`}>
-                                                {m.email.charAt(0).toUpperCase()}
-                                            </div>
-                                            <div className="flex-1 min-w-0 flex flex-col">
-                                                <p className="font-medium text-neutral-200 truncate" style={{ fontSize: `${fontSize - 1}px` }} title={m.email}>
-                                                    {m.email}{currentUser === m.email && <span className="text-neutral-500"> (you)</span>}
-                                                </p>
-                                                <div className="flex items-center gap-1">
-                                                    {role === 'admin' && <span className="text-2xs text-amber-400 font-medium flex items-center gap-1"><Crown aria-hidden="true" className="w-3 h-3" /> Admin</span>}
-                                                    {role === 'moderator' && <span className="text-2xs text-blue-400 font-medium flex items-center gap-1"><Shield aria-hidden="true" className="w-3 h-3" /> Moderator</span>}
+                                        <div key={m.email} className="group flex items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-white/5">
+                                            <div className="relative shrink-0">
+                                                <div aria-hidden="true" className="flex h-8 w-8 items-center justify-center rounded-full bg-[color:var(--accent-glow)] text-xs font-semibold text-[color:var(--accent-primary)]">
+                                                    {displayName(m.email).charAt(0).toUpperCase()}
                                                 </div>
+                                                <span aria-hidden="true" className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-[color:var(--bg-secondary)] bg-emerald-500" />
+                                            </div>
+                                            <div className="flex min-w-0 flex-1 flex-col">
+                                                <p className="flex min-w-0 items-center gap-1.5 font-medium text-neutral-100" style={{ fontSize: `${fontSize - 1}px` }} title={m.email}>
+                                                    <span className="truncate">{displayName(m.email)}</span>
+                                                    {currentUser === m.email && <span className="shrink-0 font-normal text-neutral-500">(you)</span>}
+                                                    {role === 'admin' && <span className="flex shrink-0 items-center gap-1 rounded-full bg-amber-500/15 px-1.5 text-2xs font-medium text-amber-400"><Crown aria-hidden="true" className="h-3 w-3" /> Admin</span>}
+                                                    {role === 'moderator' && <span className="flex shrink-0 items-center gap-1 rounded-full bg-blue-500/15 px-1.5 text-2xs font-medium text-blue-400"><Shield aria-hidden="true" className="h-3 w-3" /> Moderator</span>}
+                                                </p>
+                                                <p className="truncate text-xs text-neutral-500">{m.email}</p>
                                             </div>
 
                                             {isAdmin && currentUser !== m.email && (
@@ -2161,39 +2166,38 @@ export default function RoomPage() {
                                                         <button
                                                             type="button"
                                                             onClick={() => sendMsg('promote', { target_email: m.email, role: 'admin' })}
-                                                            className="p-1 hover:bg-amber-500/20 text-neutral-400 hover:text-amber-400 rounded"
+                                                            className="flex h-7 w-7 items-center justify-center rounded-lg text-neutral-400 hover:bg-amber-500/15 hover:text-amber-400"
                                                             title="Promote to admin"
                                                             aria-label={`Promote ${m.email} to admin`}
                                                         >
-                                                            <Crown aria-hidden="true" className="w-3 h-3" />
+                                                            <Crown aria-hidden="true" className="h-3.5 w-3.5" />
                                                         </button>
                                                     )}
                                                     {role !== 'moderator' && role !== 'admin' && (
                                                         <button
                                                             type="button"
                                                             onClick={() => sendMsg('promote', { target_email: m.email, role: 'moderator' })}
-                                                            className="p-1 hover:bg-blue-500/20 text-neutral-400 hover:text-blue-400 rounded"
+                                                            className="flex h-7 w-7 items-center justify-center rounded-lg text-neutral-400 hover:bg-blue-500/15 hover:text-blue-400"
                                                             title="Promote to moderator"
                                                             aria-label={`Promote ${m.email} to moderator`}
                                                         >
-                                                            <Shield aria-hidden="true" className="w-3 h-3" />
+                                                            <Shield aria-hidden="true" className="h-3.5 w-3.5" />
                                                         </button>
                                                     )}
                                                     {role !== 'user' && (
                                                         <button
                                                             type="button"
                                                             onClick={() => sendMsg('promote', { target_email: m.email, role: 'user' })}
-                                                            className="p-1 hover:bg-neutral-700 text-neutral-400 hover:text-neutral-200 rounded"
+                                                            className="flex h-7 w-7 items-center justify-center rounded-lg text-neutral-400 hover:bg-white/10 hover:text-neutral-200"
                                                             title="Demote to viewer"
                                                             aria-label={`Demote ${m.email} to viewer`}
                                                         >
-                                                            <UserIcon aria-hidden="true" className="w-3 h-3" />
+                                                            <UserIcon aria-hidden="true" className="h-3.5 w-3.5" />
                                                         </button>
                                                     )}
                                                 </div>
                                             )}
 
-                                            <div className="w-1.5 h-1.5 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]" />
                                         </div>
                                     );
                                 })}
