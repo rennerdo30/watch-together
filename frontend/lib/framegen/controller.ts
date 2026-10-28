@@ -1,6 +1,6 @@
 import {
   FRAMEGEN_BUDGET_MS, FRAMEGEN_DELAY_MS, FRAMEGEN_MIDS, FRAMEGEN_ROOT, FRAMEGEN_TUNE_KEY,
-  processingSizes, type ProcessingSize, type TuneCache,
+  FrameRateEstimate, needsGeneration, processingSizes, type ProcessingSize, type TuneCache,
 } from './policy';
 import { reportClientError } from '@/lib/client-errors';
 export interface FramegenStatus { state: 'off' | 'starting' | 'idle' | 'active' | 'unavailable'; message: string }
@@ -39,7 +39,7 @@ export class FramegenController {
   private reset = true;
   private callback?: number;
   private raf?: number;
-  private lastTime?: number;
+  private rate = new FrameRateEstimate();
   private interval = 1 / 24;
   private missed = 0;
   private slow = 0;
@@ -83,7 +83,7 @@ export class FramegenController {
   }
   private hide() { this.canvas.style.visibility = 'hidden'; this.delay(0); }
   private invalidate() {
-    this.epoch++; this.reset = true; this.lastTime = undefined; this.lastPresentation = 0;
+    this.epoch++; this.reset = true; this.rate.break(); this.lastPresentation = 0;
     this.worker?.postMessage({ type: 'clear' });
     this.hide();
   }
@@ -150,13 +150,12 @@ export class FramegenController {
       this.callback = undefined; this.capture();
       if (!this.ready) return;
       if (this.blocked()) { this.invalidate(); return; }
-      if (this.lastTime !== undefined) {
-        const dt = metadata.mediaTime - this.lastTime;
-        if (dt > 0 && dt < 0.12) this.interval = this.interval * 0.75 + dt * 0.25;
-      }
-      this.lastTime = metadata.mediaTime;
-      if (1 / this.interval >= this.fps * 0.99) {
-        this.invalidate(); this.status('idle', 'Source already meets the selected frame rate'); return;
+      // Nothing is generated (and audio is not delayed) until the rate is known.
+      const interval = this.rate.observe(metadata.mediaTime);
+      if (interval === undefined) { this.status('idle', 'Measuring the video\'s frame rate…'); return; }
+      this.interval = interval;
+      if (!needsGeneration(interval, this.fps)) {
+        this.status('idle', `Already ${Math.round(1 / interval)} fps — nothing to add at this setting`); return;
       }
       if (this.busy) {
         if (++this.missed >= SLOW_LIMIT) this.stepDownWanted = true;

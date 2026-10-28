@@ -118,7 +118,7 @@ export class EnhancementController {
     canvas.style.visibility = 'hidden';
     this.host.replaceChildren(canvas); this.canvas = canvas;
     if (this.allowNeural && neuralFits(this.video.videoWidth, this.video.videoHeight) &&
-      navigator.gpu && canvas.transferControlToOffscreen && typeof createImageBitmap === 'function') {
+      navigator.gpu && canvas.transferControlToOffscreen && typeof VideoFrame === 'function') {
       const renderer = new LocalWorker(`${ASSET_ROOT}/neural.worker.js`, () => {
         if (!this.disposed && this.renderer === renderer) this.degrade();
       });
@@ -214,7 +214,7 @@ export class EnhancementController {
     this.dirty = false; this.busy = true;
     const epoch = this.epoch;
     const sourceTime = this.video.currentTime;
-    let bitmap: ImageBitmap | undefined;
+    let bitmap: VideoFrame | undefined;
     // Hide stale output even if a driver stalls before its request times out.
     const staleTimer = setTimeout(() => { if (epoch === this.epoch) this.hide(); }, 150);
     try {
@@ -225,10 +225,12 @@ export class EnhancementController {
       let changed = false;
       if (renderer instanceof LocalWorker) {
         if (!neuralFits(this.video.videoWidth, this.video.videoHeight)) { this.degrade(); return; }
-        bitmap = await createImageBitmap(this.video);
+        // A VideoFrame references the decoded picture on the GPU; an
+        // ImageBitmap of the element was a full copy per frame.
+        bitmap = new VideoFrame(this.video);
         if (this.disposed || epoch !== this.epoch) return;
-        // Ownership is transferred. The worker closes every submitted bitmap.
-        const key = `${bitmap.width}:${bitmap.height}:${this.content}`;
+        // Ownership is transferred. The worker closes every submitted frame.
+        const key = `${bitmap.displayWidth}:${bitmap.displayHeight}:${this.content}`;
         const result = await renderer.request({ type: 'render', frame: bitmap, mode: this.content }, [bitmap], key === this.neuralKey ? 1500 : 20_000);
         this.neuralKey = key;
         changed = result.changed ?? false;

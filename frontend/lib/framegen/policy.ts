@@ -26,6 +26,47 @@ export function outputTimes(a: number, b: number, fps: number): number[] {
   return Array.from({ length: Math.min(8, Math.max(0, end - start)) }, (_, i) => (start + i) / fps);
 }
 
+/** Frame intervals needed before the source's rate is trusted. */
+const RATE_SAMPLES = 8;
+/** Intervals outside this are a seek or a stall, not the frame rate. */
+const MAX_INTERVAL = 0.12;
+
+/**
+ * The source's frame rate, from the media-time gap between presented frames.
+ * Undefined until enough frames have been seen: the old estimate started at
+ * an assumed 24 fps and took about 11 frames to settle, so a 30 fps video at
+ * the 30 fps setting was processed (and its audio delayed) for the first
+ * frames before smoothing noticed it had nothing to add.
+ */
+export class FrameRateEstimate {
+  private intervals: number[] = [];
+  private last?: number;
+  observe(mediaTime: number): number | undefined {
+    if (this.last !== undefined) {
+      const dt = mediaTime - this.last;
+      if (dt > 0 && dt < MAX_INTERVAL) {
+        this.intervals.push(dt);
+        if (this.intervals.length > RATE_SAMPLES * 4) this.intervals.shift();
+      }
+    }
+    this.last = mediaTime;
+    return this.interval;
+  }
+  /** A seek breaks the chain of frames, not the rate already learned. */
+  break() { this.last = undefined; }
+  /** Median interval in seconds, once known. */
+  get interval(): number | undefined {
+    if (this.intervals.length < RATE_SAMPLES) return undefined;
+    const sorted = [...this.intervals].sort((a, b) => a - b);
+    return sorted[Math.floor(sorted.length / 2)];
+  }
+}
+
+/** Whether smoothing adds anything: the source is below the target rate. */
+export function needsGeneration(sourceInterval: number, targetFps: number) {
+  return 1 / sourceInterval < targetFps * 0.99;
+}
+
 export interface ProcessingSize { width: number; height: number }
 
 const MAX_SOURCE_WIDTH = 3840;

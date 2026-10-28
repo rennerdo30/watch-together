@@ -31,7 +31,9 @@ async function initialize(width: number, height: number, mode: ContentMode) {
   if (!neuralFits(width, height)) throw new Error('Source exceeds neural processing budget');
   await reset();
   if (!gpu) throw new Error('WebGPU unavailable');
-  adapter ??= await gpu.requestAdapter({ powerPreference: 'low-power' });
+  // The fast GPU: on a machine with integrated and discrete graphics,
+  // 'low-power' picked the integrated one for a full-rate neural workload.
+  adapter ??= await gpu.requestAdapter({ powerPreference: 'high-performance' });
   if (!adapter || adapter.limits.maxStorageBufferBindingSize < width * height * 16 ||
       adapter.limits.maxTextureDimension2D < Math.max(width, height) * 2) throw new Error('GPU limits exceeded');
   if (!device) {
@@ -75,7 +77,7 @@ async function initialize(width: number, height: number, mode: ContentMode) {
 
 self.onmessage = async (event: MessageEvent) => {
   const { id, type, frame, mode } = event.data as {
-    id: number; type: string; frame?: ImageBitmap; mode: ContentMode; canvas?: OffscreenCanvas;
+    id: number; type: string; frame?: VideoFrame | ImageBitmap; mode: ContentMode; canvas?: OffscreenCanvas;
   };
   if (type === 'dispose') { await reset(); device?.destroy(); self.close(); return; }
   if (type === 'init') { canvas = event.data.canvas; self.postMessage({ id }); return; }
@@ -83,9 +85,12 @@ self.onmessage = async (event: MessageEvent) => {
   if (busy) { frame.close(); self.postMessage({ id, error: 'Renderer busy' }); return; }
   busy = true;
   try {
-    const nextKey = `${frame.width}:${frame.height}:${mode}`;
+    // A VideoFrame is sampled in place (importExternalTexture); a bitmap is copied.
+    const width = frame instanceof VideoFrame ? frame.displayWidth : frame.width;
+    const height = frame instanceof VideoFrame ? frame.displayHeight : frame.height;
+    const nextKey = `${width}:${height}:${mode}`;
     const changed = nextKey !== key;
-    if (changed) await initialize(frame.width, frame.height, mode);
+    if (changed) await initialize(width, height, mode);
     const start = performance.now();
     await model!.render(frame);
     // render() only submits commands. Wait for actual GPU completion, bounding
