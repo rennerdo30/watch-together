@@ -26,7 +26,7 @@ body {
 }
 
 .brand-sub {
-    font-size: 11px;
+    font-size: 12px;
 }
 
 .icon-btn {
@@ -194,6 +194,6 @@ body {
 footer {
     padding: 0 12px 12px;
     color: var(--text-secondary);
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.5;
 }

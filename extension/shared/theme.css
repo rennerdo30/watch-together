@@ -1,9 +1,9 @@
 /*
  * Watch Together extension — shared design tokens and controls.
  *
- * The web app's slate surfaces (frontend/app/globals.css), with no colour
- * accent: the primary action is drawn in ink, and the teal belongs to the
- * brand mark alone. Red is kept for errors and the reset button, so it means
+ * The web app's slate surfaces and its default teal accent
+ * (frontend/app/globals.css, lib/themes.ts), so the popup looks like the app
+ * it connects to. Red is kept for errors and the reset button, so it means
  * something when it appears. Dark is the default; a light system theme gets
  * the app's light scheme.
  */
@@ -21,9 +21,9 @@
     --text-secondary: #9ba3ae;
     --text-muted: #6c7480;
 
-    --accent-primary: #f2f4f7;
-    --accent-glow: rgba(242, 244, 247, 0.14);
-    --on-accent: #0a0b0d;
+    --accent-primary: #2fc4b2;
+    --accent-glow: rgba(47, 196, 178, 0.16);
+    --on-accent: #04201c;
 
     --success: #5ccb7f;
     --success-glow: rgba(92, 203, 127, 0.18);
@@ -63,8 +63,8 @@
         --text-secondary: #4a525c;
         --text-muted: #6c7480;
 
-        --accent-primary: #15181c;
-        --accent-glow: rgba(21, 24, 28, 0.12);
+        --accent-primary: #0f766e;
+        --accent-glow: rgba(15, 118, 110, 0.14);
         --on-accent: #ffffff;
 
         --success: #15803d;
@@ -104,8 +104,13 @@ body {
     display: none !important;
 }
 
+a {
+    color: var(--accent-primary);
+    text-underline-offset: 2px;
+}
+
 :focus-visible {
-    outline: 2px solid var(--border-strong);
+    outline: 2px solid var(--accent-primary);
     outline-offset: 2px;
 }
 
@@ -142,12 +147,12 @@ body {
     box-shadow: var(--shadow-sm);
 }
 
+/* Section labels: the web app's `ui-label`. Sentence case at 12 px; small
+   capitals are hard to read and shout. */
 .eyebrow {
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
 }
 
 .count {

@@ -37,7 +37,7 @@ export const SIDEBAR_MIN_WIDTH = 240;
 export const SIDEBAR_MAX_WIDTH = 600;
 
 /** Reader-adjustable queue/member text size, in pixels. */
-export const FONT_SIZE_DEFAULT = 15;
+export const FONT_SIZE_DEFAULT = 14;
 export const FONT_SIZE_MIN = 12;
 export const FONT_SIZE_MAX = 24;
 

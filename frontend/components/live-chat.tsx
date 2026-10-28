@@ -86,7 +86,7 @@ export function LiveChat({ video }: { video: ResolveResponse | null }) {
         <input id="custom-chat-url" type="url" value={draft} onChange={event => setDraft(event.target.value)} placeholder="https://…/chat" className="w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-2 text-white" />
         {error && <p role="alert" className="text-red-400">{error}</p>}
         <div className="flex gap-3">
-          <button type="submit" className="text-[color:var(--accent-secondary)] hover:underline">Use chat URL</button>
+          <button type="submit" className="text-[color:var(--accent-primary)] hover:underline">Use chat URL</button>
           {customUrl && <button type="button" onClick={() => save('')} className="text-neutral-400 hover:underline">Use automatic chat</button>}
         </div>
       </form>

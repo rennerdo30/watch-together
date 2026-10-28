@@ -708,7 +708,8 @@ class TestExtensionIsDownloadableFromTheInstance:
         assert "EXTENSION_DOWNLOAD_PATH = '/api/extension/download'" in constants
         api = (self.FRONTEND / "lib" / "api.ts").read_text(encoding="utf-8")
         assert "${EXTENSION_DOWNLOAD_PATH}/${browser}" in api
-        room = (self.FRONTEND / "app" / "room" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+        # The install links live in the room's settings dialog.
+        room = (self.FRONTEND / "components" / "room-settings-dialog.tsx").read_text(encoding="utf-8")
         assert "https://chromewebstore.google.com/detail/watch-together-cookie-syn/beonlkadfoclpnfigngknbjfoifibagn" in constants
         assert "href={EXTENSION_STORE_URL}" in room
         assert "extensionDownloadUrl('chrome')" not in room
@@ -1109,14 +1110,20 @@ class TestExtensionLooksLikeTheApp:
         for token in ("--bg-primary: #0a0b0d", "--text-primary: #f2f4f7"):
             assert token in app and token in theme, token
 
-    def test_the_primary_action_is_not_red(self):
+    def test_the_primary_action_is_the_apps_teal_not_red(self):
         """A red primary button, red switch and red focus ring made the popup
-        read as an error. Red is for errors and reset only."""
+        read as an error; red is for errors and reset only. The accent is the
+        web app's default theme (teal), in the dark and the light scheme."""
         import re
         theme = self.THEME.read_text(encoding="utf-8")
-        for accent in re.findall(r"--accent-primary:\s*(#[0-9a-fA-F]{6})", theme):
+        themes = (REPO_ROOT / "frontend" / "lib" / "themes.ts").read_text(encoding="utf-8")
+        default = re.search(r"\{ id: 'tide', name: 'Tide', dark: \{ accent: '(#[0-9a-f]{6})'.*?light: \{ accent: '(#[0-9a-f]{6})'", themes)
+        assert default, "the default theme moved"
+        accents = re.findall(r"--accent-primary:\s*(#[0-9a-fA-F]{6})", theme)
+        assert [a.lower() for a in accents] == [default.group(1), default.group(2)]
+        for accent in accents:
             r, g, b = (int(accent[i:i + 2], 16) for i in (1, 3, 5))
-            assert max(r, g, b) - min(r, g, b) < 24, f"accent {accent} is a colour, not ink"
+            assert not (r > g + 40 and r > b + 40), f"accent {accent} is red"
 
     def test_queue_is_one_field_with_an_arrow(self):
         html = (self.EXTENSION / "popup" / "popup.html").read_text(encoding="utf-8")

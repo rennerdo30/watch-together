@@ -29,8 +29,11 @@ export type Theme = {
     light: AccentVariant;
 };
 
-export const THEME_STORAGE_KEY = 'wt_theme';
-export const CUSTOM_THEME_STORAGE_KEY = 'wt_custom_theme';
+// New names with the teal redesign: the picker never applied anything
+// before, so whatever the old keys hold was chosen against a UI that ignored
+// it. Everyone starts on the default; the old keys are left unread.
+export const THEME_STORAGE_KEY = 'wt_accent';
+export const CUSTOM_THEME_STORAGE_KEY = 'wt_accent_custom';
 export const CUSTOM_THEME_ID = 'custom';
 
 const INK = '#ffffff';

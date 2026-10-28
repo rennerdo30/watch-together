@@ -24,3 +24,12 @@ test('a long room list scrolls in its panel and the create form stays in view', 
   const list = page.getByTestId('active-rooms-list');
   expect(await list.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
 });
+
+test('on a phone the room name field keeps its height above the button', async ({ page }) => {
+  // In the stacked layout `flex-1` gave the field a zero basis along the
+  // column and squeezed it to a sliver.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  const field = page.getByRole('textbox', { name: 'Room name' });
+  expect((await field.boundingBox())!.height).toBeGreaterThanOrEqual(40);
+});

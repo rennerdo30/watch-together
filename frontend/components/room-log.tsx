@@ -70,14 +70,14 @@ function ActivityRow({ event }: { event: RoomActivityEvent }) {
             <time
               dateTime={date.toISOString()}
               title={fullDate}
-              className="shrink-0 pt-0.5 text-[10px] tabular-nums text-neutral-500"
+              className="shrink-0 pt-0.5 text-2xs tabular-nums text-neutral-500"
             >
               {shortTime}
             </time>
           )}
         </div>
         {description.detail && (
-          <p className="mt-0.5 break-words text-[11px] leading-4 text-neutral-500">
+          <p className="mt-0.5 break-words text-xs leading-snug text-neutral-500">
             {description.detail}
           </p>
         )}
@@ -94,7 +94,7 @@ export function RoomLog({ events }: { events: RoomActivityEvent[] }) {
           <History aria-hidden="true" className="size-3.5 text-neutral-500" />
           <h2 id="room-log-heading" className="text-xs font-semibold text-neutral-200">Room log</h2>
         </div>
-        <p className="mt-1 text-[10px] text-neutral-500">Latest 200 events · newest first.</p>
+        <p className="mt-1 text-xs text-neutral-500">Latest 200 events · newest first.</p>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar">
         {events.length ? (

@@ -21,7 +21,7 @@ interface ResolveResponse {
 }
 
 const LIVE_BADGE_CLASSES =
-    'absolute top-1 left-1 px-1.5 py-0.5 bg-[color:var(--accent-primary)] text-[10px] font-semibold on-accent-light rounded';
+    'absolute top-1 left-1 px-1.5 py-0.5 bg-[color:var(--accent-primary)] text-2xs font-semibold on-accent rounded';
 
 function formatTime(seconds: number): string {
     if (!seconds || !isFinite(seconds)) return '0:00';
@@ -176,14 +176,14 @@ export function SortableQueueItem({
                     if (!isLoading) onPlay(index);
                 }}
             >
-                <div className="flex items-center gap-1.5">
-                    <p className={`font-medium truncate leading-tight ${isActive ? "text-white" : "text-neutral-300 group-hover:text-white"}`}
+                <div className="flex items-start gap-1.5">
+                    <p title={item.title} className={`font-medium line-clamp-2 leading-snug ${isActive ? "text-white" : "text-neutral-300 group-hover:text-white"}`}
                         style={{ fontSize: `${fontSize}px` }}>
                         {item.title}
                     </p>
                     {isLoading && <Loader2 className="w-3 h-3 text-white/40 animate-spin shrink-0" />}
                 </div>
-                <p className="text-[11px] text-neutral-500 truncate mt-0.5">
+                <p className="text-xs text-neutral-500 truncate mt-0.5">
                     {pending ? (
                         <span role="status">Resolving…</span>
                     ) : displayHost(item.original_url)}
@@ -210,7 +210,7 @@ export function SortableQueueItem({
                             />
                         </div>
                         {watched > 0 && (
-                            <span className="text-[10px] ui-numeric text-neutral-500 shrink-0">
+                            <span className="text-xs ui-numeric text-neutral-500 shrink-0">
                                 {formatTime(watched)}
                             </span>
                         )}
@@ -311,7 +311,7 @@ export function QueueItemOverlay({ item, isActive, fontSize }: Omit<SortableQueu
                     style={{ fontSize: `${fontSize}px` }}>
                     {item.title}
                 </p>
-                <p className="text-[11px] text-neutral-500 truncate mt-0.5">
+                <p className="text-xs text-neutral-500 truncate mt-0.5">
                     {displayHost(item.original_url)}
                 </p>
             </div>

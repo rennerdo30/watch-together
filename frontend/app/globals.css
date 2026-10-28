@@ -8,6 +8,10 @@
      Text a reader has to read is 12 px (`text-xs`) or larger. */
   --text-2xs: 0.6875rem;
   --text-2xs--line-height: 1rem;
+
+  /* Between `text-xs` and `text-sm`: tabs and inputs in dense bars. */
+  --text-ui: 0.8125rem;
+  --text-ui--line-height: 1.25rem;
 }
 
 /* =============================================================================

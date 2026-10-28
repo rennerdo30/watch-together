@@ -331,7 +331,7 @@ export default function AdminPage() {
                       <td className="py-2 pr-4" title={room.members.join(', ')}>
                         {numberFormatter.format(room.active_users)}
                         {room.playback.length > 0 && (
-                          <ul className="mt-1 space-y-0.5 text-[10px] font-mono text-neutral-500">
+                          <ul className="mt-1 space-y-0.5 text-2xs font-mono text-neutral-500">
                             {room.playback.map((viewer) => (
                               <li key={viewer.member} title={describePlayback(viewer)}>
                                 {viewer.member.split('@')[0]}: {viewer.rung ? `${viewer.rung}p` : '—'}
@@ -344,7 +344,7 @@ export default function AdminPage() {
                       <td className="max-w-[16rem] truncate py-2 pr-4 text-neutral-300">
                         {room.current_video || '—'}
                         {room.is_live && (
-                          <span className="ml-2 rounded bg-red-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-red-300">
+                          <span className="ml-2 rounded bg-red-500/20 px-1.5 py-0.5 text-2xs font-semibold text-red-300">
                             Live
                           </span>
                         )}
@@ -638,7 +638,7 @@ export default function AdminPage() {
                       <td className="py-2 pr-4 text-neutral-300">
                         {entry.stream_type || '—'}
                         {entry.is_live && (
-                          <span className="ml-2 rounded bg-red-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-red-300">
+                          <span className="ml-2 rounded bg-red-500/20 px-1.5 py-0.5 text-2xs font-semibold text-red-300">
                             Live
                           </span>
                         )}

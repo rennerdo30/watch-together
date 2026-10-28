@@ -914,7 +914,7 @@ export function CustomPlayer({
                                 title={title}
                                 className={cn(
                                     "font-semibold leading-snug text-white",
-                                    isFullscreen ? "line-clamp-2 text-2xl tracking-tight" : "truncate text-[15px]"
+                                    isFullscreen ? "line-clamp-2 text-2xl tracking-tight" : "truncate text-base"
                                 )}
                             >
                                 {title}
@@ -955,7 +955,7 @@ export function CustomPlayer({
                     onClick={handleStartFromGate}
                     className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/70 backdrop-blur-sm cursor-pointer"
                 >
-                    <span className="flex h-16 w-16 items-center justify-center rounded-full bg-[color:var(--accent-primary)] on-accent-light">
+                    <span className="flex h-16 w-16 items-center justify-center rounded-full bg-[color:var(--accent-primary)] on-accent">
                         <Play aria-hidden="true" className="w-7 h-7 translate-x-0.5" fill="currentColor" />
                     </span>
                     <span className="text-white font-medium">Click to join playback</span>
@@ -992,7 +992,7 @@ export function CustomPlayer({
 
             {/* Stats Overlay */}
             {showStats && (
-                <div aria-label="Playback statistics" className="absolute top-4 left-4 p-4 rounded-xl bg-black/80 backdrop-blur-xl border border-white/10 z-50 font-mono text-[10px] text-emerald-400 min-w-[200px] shadow-2xl animate-in fade-in zoom-in-95 duration-300">
+                <div aria-label="Playback statistics" className="absolute top-4 left-4 p-4 rounded-xl bg-black/80 backdrop-blur-xl border border-white/10 z-50 font-mono text-2xs text-emerald-400 min-w-[200px] shadow-2xl animate-in fade-in zoom-in-95 duration-300">
                     <div className="flex items-center justify-between mb-2 border-b border-white/5 pb-2">
                         <span className="ui-title flex items-center gap-1.5">
                             <Activity className="w-3 h-3" /> Stats
@@ -1109,7 +1109,7 @@ export function CustomPlayer({
                             <button
                                 type="button"
                                 onClick={forgetRememberedBandwidth}
-                                className="w-full mt-1 rounded-md border border-white/10 px-2 py-1 text-[10px] text-zinc-400 hover:bg-white/5 hover:text-white transition-colors focus-visible:outline-2 focus-visible:outline-[color:var(--accent-primary)]"
+                                className="w-full mt-1 rounded-md border border-white/10 px-2 py-1 text-xs text-zinc-400 hover:bg-white/5 hover:text-white transition-colors focus-visible:outline-2 focus-visible:outline-[color:var(--accent-primary)]"
                             >
                                 Forget remembered bandwidth
                             </button>

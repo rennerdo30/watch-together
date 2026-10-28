@@ -77,7 +77,7 @@ export default function Home() {
       <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-white/10 px-4 sm:px-6">
         <div className="flex items-center gap-2.5">
           <BrandMark className="h-8 w-8 shrink-0" />
-          <span className="text-[15px] font-semibold tracking-tight">{APP_NAME}</span>
+          <span className="text-base font-semibold tracking-tight">{APP_NAME}</span>
         </div>
         <div className="flex items-center gap-3">
           {!loading && !loadError && (
@@ -127,7 +127,7 @@ export default function Home() {
                 placeholder="Room name (optional)"
                 autoComplete="off"
                 aria-describedby="room-name-hint"
-                className="h-11 min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-4 text-sm placeholder:text-neutral-500 hover:border-white/20"
+                className="h-11 w-full min-w-0 rounded-lg border border-white/10 bg-white/5 px-4 sm:flex-1 text-sm placeholder:text-neutral-500 hover:border-white/20"
               />
               <button
                 type="submit"

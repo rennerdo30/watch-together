@@ -6,8 +6,8 @@ const roomUrl = () => `/room/e2e-preferences-${Date.now().toString(36)}?user=pre
 test('saved custom theme, text size and sidebar width survive hydration with their settings values', async ({ page }) => {
   const custom = createCustomTheme('#abcdef');
   await page.addInitScript((theme) => {
-    localStorage.setItem('wt_theme', 'custom');
-    localStorage.setItem('wt_custom_theme', JSON.stringify(theme));
+    localStorage.setItem('wt_accent', 'custom');
+    localStorage.setItem('wt_accent_custom', JSON.stringify(theme));
     localStorage.setItem('wt_sidebar_width', '420');
     localStorage.setItem('wt_proxy', 'false');
     localStorage.setItem('wt_font_size', '19');
@@ -42,11 +42,24 @@ test('a theme changed in another tab updates the open room', async ({ page, cont
   const other = await context.newPage();
   await other.goto('/');
   const theme = THEMES[1];
-  await other.evaluate((id) => localStorage.setItem('wt_theme', id), theme.id);
+  await other.evaluate((id) => localStorage.setItem('wt_accent', id), theme.id);
   await page.getByRole('button', { name: 'Room settings' }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Appearance' }).click();
   await expect(page.locator(`[data-theme-swatch="${theme.id}"]`)).toHaveAttribute('aria-checked', 'true');
   await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--accent-primary').trim()))
     .toBe(theme.dark.accent);
   await other.close();
+});
+
+test('a theme saved before the redesign is not applied', async ({ page }) => {
+  // The old picker stored a choice it never applied; the redesign starts
+  // everyone on the default accent.
+  await page.addInitScript(() => {
+    localStorage.setItem('wt_theme', 'ember');
+    localStorage.setItem('wt_color_mode', 'dark');
+  });
+  await page.goto(roomUrl());
+  await expect(page.getByLabel('Connected to the room')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--accent-primary').trim()))
+    .toBe(THEMES[0].dark.accent);
 });

@@ -237,12 +237,12 @@ export function PlayerControls({
                                     {hoverChapter && (
                                         <span
                                             data-testid="seek-preview-chapter"
-                                            className="max-w-[14rem] truncate px-1.5 py-0.5 rounded bg-black/80 text-[11px] text-white"
+                                            className="max-w-[14rem] truncate px-1.5 py-0.5 rounded bg-black/80 text-xs text-white"
                                         >
                                             {hoverChapter.title}
                                         </span>
                                     )}
-                                    <span className="px-1.5 py-0.5 rounded bg-black/80 text-[11px] text-white tabular-nums">
+                                    <span className="px-1.5 py-0.5 rounded bg-black/80 text-xs text-white tabular-nums">
                                         {formatTime(hoverTime - (seekableForDVR?.start ?? 0))}
                                     </span>
                                 </div>
@@ -313,7 +313,7 @@ export function PlayerControls({
                         <div className="h-1 flex-1 bg-white/20 rounded-full overflow-hidden">
                             <div className="h-full w-full bg-red-500/60 animate-pulse" />
                         </div>
-                        <span className="text-[10px] font-semibold text-red-500 bg-red-500/10 px-2 py-0.5 rounded-full border border-red-500/20">
+                        <span className="text-2xs font-semibold text-red-500 bg-red-500/10 px-2 py-0.5 rounded-full border border-red-500/20">
                             LIVE
                         </span>
                     </div>
@@ -365,7 +365,7 @@ export function PlayerControls({
                                 <span className="text-red-400">LIVE</span>
                             ) : (
                                 <>
-                                    <span>{formatTime(currentTime)} / {formatTime(duration || 0)}</span>
+                                    <span className="whitespace-nowrap">{formatTime(currentTime)} / {formatTime(duration || 0)}</span>
                                     {currentChapter && (
                                         <span
                                             data-testid="current-chapter"
@@ -386,7 +386,7 @@ export function PlayerControls({
                                     "w-1.5 h-1.5 rounded-full animate-pulse",
                                     liveLatency < 5 ? "bg-emerald-500" : "bg-amber-500"
                                 )} />
-                                <span className="text-[10px] text-white/60">
+                                <span className="text-xs text-white/60">
                                     {liveLatency < 5 ? "Live" : `-${Math.round(liveLatency)}s`}
                                 </span>
                             </div>

@@ -166,7 +166,7 @@ export function PlaylistPreviewDialog({ roomId, url, onClose, onImported }: Play
                         <button type="button" disabled={submitting} onClick={onClose}
                             className="h-9 rounded-lg px-3 text-sm text-neutral-300 hover:bg-white/5 disabled:opacity-40">Cancel</button>
                         <button type="button" disabled={!preview || selectedIds.length === 0 || submitting} onClick={() => void submit()}
-                            className="flex h-9 items-center gap-2 rounded-lg bg-[color:var(--accent-primary)] px-4 text-sm font-medium on-accent-light hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40">
+                            className="flex h-9 items-center gap-2 rounded-lg bg-[color:var(--accent-primary)] px-4 text-sm font-medium on-accent hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40">
                             {submitting && <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />}
                             Add {selectedIds.length} video{selectedIds.length === 1 ? '' : 's'}
                         </button>

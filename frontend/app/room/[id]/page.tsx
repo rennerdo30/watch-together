@@ -43,6 +43,7 @@ import { ErrorBoundary } from '@/components/error-boundary';
 import { RoomSettingsDialog, type RoomSettingsSection } from '@/components/room-settings-dialog';
 import { ColorModeToggle } from '@/components/color-mode-toggle';
 import { displayHost, displayName, getErrorMessage, looksLikeUrl } from '@/lib/utils';
+import { BUTTON_DANGER, BUTTON_PRIMARY, BUTTON_SECONDARY, ICON_BUTTON, ICON_BUTTON_ACTIVE } from '@/lib/ui-classes';
 import {
     DEFAULT_SPONSORBLOCK_SETTINGS,
     parseSponsorBlockSettings,
@@ -1216,7 +1217,7 @@ export default function RoomPage() {
                         <BrandMark className="w-8 h-8" />
                     </button>
                     <div className="flex flex-col pl-1 min-w-0">
-                        <h1 className="font-bold text-white leading-none text-sm truncate">{APP_NAME}</h1>
+                        <h1 className="font-semibold text-white leading-none text-sm truncate">{APP_NAME}</h1>
                         <div className="flex items-center gap-1.5 mt-0.5">
                             <span className="font-medium text-neutral-400 text-xs truncate" title={roomId}>{roomName || roomId}</span>
                             <span
@@ -1229,21 +1230,21 @@ export default function RoomPage() {
                     </div>
                 </div>
 
-                <div className="ml-auto flex items-center gap-3">
+                <div className="ml-auto flex items-center gap-1">
                     {/* Playback State Indicator */}
                     {videoData && (
-                        <div className="hidden sm:flex items-center gap-2 px-2.5 py-1 bg-neutral-800/80 rounded-md border border-neutral-700/50">
+                        <div className="mr-2 hidden h-7 items-center gap-2 rounded-full border border-white/10 bg-white/5 px-2.5 sm:flex">
                             <div className={`w-2 h-2 rounded-full ${syncState.isPlaying ? 'bg-emerald-400' : 'bg-neutral-500'}`} />
                             <span className="ui-label">
                                 {syncState.isPlaying ? 'Playing' : 'Paused'}
                             </span>
-                            <span className="text-[10px] font-mono text-neutral-500">
+                            <span className="text-2xs font-mono text-neutral-500">
                                 {Math.floor(actualPlayerTime / 60)}:{Math.floor(actualPlayerTime % 60).toString().padStart(2, '0')}
                             </span>
                         </div>
                     )}
                     {videoData?.added_by && (
-                        <span className="hidden md:inline text-xs text-neutral-500 truncate max-w-[14rem]" title={`Added by ${videoData.added_by}`}>
+                        <span className="mr-1 hidden max-w-[14rem] truncate text-xs text-neutral-500 md:inline" title={`Added by ${videoData.added_by}`}>
                             added by <span className="text-neutral-300">{displayName(videoData.added_by)}</span>
                         </span>
                     )}
@@ -1254,13 +1255,13 @@ export default function RoomPage() {
                             rel="noopener noreferrer"
                             aria-label={`Open ${videoData.title} on ${displayHost(videoData.original_url)}`}
                             title={`Open on ${displayHost(videoData.original_url)}`}
-                            className="w-7 h-7 flex items-center justify-center hover:bg-neutral-800 rounded-lg transition-colors text-neutral-400 hover:text-white"
+                            className={ICON_BUTTON}
                         >
                             <ExternalLink aria-hidden="true" className="w-4 h-4" />
                         </a>
                     )}
-                    <div className="hidden sm:flex items-center gap-1.5 px-2 py-1 bg-neutral-800 rounded-md">
-                        <Users className="w-3 h-3 text-neutral-500" />
+                    <div className="mx-1 hidden h-7 items-center gap-1.5 rounded-full bg-white/5 px-2.5 sm:flex" title={`${members.length} in the room`}>
+                        <Users aria-hidden="true" className="h-3.5 w-3.5 text-neutral-400" />
                         <span className="text-xs font-medium ui-numeric text-neutral-300">{members.length}</span>
                     </div>
                     {attention.notifyState !== 'unsupported' && (
@@ -1277,20 +1278,22 @@ export default function RoomPage() {
                                 : attention.notifyState === 'on'
                                     ? 'Notifying you when a video starts while this tab is in the background'
                                     : 'Notify me when a video starts while this tab is in the background'}
-                            className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors disabled:opacity-40 ${attention.notifyState === 'on' ? 'bg-[color:var(--accent-glow)] text-[color:var(--accent-primary)]' : 'hover:bg-neutral-800 text-neutral-400 hover:text-white'}`}
+                            className={attention.notifyState === 'on' ? ICON_BUTTON_ACTIVE : ICON_BUTTON}
                         >
                             {attention.notifyState === 'on'
                                 ? <Bell aria-hidden="true" className="w-4 h-4" />
                                 : <BellOff aria-hidden="true" className="w-4 h-4" />}
                         </button>
                     )}
-                    <ColorModeToggle className="h-7 w-7 text-neutral-400 hover:bg-neutral-800 hover:text-white" />
+                    {/* On a phone the header has room for four buttons; colour mode
+                        and diagnostics stay reachable from settings and wider screens. */}
+                    <ColorModeToggle className={`${ICON_BUTTON} max-sm:hidden`} />
                     <button
                         type="button"
                         onClick={() => setShowDebug(!showDebug)}
                         aria-pressed={showDebug}
                         aria-label="Diagnostics panel"
-                        className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${showDebug ? 'bg-[color:var(--accent-glow)] text-[color:var(--accent-primary)]' : 'hover:bg-neutral-800 text-neutral-400 hover:text-white'}`}
+                        className={`${showDebug ? ICON_BUTTON_ACTIVE : ICON_BUTTON} max-sm:hidden`}
                         title="Diagnostics panel"
                     >
                         <Bug aria-hidden="true" className="w-4 h-4" />
@@ -1300,7 +1303,7 @@ export default function RoomPage() {
                         onClick={() => { setSettingsSection(undefined); setShowSettings(true); }}
                         aria-haspopup="dialog"
                         aria-label="Room settings"
-                        className="w-7 h-7 flex items-center justify-center hover:bg-neutral-800 rounded-lg transition-colors text-neutral-400 hover:text-white"
+                        className={ICON_BUTTON}
                         title="Room settings"
                     >
                         <Settings aria-hidden="true" className="w-4 h-4" />
@@ -1366,7 +1369,7 @@ export default function RoomPage() {
                             <div
                                 role="status"
                                 data-loading-video="corner"
-                                className="pointer-events-none absolute top-3 right-3 z-20 flex items-center gap-2 rounded-full bg-black/70 px-3 py-1.5 text-[11px] text-white backdrop-blur animate-in fade-in duration-300"
+                                className="pointer-events-none absolute top-3 right-3 z-20 flex items-center gap-2 rounded-full bg-black/70 px-3 py-1.5 text-xs text-white backdrop-blur animate-in fade-in duration-300"
                             >
                                 <Loader2 aria-hidden="true" className="h-3 w-3 animate-spin" />
                                 <span>Loading video…</span>
@@ -1382,7 +1385,7 @@ export default function RoomPage() {
                             </div>
                         ))}
                         {sharedBrowser && (
-                            <div className="absolute top-3 left-3 z-20 flex items-center gap-2 rounded-full bg-black/70 px-3 py-1.5 text-[11px] text-white backdrop-blur">
+                            <div className="absolute top-3 left-3 z-20 flex items-center gap-2 rounded-full bg-black/70 px-3 py-1.5 text-xs text-white backdrop-blur">
                                 <Globe aria-hidden="true" className="h-3 w-3" />
                                 <span data-testid="shared-browser-banner">
                                     {browserEmbed?.control
@@ -1392,7 +1395,7 @@ export default function RoomPage() {
                             </div>
                         )}
                         {liveShare && (
-                            <div className="absolute top-3 left-3 z-20 flex items-center gap-2 rounded-full bg-black/70 px-3 py-1.5 text-[11px] text-white backdrop-blur">
+                            <div className="absolute top-3 left-3 z-20 flex items-center gap-2 rounded-full bg-black/70 px-3 py-1.5 text-xs text-white backdrop-blur">
                                 <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />
                                 {amSharing ? 'You are sharing your screen' : `${liveShare.email} is sharing their screen`}
                                 {!amSharing && viewer.status === 'connecting' && (
@@ -1565,7 +1568,7 @@ export default function RoomPage() {
 
                     {/* Debug Panel */}
                     {showDebug && (
-                        <section aria-label="Diagnostics" className="bg-[color:var(--bg-tertiary)]/90 backdrop-blur-xl border border-[color:var(--border-default)] rounded-lg p-3 font-mono text-[11px] text-neutral-300 shrink-0 relative group/debug">
+                        <section aria-label="Diagnostics" className="bg-[color:var(--bg-tertiary)]/90 backdrop-blur-xl border border-[color:var(--border-default)] rounded-lg p-3 font-mono text-2xs text-neutral-300 shrink-0 relative group/debug">
                             <button
                                 onClick={() => {
                                     const debugInfo = {
@@ -1595,67 +1598,67 @@ export default function RoomPage() {
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                                 <div>
                                     <span className="ui-label">WebSocket</span>
-                                    <div className={`font-bold ${connected ? 'text-emerald-400' : 'text-red-400'}`}>
+                                    <div className={`font-semibold ${connected ? 'text-emerald-400' : 'text-red-400'}`}>
                                         {connected ? 'CONNECTED' : 'DISCONNECTED'}
                                     </div>
                                 </div>
                                 <div>
                                     <span className="ui-label">Playback</span>
-                                    <div className="font-bold text-white">
+                                    <div className="font-semibold text-white">
                                         {syncState.isPlaying ? '▶ PLAYING' : '⏸ PAUSED'}
                                     </div>
                                 </div>
                                 <div>
                                     <span className="ui-label">Timestamp</span>
-                                    <div className="font-bold text-white">
+                                    <div className="font-semibold text-white">
                                         {syncState.timestamp.toFixed(2)}s
                                     </div>
                                 </div>
                                 <div>
                                     <span className="ui-label">Last Sync</span>
-                                    <div className="font-bold text-white">
+                                    <div className="font-semibold text-white">
                                         {syncState.lastSync || 'N/A'}
                                     </div>
                                 </div>
                                 <div>
                                     <span className="ui-label">Queue</span>
-                                    <div className="font-bold text-white">
+                                    <div className="font-semibold text-white">
                                         {queue.length} {queue.length === 1 ? 'item' : 'items'}{playingIndex >= 0 ? ` (#${playingIndex + 1})` : ''}
                                     </div>
                                 </div>
                                 <div>
                                     <span className="ui-label">Video</span>
-                                    <div className="font-bold text-white truncate" title={videoData?.title}>
+                                    <div className="font-semibold text-white truncate" title={videoData?.title}>
                                         {videoData?.title || 'None'}
                                     </div>
                                 </div>
                                 <div>
                                     <span className="ui-label">Proxy</span>
-                                    <div className={`font-bold ${useProxy ? 'text-emerald-400' : 'text-neutral-500'}`}>
+                                    <div className={`font-semibold ${useProxy ? 'text-emerald-400' : 'text-neutral-500'}`}>
                                         {useProxy ? 'ENABLED' : 'DISABLED'}
                                     </div>
                                 </div>
                                 <div>
                                     <span className="ui-label">Stream Type</span>
-                                    <div className={`font-bold ${videoData?.stream_type === 'dash' ? 'text-[color:var(--accent-primary)]' : 'text-emerald-400'}`}>
+                                    <div className={`font-semibold ${videoData?.stream_type === 'dash' ? 'text-[color:var(--accent-primary)]' : 'text-emerald-400'}`}>
                                         {videoData?.stream_type?.toUpperCase() || 'N/A'} {videoData?.quality && `(${videoData.quality})`}
                                     </div>
                                 </div>
                                 <div>
                                     <span className="ui-label">Qualities</span>
-                                    <div className="font-bold text-white">
+                                    <div className="font-semibold text-white">
                                         {videoData?.available_qualities?.length || 0} options
                                     </div>
                                 </div>
                                 <div>
                                     <span className="ui-label">DASH URLs</span>
-                                    <div className={`font-bold ${videoData?.video_url && videoData?.audio_url ? 'text-emerald-400' : 'text-red-400'}`}>
+                                    <div className={`font-semibold ${videoData?.video_url && videoData?.audio_url ? 'text-emerald-400' : 'text-red-400'}`}>
                                         {videoData?.video_url && videoData?.audio_url ? 'V+A OK' : 'N/A'}
                                     </div>
                                 </div>
                                 <div>
                                     <span className="ui-label">Members</span>
-                                    <div className="font-bold text-white">
+                                    <div className="font-semibold text-white">
                                         {members.length} online
                                     </div>
                                 </div>
@@ -1670,16 +1673,16 @@ export default function RoomPage() {
                         <div
                             role="status"
                             data-testid="extension-hint"
-                            className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100 shrink-0"
+                            className="flex shrink-0 items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] py-2 pl-3 pr-2 text-sm text-neutral-300"
                         >
-                            <Puzzle aria-hidden="true" className="w-4 h-4 shrink-0 mt-0.5 text-amber-300" />
-                            <p className="flex-1 leading-relaxed">
+                            <Puzzle aria-hidden="true" className="h-4 w-4 shrink-0 text-[color:var(--accent-primary)]" />
+                            <p className="flex-1 leading-snug">
                                 Many videos only play with a signed-in account. Install the browser extension so the room can use your session.
                             </p>
                             <button
                                 type="button"
                                 onClick={() => { setSettingsSection('account'); setShowSettings(true); }}
-                                className="shrink-0 rounded-md bg-amber-500/20 hover:bg-amber-500/30 px-2 py-1 font-medium text-amber-100 transition-colors"
+                                className={`${BUTTON_PRIMARY} h-8 px-3 text-xs`}
                             >
                                 Install
                             </button>
@@ -1687,9 +1690,9 @@ export default function RoomPage() {
                                 type="button"
                                 onClick={() => setExtensionHintDismissed(true)}
                                 aria-label="Dismiss the extension hint"
-                                className="shrink-0 rounded-md p-1 text-amber-200/70 hover:text-amber-100 transition-colors"
+                                className={ICON_BUTTON}
                             >
-                                <X aria-hidden="true" className="w-3.5 h-3.5" />
+                                <X aria-hidden="true" className="h-4 w-4" />
                             </button>
                         </div>
                     )}
@@ -1704,7 +1707,7 @@ export default function RoomPage() {
                                 type="url"
                                 inputMode="url"
                                 autoComplete="off"
-                                className="w-full h-9 bg-neutral-900 border border-neutral-800 rounded-lg pl-9 pr-3 text-[13px] text-white hover:border-neutral-700 transition-colors placeholder:text-neutral-500"
+                                className="h-9 w-full rounded-lg border border-white/10 bg-white/5 pl-9 pr-3 text-ui text-white transition-colors placeholder:text-neutral-500 hover:border-white/20"
                                 placeholder="Paste video URL..."
                                 value={inputUrl}
                                 onChange={e => setInputUrl(e.target.value)}
@@ -1714,25 +1717,25 @@ export default function RoomPage() {
                             type="submit"
                             disabled={loading || !inputUrl}
                             aria-busy={loading}
-                            className={`px-4 h-9 on-accent font-medium rounded-lg text-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 bg-[color:var(--accent-primary)] shadow-lg hover:brightness-110`}
+                            className={BUTTON_PRIMARY}
                         >
-                            {loading ? <Loader2 aria-hidden="true" className="animate-spin w-3 h-3" /> : <Play aria-hidden="true" className="w-3 h-3 fill-current" />}
+                            {loading ? <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" /> : <Play aria-hidden="true" className="h-3.5 w-3.5 fill-current" />}
                             Play
                         </button>
                         <button
                             type="button"
                             onClick={handleAddToQueue}
                             disabled={loading || !inputUrl}
-                            className={`px-4 h-9 bg-neutral-800/50 hover:bg-neutral-800 text-neutral-100 font-medium rounded-lg text-sm border border-[color:var(--border-default)] disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors`}
+                            className={BUTTON_SECONDARY}
                         >
-                            <Plus aria-hidden="true" className="w-3 h-3" />
+                            <Plus aria-hidden="true" className="h-4 w-4" />
                             Queue
                         </button>
                         {playlistInput.hasPlaylist && canImportPlaylist && (
                             <button type="button" disabled={loading}
                                 onClick={() => setPlaylistDialogUrl(inputUrl.trim())}
-                                className={`flex h-9 items-center gap-1.5 rounded-lg border border-[color:var(--border-default)] bg-neutral-800/50 px-4 text-sm font-medium text-neutral-100 hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors`}>
-                                <ListVideo aria-hidden="true" className="h-3.5 w-3.5" />
+                                className={BUTTON_SECONDARY}>
+                                <ListVideo aria-hidden="true" className="h-4 w-4" />
                                 Import playlist
                             </button>
                         )}
@@ -1740,9 +1743,9 @@ export default function RoomPage() {
                             <button
                                 type="button"
                                 onClick={() => stopSharing()}
-                                className="px-3 sm:px-4 h-9 bg-red-500/15 hover:bg-red-500/25 text-red-300 font-medium rounded-lg text-sm border border-red-500/30 flex items-center gap-1.5 transition-colors"
+                                className={BUTTON_DANGER}
                             >
-                                <MonitorStop aria-hidden="true" className="w-3.5 h-3.5" />
+                                <MonitorStop aria-hidden="true" className="h-4 w-4" />
                                 <span className="max-sm:sr-only">Stop sharing</span>
                             </button>
                         ) : (
@@ -1755,9 +1758,9 @@ export default function RoomPage() {
                                     : sharedBrowser
                                         ? 'The shared browser is on the player'
                                         : 'Share your screen with the room'}
-                                className={`px-3 sm:px-4 h-9 bg-neutral-800/50 hover:bg-neutral-800 text-neutral-100 font-medium rounded-lg text-sm border border-[color:var(--border-default)] disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors`}
+                                className={BUTTON_SECONDARY}
                             >
-                                <MonitorUp aria-hidden="true" className="w-3.5 h-3.5" />
+                                <MonitorUp aria-hidden="true" className="h-4 w-4" />
                                 <span className="max-sm:sr-only">Share screen</span>
                             </button>
                         )}
@@ -1766,9 +1769,9 @@ export default function RoomPage() {
                                 type="button"
                                 onClick={closeSharedBrowser}
                                 data-testid="close-shared-browser"
-                                className="px-3 sm:px-4 h-9 bg-red-500/15 hover:bg-red-500/25 text-red-300 font-medium rounded-lg text-sm border border-red-500/30 flex items-center gap-1.5 transition-colors"
+                                className={BUTTON_DANGER}
                             >
-                                <Globe aria-hidden="true" className="w-3.5 h-3.5" />
+                                <Globe aria-hidden="true" className="h-4 w-4" />
                                 <span className="max-sm:sr-only">Close browser</span>
                             </button>
                         ) : (
@@ -1780,9 +1783,9 @@ export default function RoomPage() {
                                 title={liveShare
                                     ? 'Someone is sharing their screen'
                                     : browserBlockedText ?? 'Open a browser everyone can watch and take turns driving'}
-                                className={`px-3 sm:px-4 h-9 bg-neutral-800/50 hover:bg-neutral-800 text-neutral-100 font-medium rounded-lg text-sm border border-[color:var(--border-default)] disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors`}
+                                className={BUTTON_SECONDARY}
                             >
-                                <Globe aria-hidden="true" className="w-3.5 h-3.5" />
+                                <Globe aria-hidden="true" className="h-4 w-4" />
                                 <span className="max-sm:sr-only">Shared browser</span>
                             </button>
                         )}
@@ -1818,10 +1821,10 @@ export default function RoomPage() {
                         >
                             <div
                                 onClick={(event) => event.stopPropagation()}
-                                className="w-full max-w-md rounded-xl border border-neutral-800 bg-neutral-900 p-5 shadow-2xl"
+                                className="w-full max-w-md rounded-2xl border border-white/10 bg-[color:var(--bg-elevated)] p-6 shadow-2xl"
                             >
-                                <h2 className="text-sm font-semibold text-white">Shared browser</h2>
-                                <p className="mt-2 text-xs leading-relaxed text-neutral-400">
+                                <h2 className="ui-heading">Shared browser</h2>
+                                <p className="mt-2 text-sm leading-relaxed text-neutral-400">
                                     A browser runs on the server and everyone in the room watches
                                     the same page. The room admin drives it; the video playing now
                                     pauses and comes back when the browser is closed.
@@ -1830,7 +1833,7 @@ export default function RoomPage() {
                                     <p
                                         role="alert"
                                         data-testid="shared-browser-unavailable"
-                                        className="mt-3 text-[11px] leading-relaxed text-amber-200/90"
+                                        className="mt-3 text-xs leading-relaxed text-amber-200/90"
                                     >
                                         {browserBlockedText}
                                     </p>
@@ -1838,23 +1841,23 @@ export default function RoomPage() {
                                     <p
                                         role="alert"
                                         data-testid="shared-browser-unavailable"
-                                        className="mt-3 text-[11px] leading-relaxed text-amber-200/90"
+                                        className="mt-3 text-xs leading-relaxed text-amber-200/90"
                                     >
                                         The room &ldquo;{browserStatus.held_by_room}&rdquo; is using it right now.
                                         There is one browser for the whole instance.
                                     </p>
                                 ) : (
-                                    <p className="mt-3 text-[11px] leading-relaxed text-neutral-500">
+                                    <p className="mt-3 text-xs leading-relaxed text-neutral-500">
                                         Anything typed into it — including passwords — is visible
                                         to everyone in the room, and stays in the browser after
                                         you close it.
                                     </p>
                                 )}
-                                <div className="mt-5 flex justify-end gap-2">
+                                <div className="mt-6 flex justify-end gap-2">
                                     <button
                                         type="button"
                                         onClick={() => setBrowserDialogOpen(false)}
-                                        className="px-3 h-9 rounded-lg text-sm text-neutral-300 hover:bg-white/5"
+                                        className={BUTTON_SECONDARY}
                                     >
                                         Cancel
                                     </button>
@@ -1863,7 +1866,7 @@ export default function RoomPage() {
                                         onClick={openSharedBrowser}
                                         data-testid="confirm-shared-browser"
                                         disabled={!!browserBlockedText}
-                                        className={`px-4 h-9 on-accent font-medium rounded-lg text-sm bg-[color:var(--accent-primary)] hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed`}
+                                        className={BUTTON_PRIMARY}
                                     >
                                         Open it
                                     </button>
@@ -1883,52 +1886,52 @@ export default function RoomPage() {
                         >
                             <div
                                 onClick={(event) => event.stopPropagation()}
-                                className="w-full max-w-md rounded-xl border border-neutral-800 bg-neutral-900 p-5 shadow-2xl"
+                                className="w-full max-w-md rounded-2xl border border-white/10 bg-[color:var(--bg-elevated)] p-6 shadow-2xl"
                             >
-                                <h2 className="text-sm font-semibold text-white">Share your screen</h2>
-                                <p className="mt-2 text-xs leading-relaxed text-neutral-400">
+                                <h2 className="ui-heading">Share your screen</h2>
+                                <p className="mt-2 text-sm leading-relaxed text-neutral-400">
                                     Your browser will ask which window to share, and whether to
                                     include its sound. The room watches it live while it runs; the
                                     video playing now pauses and comes back afterwards.
                                 </p>
-                                <label htmlFor="share-quality" className="mt-4 block text-xs text-white">
+                                <label htmlFor="share-quality" className="ui-label mt-5 block">
                                     Quality
                                 </label>
                                 <select
                                     id="share-quality"
                                     value={shareQuality}
                                     onChange={(event) => setShareQuality(event.target.value as ShareQuality)}
-                                    className="mt-1.5 w-full rounded-md border border-neutral-700 bg-neutral-800 px-2 py-2 text-xs text-white"
+                                    className="mt-1.5 h-9 w-full rounded-lg border border-white/10 bg-white/5 px-2.5 text-sm text-white"
                                 >
                                     {Object.entries(SHARE_QUALITY_PRESETS).map(([value, preset]) => (
                                         <option key={value} value={value}>{preset.label}</option>
                                     ))}
                                 </select>
-                                <p className="mt-2 text-[11px] leading-relaxed text-neutral-500">
+                                <p className="mt-2 text-xs leading-relaxed text-neutral-500">
                                     About {(SHARE_QUALITY_PRESETS[shareQuality].maxBitrateBps / 1_000_000).toFixed(0)} Mbit/s
                                     of your upload, whoever is watching: you send one copy and the
                                     server passes it on.
                                 </p>
-                                <p className="mt-3 text-[11px] leading-relaxed text-amber-200/90">
+                                <p className="mt-3 text-xs leading-relaxed text-amber-200/90">
                                     The picture travels through this server, so it arrives about a
                                     second late — and every viewer costs the server that much
                                     bandwidth again.
                                 </p>
                                 {shareError && (
-                                    <p role="alert" className="mt-3 text-[11px] text-red-300">{shareError}</p>
+                                    <p role="alert" className="mt-3 text-xs text-red-300">{shareError}</p>
                                 )}
-                                <div className="mt-5 flex justify-end gap-2">
+                                <div className="mt-6 flex justify-end gap-2">
                                     <button
                                         type="button"
                                         onClick={() => setShareDialogOpen(false)}
-                                        className="px-3 h-9 rounded-lg text-sm text-neutral-300 hover:bg-white/5"
+                                        className={BUTTON_SECONDARY}
                                     >
                                         Cancel
                                     </button>
                                     <button
                                         type="button"
                                         onClick={() => void startSharing()}
-                                        className={`px-4 h-9 on-accent font-medium rounded-lg text-sm bg-[color:var(--accent-primary)] hover:brightness-110`}
+                                        className={BUTTON_PRIMARY}
                                     >
                                         Choose what to share
                                     </button>
@@ -1955,7 +1958,7 @@ export default function RoomPage() {
                     className="app-surface border-t lg:border-t-0 lg:border-l border-neutral-800 flex flex-col shrink-0 bg-neutral-900/30 h-[42dvh] w-full lg:h-auto lg:w-[var(--sidebar-width)]"
                 >
                     {/* Compact Tabs */}
-                    <div role="tablist" aria-label="Sidebar sections" className={`grid ${hasChapters ? 'grid-cols-5' : 'grid-cols-4'} p-1.5 gap-1 border-b border-neutral-800 shrink-0`}>
+                    <div role="tablist" aria-label="Sidebar sections" className={`grid ${hasChapters ? 'grid-cols-5' : 'grid-cols-4'} p-1.5 gap-1 border-b border-white/10 shrink-0`}>
                         <button
                             type="button"
                             role="tab"
@@ -1963,12 +1966,12 @@ export default function RoomPage() {
                             aria-controls="sidebar-panel"
                             aria-selected={sidebarTab === 'queue'}
                             onClick={() => setSidebarTab('queue')}
-                            className={`min-w-0 py-2 rounded-lg text-[11px] font-medium transition-all ${sidebarTab === 'queue'
-                                ? "bg-neutral-800 text-white"
+                            className={`flex h-8 min-w-0 items-center justify-center rounded-lg px-1 text-ui font-medium transition-colors ${sidebarTab === 'queue'
+                                ? "bg-white/10 text-white"
                                 : "text-neutral-400 hover:bg-white/5 hover:text-neutral-200"
                                 }`}
                         >
-                            Queue<span className="sr-only"> ({queue.length})</span>
+                            <span className="truncate">Queue</span><span className="sr-only"> ({queue.length})</span>{queue.length > 0 && <span aria-hidden="true" className="ui-numeric ml-1.5 rounded-full bg-white/10 px-1.5 text-2xs text-neutral-300">{queue.length}</span>}
                         </button>
                         <button
                             type="button"
@@ -1977,12 +1980,12 @@ export default function RoomPage() {
                             aria-controls="sidebar-panel"
                             aria-selected={sidebarTab === 'users'}
                             onClick={() => setSidebarTab('users')}
-                            className={`min-w-0 py-2 rounded-lg text-[11px] font-medium transition-all ${sidebarTab === 'users'
-                                ? "bg-neutral-800 text-white"
+                            className={`flex h-8 min-w-0 items-center justify-center rounded-lg px-1 text-ui font-medium transition-colors ${sidebarTab === 'users'
+                                ? "bg-white/10 text-white"
                                 : "text-neutral-400 hover:bg-white/5 hover:text-neutral-200"
                                 }`}
                         >
-                            Audience<span className="sr-only"> ({members.length})</span>
+                            <span className="truncate">Audience</span><span className="sr-only"> ({members.length})</span>
                         </button>
                         <button
                             type="button"
@@ -1992,7 +1995,7 @@ export default function RoomPage() {
                             aria-selected={sidebarTab === 'chat'}
                             onClick={() => setSidebarTab('chat')}
                             aria-label="Live chat"
-                            className={`min-w-0 py-2 rounded-lg text-[11px] font-medium transition-all ${sidebarTab === 'chat' ? 'bg-neutral-800 text-white' : 'text-neutral-400 hover:bg-white/5 hover:text-neutral-200'}`}
+                            className={`flex h-8 min-w-0 items-center justify-center rounded-lg px-1 text-ui font-medium transition-colors ${sidebarTab === 'chat' ? 'bg-white/10 text-white' : 'text-neutral-400 hover:bg-white/5 hover:text-neutral-200'}`}
                         >
                             Chat
                         </button>
@@ -2004,7 +2007,7 @@ export default function RoomPage() {
                                 aria-controls="sidebar-panel"
                                 aria-selected={sidebarTab === 'chapters'}
                                 onClick={() => setSidebarTab('chapters')}
-                                className={`min-w-0 py-2 rounded-lg text-[11px] font-medium transition-all ${sidebarTab === 'chapters' ? 'bg-neutral-800 text-white' : 'text-neutral-400 hover:bg-white/5 hover:text-neutral-200'}`}
+                                className={`flex h-8 min-w-0 items-center justify-center rounded-lg px-1 text-ui font-medium transition-colors ${sidebarTab === 'chapters' ? 'bg-white/10 text-white' : 'text-neutral-400 hover:bg-white/5 hover:text-neutral-200'}`}
                             >
                                 Chapters<span className="sr-only"> ({chapters.length})</span>
                             </button>
@@ -2016,7 +2019,7 @@ export default function RoomPage() {
                             aria-controls="sidebar-panel"
                             aria-selected={sidebarTab === 'log'}
                             onClick={() => setSidebarTab('log')}
-                            className={`min-w-0 py-2 rounded-lg text-[11px] font-medium transition-all ${sidebarTab === 'log' ? 'bg-neutral-800 text-white' : 'text-neutral-400 hover:bg-white/5 hover:text-neutral-200'}`}
+                            className={`flex h-8 min-w-0 items-center justify-center rounded-lg px-1 text-ui font-medium transition-colors ${sidebarTab === 'log' ? 'bg-white/10 text-white' : 'text-neutral-400 hover:bg-white/5 hover:text-neutral-200'}`}
                         >
                             Log
                         </button>
@@ -2139,7 +2142,7 @@ export default function RoomPage() {
 
                                     return (
                                         <div key={m.email} className={`group flex items-center gap-2 p-1.5 rounded-lg bg-neutral-800/10 border border-[color:var(--border-default)]`}>
-                                            <div className={`w-6 h-6 rounded-md flex items-center justify-center text-[11px] font-semibold ui-numeric on-accent bg-[color:var(--accent-primary)]`}>
+                                            <div className={`w-6 h-6 rounded-md flex items-center justify-center text-2xs font-semibold ui-numeric on-accent bg-[color:var(--accent-primary)]`}>
                                                 {m.email.charAt(0).toUpperCase()}
                                             </div>
                                             <div className="flex-1 min-w-0 flex flex-col">
@@ -2147,8 +2150,8 @@ export default function RoomPage() {
                                                     {m.email}{currentUser === m.email && <span className="text-neutral-500"> (you)</span>}
                                                 </p>
                                                 <div className="flex items-center gap-1">
-                                                    {role === 'admin' && <span className="text-[11px] text-amber-400 font-medium flex items-center gap-1"><Crown aria-hidden="true" className="w-3 h-3" /> Admin</span>}
-                                                    {role === 'moderator' && <span className="text-[11px] text-blue-400 font-medium flex items-center gap-1"><Shield aria-hidden="true" className="w-3 h-3" /> Moderator</span>}
+                                                    {role === 'admin' && <span className="text-2xs text-amber-400 font-medium flex items-center gap-1"><Crown aria-hidden="true" className="w-3 h-3" /> Admin</span>}
+                                                    {role === 'moderator' && <span className="text-2xs text-blue-400 font-medium flex items-center gap-1"><Shield aria-hidden="true" className="w-3 h-3" /> Moderator</span>}
                                                 </div>
                                             </div>
 
