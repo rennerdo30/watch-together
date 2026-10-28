@@ -861,7 +861,7 @@ export function CustomPlayer({
             className={cn(
                 // `on-dark`: the video stage and its chrome stay dark in every colour scheme.
                 "on-dark relative w-full h-full bg-black flex items-center justify-center overflow-hidden group rounded-xl",
-                isFullscreen && !controlsVisible && "cursor-none",
+                !controlsVisible && "cursor-none",
                 className
             )}
             onDoubleClick={toggleFullscreen}
@@ -887,7 +887,7 @@ export function CustomPlayer({
                 className="absolute inset-0 pointer-events-none" aria-hidden="true" />
 
             {/* Shares the control bar's visibility; never intercepts playback gestures. */}
-            {isFullscreen && title && (
+            {title && (
                 <section
                     aria-label="Now playing"
                     aria-hidden={!controlsVisible}

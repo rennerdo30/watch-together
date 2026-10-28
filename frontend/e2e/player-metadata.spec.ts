@@ -1,7 +1,8 @@
 import { test, expect } from '@playwright/test';
 import { stubAdaptiveStream } from './adaptive-fixture';
 
-test('fullscreen metadata follows controls, hides while playing and returns on movement or pause', async ({ page }) => {
+for (const fullscreen of [false, true]) {
+test(`${fullscreen ? 'fullscreen' : 'normal'} metadata follows controls, hides while playing and returns on movement or pause`, async ({ page }) => {
   const url = 'https://youtu.be/fullscreen-metadata';
   await stubAdaptiveStream(page, url, undefined, { title: 'A beautiful evening', channel: 'Evening Films' });
   await page.goto(`/room/e2e-metadata-${Date.now()}?user=metadata@example.com`);
@@ -13,8 +14,7 @@ test('fullscreen metadata follows controls, hides while playing and returns on m
   // Loop the short local fixture so idle visibility is tested during playback.
   await video.evaluate(async (v: HTMLVideoElement) => { v.muted = true; v.loop = true; await v.play(); });
   const metadata = page.getByLabel('Now playing');
-  await expect(metadata).toHaveCount(0);
-  await page.getByRole('button', { name: 'Fullscreen', exact: true }).click();
+  if (fullscreen) await page.getByRole('button', { name: 'Fullscreen', exact: true }).click();
   await page.mouse.move(300, 200);
   await expect(metadata).toContainText('A beautiful evening');
   await expect(metadata).toContainText('Evening Films');
@@ -27,6 +27,9 @@ test('fullscreen metadata follows controls, hides while playing and returns on m
   await video.evaluate((v: HTMLVideoElement) => v.pause());
   await page.waitForTimeout(3500);
   await expect(metadata).toHaveCSS('opacity', '1');
-  await page.getByRole('button', { name: 'Exit fullscreen', exact: true }).click();
-  await expect(metadata).toHaveCount(0);
+  if (fullscreen) {
+    await page.getByRole('button', { name: 'Exit fullscreen', exact: true }).click();
+    await expect(metadata).toHaveCSS('opacity', '1');
+  }
 });
+}
