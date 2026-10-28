@@ -23,6 +23,7 @@ function uniqueRoomId(label: string): string {
 async function openSettings(page: import('@playwright/test').Page) {
   await page.getByRole('button', { name: 'Room settings' }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
+  await page.getByRole('dialog').getByRole('button', { name: 'Account' }).click();
 }
 
 test('the setting is off, unavailable without cookies, and sticks once switched on', async ({ page, request }) => {

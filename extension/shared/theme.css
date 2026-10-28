@@ -2,7 +2,7 @@
  * Watch Together extension — shared design tokens and controls.
  *
  * The web app's slate surfaces (frontend/app/globals.css), with no colour
- * accent: the primary action is drawn in ink, and the orange belongs to the
+ * accent: the primary action is drawn in ink, and the teal belongs to the
  * brand mark alone. Red is kept for errors and the reset button, so it means
  * something when it appears. Dark is the default; a light system theme gets
  * the app's light scheme.

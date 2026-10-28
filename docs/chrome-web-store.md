@@ -49,7 +49,7 @@ python backend/services/extension_package.py --source extension --browser chrome
 ```
 
 Use a version greater than every version previously uploaded to your listing.
-The manifest currently declares 1.5.2; the dashboard remains the source of truth
+The manifest currently declares 1.5.3; the dashboard remains the source of truth
 for previously uploaded versions. Provide reviewer instructions and a usable
 test instance/account if access is required.
 

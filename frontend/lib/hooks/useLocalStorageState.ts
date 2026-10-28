@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useSyncExternalStore } from 'react';
-import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '@/lib/constants';
+import { FONT_SIZE_MAX, FONT_SIZE_MIN, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '@/lib/constants';
 
 const LOCAL_STORAGE_CHANGE = 'w2g-local-storage-change';
 
@@ -22,6 +22,11 @@ export const parsePositiveNumber: Parser<number> = (stored, fallback) => {
 export const parseSidebarWidth: Parser<number> = (stored, fallback) => {
   const value = parsePositiveNumber(stored, fallback);
   return value >= SIDEBAR_MIN_WIDTH && value <= SIDEBAR_MAX_WIDTH ? value : fallback;
+};
+
+export const parseFontSize: Parser<number> = (stored, fallback) => {
+  const value = parsePositiveNumber(stored, fallback);
+  return value >= FONT_SIZE_MIN && value <= FONT_SIZE_MAX ? value : fallback;
 };
 
 /**

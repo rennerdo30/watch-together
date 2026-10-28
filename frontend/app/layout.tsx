@@ -3,13 +3,13 @@ import type { Metadata, Viewport } from "next";
 import { Inter_Tight, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { COLOR_MODE_BOOTSTRAP_SCRIPT } from "@/lib/color-mode";
+import { ACCENT_BOOTSTRAP_SCRIPT } from "@/lib/themes";
 
 /**
  * Geist + a violet accent is the default look of a particular starter stack,
  * which is most of why the app read as generated. Inter Tight is the same
  * class of neutral grotesque with tighter spacing and a little more character
- * at the small sizes this UI is mostly made of, and it carries the 550 weight
- * the type scale asks for.
+ * at the small sizes this UI is mostly made of.
  */
 const uiSans = Inter_Tight({
   variable: "--font-ui-sans",
@@ -50,11 +50,14 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <head>
         {/*
-          Applies the stored (or OS) colour scheme before the first paint so the
-          page never flashes the wrong one.
+          Apply the stored (or OS) colour scheme and the stored accent before
+          the first paint so the page never flashes the wrong ones.
         */}
         <script
           dangerouslySetInnerHTML={{ __html: COLOR_MODE_BOOTSTRAP_SCRIPT }}
+        />
+        <script
+          dangerouslySetInnerHTML={{ __html: ACCENT_BOOTSTRAP_SCRIPT }}
         />
       </head>
       <body

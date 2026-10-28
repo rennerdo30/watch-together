@@ -3,15 +3,22 @@
 @theme inline {
   --font-sans: var(--font-ui-sans), system-ui, -apple-system, sans-serif;
   --font-mono: var(--font-ui-mono), ui-monospace, SFMono-Regular, monospace;
+
+  /* The smallest step, for badges and counters only ("Beta", "LIVE", 1080p).
+     Text a reader has to read is 12 px (`text-xs`) or larger. */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
 }
 
 /* =============================================================================
    Design tokens
    -----------------------------------------------------------------------------
-   The palette is a cool slate with one signal-red accent. Red already means
-   "live" next to a video, so it carries the primary action and the recording
-   dot without needing a second hue; everything else is neutral, and the only
-   saturated colour on screen is the video itself.
+   The palette is a cool slate with one accent, teal by default (the brand
+   colour; the video sites the app plays own red and purple). The accent is
+   the user's choice of theme (`lib/themes.ts`), written on <html> as one
+   fill/ink pair per scheme. Red is kept for "live" and for errors, so it
+   means something when it appears; the only other saturated colour on screen
+   is the video itself.
 
    The UI is painted almost entirely with Tailwind's `neutral` / `zinc` scales
    plus `white` / `black`. Tailwind v4 compiles every colour utility down to a
@@ -41,15 +48,11 @@
   --text-secondary: #9ba3ae;
   --text-muted: #6c7480;
 
-  /* Accent */
-  --accent-primary: #d93a3a;
-  --accent-secondary: #e4605f;
-  --accent-glow: rgba(217, 58, 58, 0.16);
-
-  /* Foreground colours for filled accent surfaces. These never flip with the
-     colour scheme because the surface underneath them never flips either. */
-  --on-accent-light: #ffffff;
-  --on-accent-dark: #0a0a0a;
+  /* Accent: the theme's dark-scheme pair, teal until a theme is applied. */
+  --accent-primary: var(--theme-accent-dark, #2fc4b2);
+  /* Text and icons on a filled accent surface. */
+  --on-accent: var(--theme-on-dark, #04201c);
+  --accent-glow: color-mix(in srgb, var(--accent-primary) 16%, transparent);
 
   /* Borders. Tinted rather than pure white so an edge reads as part of the
      slate instead of as a lighter film laid over it. */
@@ -105,9 +108,8 @@ html[data-theme="light"] {
   --text-secondary: #4a525c;
   --text-muted: #6c7480;
 
-  --accent-primary: #c62f2f;
-  --accent-secondary: #a82525;
-  --accent-glow: rgba(198, 47, 47, 0.16);
+  --accent-primary: var(--theme-accent-light, #0f766e);
+  --on-accent: var(--theme-on-light, #ffffff);
 
   /* Appreciably stronger than the dark scheme's: a dark edge on a light
      surface carries far less apparent weight than a light edge on a dark
@@ -181,6 +183,11 @@ html[data-theme="light"] {
 .on-dark {
   color-scheme: dark;
 
+  /* The player stays dark in the light scheme, so it keeps the dark accent. */
+  --accent-primary: var(--theme-accent-dark, #2fc4b2);
+  --on-accent: var(--theme-on-dark, #04201c);
+  --accent-glow: color-mix(in srgb, var(--accent-primary) 16%, transparent);
+
   --color-white: #ffffff;
   --color-black: #000000;
 
@@ -240,18 +247,18 @@ html[data-theme="light"] .app-header {
   background-color: color-mix(in srgb, var(--bg-primary) 92%, transparent);
 }
 
-/* Foregrounds for filled accent surfaces. */
-.on-accent-light {
-  color: var(--on-accent-light);
+/* A theme's preview dot shows the variant the active scheme would use. */
+.theme-swatch {
+  background-color: var(--swatch-dark);
 }
 
-.on-accent-dark {
-  color: var(--on-accent-dark);
+html[data-theme="light"] .theme-swatch {
+  background-color: var(--swatch-light);
 }
 
-/* Knob of a switch: always reads against the filled accent track. */
-.knob-on-accent {
-  background-color: var(--on-accent-light);
+/* Foreground for filled accent surfaces. */
+.on-accent {
+  color: var(--on-accent);
 }
 
 /* Icon that sits on a neutral tile at rest and on a filled accent tile while its
@@ -262,7 +269,7 @@ html[data-theme="light"] .app-header {
 
 .group:hover .icon-on-surface,
 .group:focus-visible .icon-on-surface {
-  color: var(--on-accent-light);
+  color: var(--on-accent);
 }
 
 /* =============================================================================
@@ -306,7 +313,7 @@ body {
 
 ::selection {
   background: var(--accent-primary);
-  color: var(--on-accent-light);
+  color: var(--on-accent);
 }
 
 /* Focus rings. Doubled pseudo-class so the ring survives components that opt
@@ -417,47 +424,46 @@ textarea:focus {
 /* =============================================================================
    Type scale
    -----------------------------------------------------------------------------
-   Small text used to be set in 9-11px `font-black uppercase tracking-widest`,
-   which is a lot of shouting for a field name and unreadable besides: at that
-   size, capitals lose the ascenders and descenders a reader uses to tell words
-   apart, and the heaviest weight closes up the counters.
+   Size and weight carry the hierarchy; case and letter-spacing are left
+   alone. Nothing a reader has to read is set below 12 px: Inter Tight is
+   narrow, and at 10-11 px its counters close up. 11 px (`text-2xs`) is for
+   badges and counters only.
 
-   These four steps replace it. Size and weight carry the hierarchy; case and
-   letter-spacing are left alone.
+   Weights: 400 for body, 500 for labels and buttons, 600 for headings and
+   titles. Bold is not used.
    ========================================================================== */
 
 /* Field names, section headers, the label on a control. */
 .ui-label {
-  font-size: 0.6875rem;
-  /* 11px */
-  line-height: 1.3;
+  font-size: 0.75rem;
+  /* 12px */
+  line-height: 1.35;
   font-weight: 500;
-  letter-spacing: 0.01em;
   color: var(--text-secondary);
 }
 
-/* Secondary values: counts, timestamps, "no video playing". */
+/* Secondary values and help text: counts, timestamps, descriptions. */
 .ui-meta {
   font-size: 0.75rem;
   /* 12px */
-  line-height: 1.4;
+  line-height: 1.45;
   font-weight: 400;
   color: var(--text-muted);
 }
 
-/* Row titles, tab names, anything a reader scans for. */
+/* Row titles, tab names, setting names: anything a reader scans for. */
 .ui-title {
   font-size: 0.8125rem;
   /* 13px */
   line-height: 1.4;
-  font-weight: 550;
+  font-weight: 500;
   color: var(--text-primary);
 }
 
 /* Panel and dialog headings. */
 .ui-heading {
-  font-size: 0.875rem;
-  /* 14px */
+  font-size: 0.9375rem;
+  /* 15px */
   line-height: 1.35;
   font-weight: 600;
   letter-spacing: -0.005em;

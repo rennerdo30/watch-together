@@ -31,7 +31,8 @@ test('a member without cookies is pointed at the extension, once', async ({ page
   await hint.getByRole('button', { name: 'Install' }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByText('Install the extension')).toBeVisible();
+  // It opens on the section that holds them.
+  await expect(dialog.getByRole('link', { name: 'Chrome Web Store' })).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
 
@@ -50,6 +51,7 @@ test('a member whose extension has synced sees no hint', async ({ page, request 
   await page.goto(`/room/${uniqueRoomId('synced')}?user=${encodeURIComponent(user)}`);
   await expect(page.getByLabel('Connected to the room')).toBeVisible({ timeout: 15_000 });
   await page.getByRole('button', { name: 'Room settings' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Account' }).click();
   await expect(page.getByTestId('cookie-status')).toContainText('In memory');
   await expect(page.getByTestId('extension-hint')).toBeHidden();
 });
@@ -59,6 +61,7 @@ test('Chrome installs from the store and Firefox downloads from this instance', 
   await expect(page.getByLabel('Connected to the room')).toBeVisible({ timeout: 15_000 });
   await page.getByRole('button', { name: 'Room settings' }).click();
   const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: 'Account' }).click();
 
   const chrome = dialog.getByRole('link', { name: 'Chrome Web Store' });
   await expect(chrome).toHaveAttribute('href', 'https://chromewebstore.google.com/detail/watch-together-cookie-syn/beonlkadfoclpnfigngknbjfoifibagn');

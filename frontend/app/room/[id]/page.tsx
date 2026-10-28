@@ -9,9 +9,9 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import {
     Loader2, Users, Link as LinkIcon,
     Plus, SkipForward,
-    Play, ListVideo, Settings, X, Palette, ShieldCheck, Bug,
-    Crown, Shield, User as UserIcon, ChevronDown, Lock, Copy, Check, Infinity, Sun, ExternalLink, Scissors, Puzzle,
-    MonitorUp, MonitorStop, Globe, Type, Download, Bell, BellOff, Volume2, AlertTriangle
+    Play, ListVideo, Settings, X, Bug,
+    Crown, Shield, User as UserIcon, Copy, Check, ExternalLink, Puzzle,
+    MonitorUp, MonitorStop, Globe, Bell, BellOff, Volume2, AlertTriangle
 } from 'lucide-react';
 import { BrandMark } from '@/components/brand-mark';
 import { prewarmPosition, prewarmVideo } from '@/lib/prewarm';
@@ -30,7 +30,7 @@ import {
 } from '@/lib/shared-browser';
 import { useSharePublisher } from '@/lib/share/useSharePublisher';
 import { useShareViewer } from '@/lib/share/useShareViewer';
-import { ResolveResponse, type QueueEntry, dashManifestUrl, resolveUrl, getExtensionToken, regenerateExtensionToken, ExtensionToken, getUserSettings, updateUserSettings, getCookies, forgetCookies, extensionDownloadUrl, type CookieStatus, type UserSettings } from '@/lib/api';
+import { ResolveResponse, type QueueEntry, dashManifestUrl, resolveUrl, getUserSettings, updateUserSettings, getCookies, forgetCookies, type CookieStatus, type UserSettings } from '@/lib/api';
 import { youtubePlaylistUrl } from '@/lib/playlist-url';
 import { PlaylistPreviewDialog } from '@/components/playlist-preview-dialog';
 import { CustomPlayer, type PrewarmRequest, type StartupMark } from '@/components/custom-player';
@@ -39,13 +39,11 @@ import { chapterAt, formatChapterTime } from '@/lib/chapters';
 import { LiveChat } from '@/components/live-chat';
 import { RoomLog } from '@/components/room-log';
 import { ErrorBoundary } from '@/components/error-boundary';
-import { THEMES, createCustomTheme } from '@/lib/themes';
+import { RoomSettingsDialog, type RoomSettingsSection } from '@/components/room-settings-dialog';
 import { ColorModeToggle } from '@/components/color-mode-toggle';
-import { displayHost, displayName, looksLikeUrl } from '@/lib/utils';
+import { displayHost, displayName, getErrorMessage, looksLikeUrl } from '@/lib/utils';
 import {
     DEFAULT_SPONSORBLOCK_SETTINGS,
-    SPONSORBLOCK_CATEGORIES,
-    SPONSOR_CATEGORY_LABELS,
     parseSponsorBlockSettings,
     parseSponsorSegments,
     skippedSegmentMessage,
@@ -56,14 +54,10 @@ import {
 import {
     APP_NAME,
     BACKEND_ORIGIN,
-    COOKIE_MEMORY_TTL_MINUTES,
     COPY_FEEDBACK_DURATION_MS,
     EXTENSION_HINT_DISMISSED_KEY,
-    EXTENSION_SOURCE_URL,
     EXTENSION_STORE_URL,
     FONT_SIZE_DEFAULT,
-    FONT_SIZE_MAX,
-    FONT_SIZE_MIN,
     DEFAULT_SHARE_QUALITY,
     PLAYBACK_TIMING_STALL_WINDOW_MS,
     PREWARM_NEXT_VIDEO_SECONDS,
@@ -76,7 +70,7 @@ import {
     SIDEBAR_MIN_WIDTH,
 } from '@/lib/constants';
 import toast, { Toaster } from 'react-hot-toast';
-import { useLocalStorageState, parseStoredBoolean, parsePositiveNumber, parseSidebarWidth } from '@/lib/hooks/useLocalStorageState';
+import { useLocalStorageState, parseStoredBoolean, parsePositiveNumber, parseSidebarWidth, parseFontSize } from '@/lib/hooks/useLocalStorageState';
 
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragEndEvent, DragStartEvent, DragOverlay } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
@@ -135,11 +129,6 @@ const isHlsUrl = (url: string) => url.includes('.m3u8') || url.includes('playlis
 const playbackEngineOf = (video: ResolveResponse): PlaybackEngine =>
     video.stream_type === 'dash' ? 'mse' : isHlsUrl(video.stream_url ?? '') ? 'hls' : 'direct';
 
-const getErrorMessage = (error: unknown, fallback: string): string => {
-    if (error instanceof Error) return error.message;
-    return fallback;
-};
-
 export default function RoomPage() {
     const { id: roomId } = useParams() as { id: string };
     const router = useRouter();
@@ -158,6 +147,8 @@ export default function RoomPage() {
     const playlistInput = youtubePlaylistUrl(inputUrl.trim());
     const [connected, setConnected] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
+    // The section the dialog opens on; unset opens the viewer's default.
+    const [settingsSection, setSettingsSection] = useState<RoomSettingsSection | undefined>(undefined);
     const { activeTheme, setActiveTheme } = useStoredTheme();
     const [useProxy, setUseProxy] = useLocalStorageState('wt_proxy', true, parseStoredBoolean, String);
     const [sidebarTab, setSidebarTab] = useState<'queue' | 'users' | 'chat' | 'log' | 'chapters'>('queue');
@@ -219,32 +210,18 @@ export default function RoomPage() {
     const [sidebarDraft, setSidebarWidth] = useState<number | null>(null);
     const sidebarWidth = sidebarDraft ?? storedSidebarWidth;
     const isResizing = useRef(false);
-    const [fontSize, setFontSize] = useState(FONT_SIZE_DEFAULT);
+    // The text size the viewer picked; it used to be written but never read back.
+    const [fontSize, setFontSize] = useLocalStorageState('wt_font_size', FONT_SIZE_DEFAULT, parseFontSize, String);
     const [isLoadingCookies, setIsLoadingCookies] = useState(true);
     // Whether the server holds cookies for this user right now: gates
     // features that act on their account, and decides whether to suggest
     // installing the extension.
     const [hasSavedCookies, setHasSavedCookies] = useState(false);
     const [cookieStatus, setCookieStatus] = useState<CookieStatus | null>(null);
-    const [isForgettingCookies, setIsForgettingCookies] = useState(false);
     const [extensionHintDismissed, setExtensionHintDismissed] = useLocalStorageState(
         EXTENSION_HINT_DISMISSED_KEY, false, parseStoredBoolean, String);
     const [userSettings, setUserSettings] = useState<UserSettings | null>(null);
     const [isCopyingDebug, setIsCopyingDebug] = useState(false);
-
-    // Extension token state
-    const [extensionToken, setExtensionToken] = useState<ExtensionToken | null>(null);
-    const [isLoadingToken, setIsLoadingToken] = useState(false);
-    const [isRegeneratingToken, setIsRegeneratingToken] = useState(false);
-    const [isCopyingToken, setIsCopyingToken] = useState(false);
-
-    // Custom theme state
-    const [customBgDraft, setCustomBgColor] = useState<string | null>(null);
-    const customBgColor = customBgDraft ?? (activeTheme.id === 'custom' ? activeTheme.colors.bg : '#09090b');
-    const [customAccentDraft, setCustomAccentColor] = useState<string | null>(null);
-    const customAccentColor = customAccentDraft ?? (activeTheme.id === 'custom' ? activeTheme.colors.accent : '#d93a3a');
-    const [showCustomDraft, setShowCustomTheme] = useState<boolean | null>(null);
-    const showCustomTheme = showCustomDraft ?? activeTheme.id === 'custom';
 
     // DnD Sensors - require a small movement before dragging to allow clicks
     const sensors = useSensors(
@@ -447,26 +424,13 @@ export default function RoomPage() {
             .catch((err) => console.warn('[Room] Could not load user settings:', err));
     }, [currentUser]);
 
-    // Load extension token when settings are opened
+    // Cookies may have arrived from the extension since the page loaded;
+    // what the settings offer depends on whether they exist.
     useEffect(() => {
-        const loadToken = async () => {
-            if (!showSettings || !currentUser || currentUser === 'Guest') return;
-            // Cookies may have arrived from the extension since the page
-            // loaded; what the dialog offers depends on whether they exist.
-            getCookies()
-                .then((data) => { setHasSavedCookies(data.has_cookies); setCookieStatus(data); })
-                .catch(() => { /* the initial load already reported this */ });
-            setIsLoadingToken(true);
-            try {
-                const response = await getExtensionToken();
-                setExtensionToken(response.token);
-            } catch (err) {
-                console.error('Failed to load extension token:', err);
-            } finally {
-                setIsLoadingToken(false);
-            }
-        };
-        loadToken();
+        if (!showSettings || !currentUser || currentUser === 'Guest') return;
+        getCookies()
+            .then((data) => { setHasSavedCookies(data.has_cookies); setCookieStatus(data); })
+            .catch(() => { /* the initial load already reported this */ });
     }, [showSettings, currentUser]);
 
     // Note: We no longer need a local ticker for syncState.timestamp
@@ -1222,7 +1186,7 @@ export default function RoomPage() {
     };
 
     return (
-        <main className={`app-shell h-dvh w-full flex flex-col ${activeTheme.bg} text-neutral-300 overflow-hidden font-sans`}>
+        <main className={`app-shell h-dvh w-full flex flex-col bg-[color:var(--bg-primary)] text-neutral-300 overflow-hidden font-sans`}>
             <Toaster position="bottom-center" toastOptions={{
                 style: {
                     background: 'var(--toast-bg)',
@@ -1239,7 +1203,7 @@ export default function RoomPage() {
                 </div>
             )}
             {/* Header */}
-            <header className={`app-header h-12 border-b ${activeTheme.border} flex items-center gap-2 px-3 shrink-0 ${activeTheme.header} backdrop-blur-md z-50`}>
+            <header className={`app-header h-12 border-b border-[color:var(--border-default)] flex items-center gap-2 px-3 shrink-0 bg-[color:var(--bg-primary)]/92 backdrop-blur-md z-50`}>
                 <div className="flex items-center gap-2">
                     <button
                         type="button"
@@ -1332,7 +1296,7 @@ export default function RoomPage() {
                     </button>
                     <button
                         type="button"
-                        onClick={() => setShowSettings(true)}
+                        onClick={() => { setSettingsSection(undefined); setShowSettings(true); }}
                         aria-haspopup="dialog"
                         aria-label="Room settings"
                         className="w-7 h-7 flex items-center justify-center hover:bg-neutral-800 rounded-lg transition-colors text-neutral-400 hover:text-white"
@@ -1715,7 +1679,7 @@ export default function RoomPage() {
                             </p>
                             <button
                                 type="button"
-                                onClick={() => setShowSettings(true)}
+                                onClick={() => { setSettingsSection('account'); setShowSettings(true); }}
                                 className="shrink-0 rounded-md bg-amber-500/20 hover:bg-amber-500/30 px-2 py-1 font-medium text-amber-100 transition-colors"
                             >
                                 Install
@@ -1751,7 +1715,7 @@ export default function RoomPage() {
                             type="submit"
                             disabled={loading || !inputUrl}
                             aria-busy={loading}
-                            className={`px-4 h-9 ${activeTheme.text} font-medium rounded-lg text-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 ${activeTheme.accent} shadow-lg hover:brightness-110`}
+                            className={`px-4 h-9 on-accent font-medium rounded-lg text-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 bg-[color:var(--accent-primary)] shadow-lg hover:brightness-110`}
                         >
                             {loading ? <Loader2 aria-hidden="true" className="animate-spin w-3 h-3" /> : <Play aria-hidden="true" className="w-3 h-3 fill-current" />}
                             Play
@@ -1760,7 +1724,7 @@ export default function RoomPage() {
                             type="button"
                             onClick={handleAddToQueue}
                             disabled={loading || !inputUrl}
-                            className={`px-4 h-9 bg-neutral-800/50 hover:bg-neutral-800 text-neutral-100 font-medium rounded-lg text-sm border ${activeTheme.border} disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors`}
+                            className={`px-4 h-9 bg-neutral-800/50 hover:bg-neutral-800 text-neutral-100 font-medium rounded-lg text-sm border border-[color:var(--border-default)] disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors`}
                         >
                             <Plus aria-hidden="true" className="w-3 h-3" />
                             Queue
@@ -1768,7 +1732,7 @@ export default function RoomPage() {
                         {playlistInput.hasPlaylist && canImportPlaylist && (
                             <button type="button" disabled={loading}
                                 onClick={() => setPlaylistDialogUrl(inputUrl.trim())}
-                                className={`flex h-9 items-center gap-1.5 rounded-lg border ${activeTheme.border} bg-neutral-800/50 px-4 text-sm font-medium text-neutral-100 hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors`}>
+                                className={`flex h-9 items-center gap-1.5 rounded-lg border border-[color:var(--border-default)] bg-neutral-800/50 px-4 text-sm font-medium text-neutral-100 hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors`}>
                                 <ListVideo aria-hidden="true" className="h-3.5 w-3.5" />
                                 Import playlist
                             </button>
@@ -1792,7 +1756,7 @@ export default function RoomPage() {
                                     : sharedBrowser
                                         ? 'The shared browser is on the player'
                                         : 'Share your screen with the room'}
-                                className={`px-3 sm:px-4 h-9 bg-neutral-800/50 hover:bg-neutral-800 text-neutral-100 font-medium rounded-lg text-sm border ${activeTheme.border} disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors`}
+                                className={`px-3 sm:px-4 h-9 bg-neutral-800/50 hover:bg-neutral-800 text-neutral-100 font-medium rounded-lg text-sm border border-[color:var(--border-default)] disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors`}
                             >
                                 <MonitorUp aria-hidden="true" className="w-3.5 h-3.5" />
                                 <span className="max-sm:sr-only">Share screen</span>
@@ -1817,7 +1781,7 @@ export default function RoomPage() {
                                 title={liveShare
                                     ? 'Someone is sharing their screen'
                                     : browserBlockedText ?? 'Open a browser everyone can watch and take turns driving'}
-                                className={`px-3 sm:px-4 h-9 bg-neutral-800/50 hover:bg-neutral-800 text-neutral-100 font-medium rounded-lg text-sm border ${activeTheme.border} disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors`}
+                                className={`px-3 sm:px-4 h-9 bg-neutral-800/50 hover:bg-neutral-800 text-neutral-100 font-medium rounded-lg text-sm border border-[color:var(--border-default)] disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors`}
                             >
                                 <Globe aria-hidden="true" className="w-3.5 h-3.5" />
                                 <span className="max-sm:sr-only">Shared browser</span>
@@ -1900,7 +1864,7 @@ export default function RoomPage() {
                                         onClick={openSharedBrowser}
                                         data-testid="confirm-shared-browser"
                                         disabled={!!browserBlockedText}
-                                        className={`px-4 h-9 ${activeTheme.text} font-medium rounded-lg text-sm ${activeTheme.accent} hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed`}
+                                        className={`px-4 h-9 on-accent font-medium rounded-lg text-sm bg-[color:var(--accent-primary)] hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed`}
                                     >
                                         Open it
                                     </button>
@@ -1965,7 +1929,7 @@ export default function RoomPage() {
                                     <button
                                         type="button"
                                         onClick={() => void startSharing()}
-                                        className={`px-4 h-9 ${activeTheme.text} font-medium rounded-lg text-sm ${activeTheme.accent} hover:brightness-110`}
+                                        className={`px-4 h-9 on-accent font-medium rounded-lg text-sm bg-[color:var(--accent-primary)] hover:brightness-110`}
                                     >
                                         Choose what to share
                                     </button>
@@ -2172,8 +2136,8 @@ export default function RoomPage() {
                                     const isAdmin = myRole === 'admin';
 
                                     return (
-                                        <div key={m.email} className={`group flex items-center gap-2 p-1.5 rounded-lg bg-neutral-800/10 border ${activeTheme.border}`}>
-                                            <div className={`w-6 h-6 rounded-md flex items-center justify-center text-[11px] font-semibold ui-numeric ${activeTheme.text} ${activeTheme.accent}`}>
+                                        <div key={m.email} className={`group flex items-center gap-2 p-1.5 rounded-lg bg-neutral-800/10 border border-[color:var(--border-default)]`}>
+                                            <div className={`w-6 h-6 rounded-md flex items-center justify-center text-[11px] font-semibold ui-numeric on-accent bg-[color:var(--accent-primary)]`}>
                                                 {m.email.charAt(0).toUpperCase()}
                                             </div>
                                             <div className="flex-1 min-w-0 flex flex-col">
@@ -2235,493 +2199,51 @@ export default function RoomPage() {
                 </aside >
             </div >
 
-            {/* Settings Overlay */}
-            {
-                showSettings && (
-                    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-                        <button
-                            type="button"
-                            aria-label="Close settings"
-                            tabIndex={-1}
-                            className="absolute inset-0 bg-black/80 backdrop-blur-sm cursor-default"
-                            onClick={() => setShowSettings(false)}
-                        />
-                        <div
-                            role="dialog"
-                            aria-modal="true"
-                            aria-labelledby="room-settings-title"
-                            className="relative w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden shadow-2xl max-h-[90dvh] flex flex-col"
-                        >
-                            <div className="p-5 border-b border-zinc-800 flex items-center justify-between shrink-0">
-                                <h2 id="room-settings-title" className="text-base font-semibold text-white">Settings</h2>
-                                <button
-                                    type="button"
-                                    onClick={() => setShowSettings(false)}
-                                    aria-label="Close settings"
-                                    className="text-zinc-400 hover:text-white transition-colors p-1 rounded-lg hover:bg-white/5"
-                                >
-                                    <X aria-hidden="true" className="w-5 h-5" />
-                                </button>
-                            </div>
-
-
-                            <div className="p-5 space-y-6 overflow-y-auto flex-1">
-                                {/* Room Name - Admin Only */}
-                                {roles[currentUser] === 'admin' && (
-                                    <form
-                                        className="space-y-2"
-                                        onSubmit={(e) => {
-                                            e.preventDefault();
-                                            const draft = new FormData(e.currentTarget).get('roomName');
-                                            const requested = String(draft ?? '').trim();
-                                            pendingRenameRef.current = requested;
-                                            sendMsg('rename_room', { name: requested });
-                                        }}
-                                    >
-                                        <label htmlFor="room-name-input" className="ui-label block">Room name</label>
-                                        <div className="flex gap-2">
-                                            <input
-                                                id="room-name-input"
-                                                name="roomName"
-                                                key={roomName}
-                                                defaultValue={roomName}
-                                                maxLength={60}
-                                                placeholder={roomId}
-                                                className="flex-1 h-9 bg-white/5 border border-white/10 rounded-lg px-3 text-sm text-white placeholder:text-zinc-500 focus:outline-none"
-                                            />
-                                            <button
-                                                type="submit"
-                                                className="h-9 px-3 bg-[color:var(--accent-primary)] hover:brightness-110 on-accent-light text-sm font-medium rounded-lg transition-colors"
-                                            >
-                                                Save
-                                            </button>
-                                        </div>
-                                        <p className="ui-meta">Shown instead of the room id; the link stays /room/{roomId}.</p>
-                                    </form>
-                                )}
-
-                                {/* Permanent Room Toggle - Admin Only */}
-                                {roles[currentUser] === 'admin' && (
-                                    <button
-                                        type="button"
-                                        role="switch"
-                                        aria-checked={isPermanent}
-                                        onClick={() => sendMsg('toggle_permanent', {})}
-                                        className={`w-full p-4 rounded-xl border flex items-center justify-between gap-4 transition-all ${isPermanent ? 'bg-amber-500/10 border-amber-500/20' : 'bg-zinc-800/30 border-zinc-800'
-                                            }`}
-                                    >
-                                        <div className="text-left flex items-center gap-3">
-                                            <Infinity aria-hidden="true" className={`w-5 h-5 ${isPermanent ? 'text-amber-400' : 'text-zinc-400'}`} />
-                                            <div>
-                                                <span className="font-medium text-white text-sm">Permanent room</span>
-                                                <p className="text-xs text-zinc-500 mt-0.5">Room won&apos;t be deleted when empty</p>
-                                            </div>
-                                        </div>
-                                        <div className={`w-10 h-5 shrink-0 rounded-full transition-all flex items-center px-0.5 ${isPermanent ? 'bg-amber-500' : 'bg-zinc-700'}`}>
-                                            <div className={`w-4 h-4 knob-on-accent rounded-full transition-all shadow-sm ${isPermanent ? 'translate-x-5' : 'translate-x-0'}`} />
-                                        </div>
-                                    </button>
-                                )}
-
-                                {/* SponsorBlock - Admin Only. The server does the skipping for
-                                    the whole room, so this is a room setting, not a viewer one. */}
-                                {roles[currentUser] === 'admin' && (
-                                    <div className="space-y-3" data-testid="sponsorblock-settings">
-                                        <button
-                                            type="button"
-                                            role="switch"
-                                            aria-checked={sponsorBlock.enabled}
-                                            aria-label="Skip SponsorBlock segments"
-                                            onClick={() => sendMsg('sponsorblock_settings', { ...sponsorBlock, enabled: !sponsorBlock.enabled })}
-                                            className={`w-full p-4 rounded-xl border flex items-center justify-between gap-4 transition-all ${sponsorBlock.enabled ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-zinc-800/30 border-zinc-800'}`}
-                                        >
-                                            <div className="text-left flex items-center gap-3">
-                                                <Scissors aria-hidden="true" className={`w-5 h-5 ${sponsorBlock.enabled ? 'text-emerald-400' : 'text-zinc-400'}`} />
-                                                <div>
-                                                    <span className="font-medium text-white text-sm">Skip SponsorBlock segments</span>
-                                                    <p className="text-xs text-zinc-500 mt-0.5">Community-marked segments in YouTube videos are skipped for everyone in the room</p>
-                                                </div>
-                                            </div>
-                                            <div className={`w-10 h-5 shrink-0 rounded-full transition-all flex items-center px-0.5 ${sponsorBlock.enabled ? 'bg-emerald-500' : 'bg-zinc-700'}`}>
-                                                <div className={`w-4 h-4 knob-on-accent rounded-full transition-all shadow-sm ${sponsorBlock.enabled ? 'translate-x-5' : 'translate-x-0'}`} />
-                                            </div>
-                                        </button>
-                                        <fieldset className="grid grid-cols-1 sm:grid-cols-2 gap-1.5" disabled={!sponsorBlock.enabled}>
-                                            <legend className="ui-label mb-1.5">Segments to skip</legend>
-                                            {SPONSORBLOCK_CATEGORIES.map((category) => {
-                                                const checked = sponsorBlock.categories.includes(category);
-                                                return (
-                                                    <label
-                                                        key={category}
-                                                        className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-xs cursor-pointer transition-colors ${checked ? 'bg-white/10 border-white/15 text-white' : 'bg-white/5 border-white/5 text-zinc-400 hover:text-zinc-200'} ${sponsorBlock.enabled ? '' : 'opacity-50 cursor-not-allowed'}`}
-                                                    >
-                                                        <input
-                                                            type="checkbox"
-                                                            className="accent-emerald-500"
-                                                            checked={checked}
-                                                            onChange={() => {
-                                                                const categories = checked
-                                                                    ? sponsorBlock.categories.filter((c) => c !== category)
-                                                                    : [...sponsorBlock.categories, category];
-                                                                sendMsg('sponsorblock_settings', { ...sponsorBlock, categories });
-                                                            }}
-                                                        />
-                                                        {SPONSOR_CATEGORY_LABELS[category]}
-                                                    </label>
-                                                );
-                                            })}
-                                        </fieldset>
-                                    </div>
-                                )}
-
-                                {/* Light / dark appearance */}
-                                <div className="space-y-3">
-                                    <p className="text-xs font-medium text-zinc-400 flex items-center gap-2">
-                                        <Sun aria-hidden="true" className="w-4 h-4" /> Appearance
-                                    </p>
-                                    <ColorModeToggle variant="segmented" />
-                                </div>
-
-                                {/* Theme Selection */}
-                                <div className="space-y-3">
-                                    <p className="text-xs font-medium text-zinc-400 flex items-center gap-2">
-                                        <Palette aria-hidden="true" className="w-4 h-4" /> Accent theme
-                                    </p>
-                                    <div className="grid grid-cols-3 gap-2">
-                                        {THEMES.map(t => (
-                                            <button
-                                                key={t.id}
-                                                onClick={() => { setActiveTheme(t); setShowCustomTheme(false); }}
-                                                className={`p-3 rounded-xl border text-xs font-medium transition-all ${activeTheme.id === t.id && !showCustomTheme
-                                                    ? "bg-white/10 border-white/20 text-white"
-                                                    : "bg-white/5 border-white/5 text-zinc-500 hover:border-white/10 hover:text-zinc-300"
-                                                    }`}
-                                            >
-                                                <div
-                                                    data-theme-swatch={t.id}
-                                                    className="h-2 w-full rounded-full mb-2"
-                                                    // The class in `t.accent` is a lookup of the
-                                                    // *active* accent token, so as a preview it
-                                                    // painted every card the current colour. A
-                                                    // swatch must show the colour the theme
-                                                    // would apply, which only exists as a hex.
-                                                    style={{ backgroundColor: t.colors.accent }}
-                                                />
-                                                {t.name}
-                                            </button>
-                                        ))}
-                                    </div>
-
-                                    {/* Custom Theme Toggle */}
-                                    <button
-                                        onClick={() => setShowCustomTheme(!showCustomTheme)}
-                                        type="button"
-                                        className={`w-full px-3 py-2 rounded-lg border text-xs font-medium transition-all flex items-center justify-between ${showCustomTheme
-                                            ? "bg-[color:var(--accent-glow)] border-[color:var(--accent-primary)] text-[color:var(--accent-primary)]"
-                                            : "bg-white/5 border-white/5 text-zinc-500 hover:border-white/10"
-                                            }`}
-                                    >
-                                        <span>Custom theme</span>
-                                        <ChevronDown className={`w-3 h-3 transition-transform ${showCustomTheme ? 'rotate-180' : ''}`} />
-                                    </button>
-
-                                    {/* Custom Theme Editor */}
-                                    {showCustomTheme && (
-                                        <div className="space-y-3 p-3 rounded-lg bg-white/5 border border-white/5">
-                                            <div className="flex items-center gap-3">
-                                                <div className="flex-1">
-                                                    <label className="ui-label">Background</label>
-                                                    <div className="flex items-center gap-2 mt-1">
-                                                        <input
-                                                            type="color"
-                                                            value={customBgColor}
-                                                            onChange={(e) => setCustomBgColor(e.target.value)}
-                                                            className="w-8 h-8 rounded-lg border border-white/10 cursor-pointer bg-transparent"
-                                                        />
-                                                        <input
-                                                            type="text"
-                                                            value={customBgColor}
-                                                            onChange={(e) => setCustomBgColor(e.target.value)}
-                                                            className="flex-1 h-8 bg-white/5 border border-white/10 rounded-lg px-2 text-xs font-mono text-white focus:outline-none focus:border-[color:var(--accent-primary)]"
-                                                        />
-                                                    </div>
-                                                </div>
-                                                <div className="flex-1">
-                                                    <label className="ui-label">Accent</label>
-                                                    <div className="flex items-center gap-2 mt-1">
-                                                        <input
-                                                            type="color"
-                                                            value={customAccentColor}
-                                                            onChange={(e) => setCustomAccentColor(e.target.value)}
-                                                            className="w-8 h-8 rounded-lg border border-white/10 cursor-pointer bg-transparent"
-                                                        />
-                                                        <input
-                                                            type="text"
-                                                            value={customAccentColor}
-                                                            onChange={(e) => setCustomAccentColor(e.target.value)}
-                                                            className="flex-1 h-8 bg-white/5 border border-white/10 rounded-lg px-2 text-xs font-mono text-white focus:outline-none focus:border-[color:var(--accent-primary)]"
-                                                        />
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            <button
-                                                onClick={() => {
-                                                    const custom = createCustomTheme('Custom', customBgColor, customAccentColor);
-                                                    setActiveTheme(custom);
-                                                    toast.success('Custom theme applied!');
-                                                }}
-                                                type="button"
-                                                className="w-full h-9 bg-[color:var(--accent-primary)] hover:brightness-110 on-accent-light text-sm font-medium rounded-lg transition-colors"
-                                            >
-                                                Apply custom theme
-                                            </button>
-                                        </div>
-                                    )}
-                                </div>
-
-                                {/* Typography Scale */}
-                                <div className="space-y-3">
-                                    <label htmlFor="room-font-size" className="text-xs font-medium text-zinc-400 flex items-center gap-2">
-                                        <Type aria-hidden="true" className="w-4 h-4" /> Text size ({fontSize}px)
-                                    </label>
-                                    <input
-                                        id="room-font-size"
-                                        type="range"
-                                        min={FONT_SIZE_MIN}
-                                        max={FONT_SIZE_MAX}
-                                        value={fontSize}
-                                        onChange={(e) => {
-                                            const val = parseInt(e.target.value);
-                                            setFontSize(val);
-                                            localStorage.setItem('wt_font_size', val.toString());
-                                        }}
-                                        className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-[color:var(--accent-primary)]"
-                                    />
-                                </div>
-
-                                {/* Proxy Toggle */}
-                                <button
-                                    type="button"
-                                    role="switch"
-                                    aria-checked={useProxy}
-                                    onClick={() => { const v = !useProxy; setUseProxy(v); }}
-                                    className={`w-full p-4 rounded-xl border flex items-center justify-between gap-4 transition-all ${useProxy ? "bg-[color:var(--accent-glow)] border-[color:var(--accent-primary)]" : "bg-zinc-800/30 border-zinc-800"
-                                        }`}
-                                >
-                                    <div className="text-left">
-                                        <span className="font-medium text-white text-sm">Proxy mode</span>
-                                        <p className="text-xs text-zinc-500 mt-0.5">Bypass regional restrictions</p>
-                                    </div>
-                                    <div className={`w-10 h-5 shrink-0 rounded-full transition-all flex items-center px-0.5 ${useProxy ? "bg-[color:var(--accent-primary)]" : "bg-zinc-700"}`}>
-                                        <div className={`w-4 h-4 knob-on-accent rounded-full transition-all shadow-sm ${useProxy ? "translate-x-5" : "translate-x-0"}`} />
-                                    </div>
-                                </button>
-
-                                {/* Cookie status. Cookies only ever arrive through the
-                                    extension and live in the server's memory; there is
-                                    nothing to paste and nothing to read back. */}
-                                <div className="pt-4 border-t border-zinc-800">
-                                    <p className="text-xs font-medium text-zinc-400 flex items-center gap-2 mb-3">
-                                        <ShieldCheck aria-hidden="true" className="w-4 h-4" /> Cookie authentication
-                                    </p>
-                                    <div className="bg-zinc-800/30 rounded-xl border border-zinc-800 p-4 space-y-3" data-testid="cookie-status">
-                                        <p className="text-xs text-zinc-400 leading-relaxed">
-                                            A signed-in session lets the room play age-restricted and bot-checked videos. Your cookies reach the server only through the browser extension, stay in memory, and are dropped {COOKIE_MEMORY_TTL_MINUTES} minutes after the last sync or as soon as you disconnect the extension. While you are in a room, YouTube, Twitch and Kick links other members paste can be resolved with your session.
-                                        </p>
-                                        <div className="flex flex-wrap items-center justify-between gap-3">
-                                            <div className="flex items-center gap-2 text-xs text-zinc-400">
-                                                <Lock aria-hidden="true" className="w-3 h-3" />
-                                                <span>
-                                                    {isLoadingCookies
-                                                        ? 'Checking...'
-                                                        : hasSavedCookies
-                                                            ? `In memory${cookieStatus?.synced_at ? `, synced ${new Date(cookieStatus.synced_at * 1000).toLocaleTimeString()}` : ''}${cookieStatus?.expires_at ? `, kept until ${new Date(cookieStatus.expires_at * 1000).toLocaleTimeString()}` : ''}`
-                                                            : 'No cookies on the server'}
-                                                </span>
-                                            </div>
-                                            {hasSavedCookies && (
-                                                <button
-                                                    type="button"
-                                                    onClick={async () => {
-                                                        setIsForgettingCookies(true);
-                                                        try {
-                                                            await forgetCookies();
-                                                            setHasSavedCookies(false);
-                                                            setCookieStatus({ has_cookies: false });
-                                                            toast.success('Cookies dropped from the server');
-                                                        } catch (err: unknown) {
-                                                            toast.error(getErrorMessage(err, 'Failed to forget cookies'));
-                                                        } finally {
-                                                            setIsForgettingCookies(false);
-                                                        }
-                                                    }}
-                                                    disabled={isForgettingCookies}
-                                                    className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-xs font-medium text-zinc-300 hover:text-white transition-colors disabled:opacity-50"
-                                                >
-                                                    {isForgettingCookies ? 'Forgetting...' : 'Forget now'}
-                                                </button>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    {/* YouTube watch history. Acts on the viewer's own
-                                        account, so it is their setting, off until they
-                                        ask, and only offered once cookies are on file. */}
-                                    {currentUser && currentUser !== 'Guest' && (
-                                        <div className="mt-3" data-testid="youtube-history-setting">
-                                            <button
-                                                type="button"
-                                                role="switch"
-                                                aria-checked={Boolean(userSettings?.youtube_history)}
-                                                aria-label="Update my YouTube watch history"
-                                                disabled={!hasSavedCookies || userSettings === null}
-                                                onClick={async () => {
-                                                    if (!userSettings) return;
-                                                    try {
-                                                        setUserSettings(await updateUserSettings({ youtube_history: !userSettings.youtube_history }));
-                                                    } catch (err: unknown) {
-                                                        toast.error(getErrorMessage(err, 'Could not save the setting'));
-                                                    }
-                                                }}
-                                                className={`w-full p-4 rounded-xl border flex items-center justify-between gap-4 transition-all disabled:opacity-50 disabled:cursor-not-allowed ${userSettings?.youtube_history ? 'bg-red-500/10 border-red-500/20' : 'bg-zinc-800/30 border-zinc-800'}`}
-                                            >
-                                                <div className="text-left">
-                                                    <span className="font-medium text-white text-sm">Update my YouTube watch history</span>
-                                                    <p className="text-xs text-zinc-500 mt-0.5">
-                                                        {hasSavedCookies
-                                                            ? 'YouTube videos the room watches appear in your history and remember where you stopped, as if you watched them yourself. Uses your cookies.'
-                                                            : 'Connect the browser extension so your cookies are available, then switch this on.'}
-                                                    </p>
-                                                </div>
-                                                <div className={`w-10 h-5 shrink-0 rounded-full transition-all flex items-center px-0.5 ${userSettings?.youtube_history ? 'bg-red-500' : 'bg-zinc-700'}`}>
-                                                    <div className={`w-4 h-4 knob-on-accent rounded-full transition-all shadow-sm ${userSettings?.youtube_history ? 'translate-x-5' : 'translate-x-0'}`} />
-                                                </div>
-                                            </button>
-                                        </div>
-                                    )}
-                                </div>
-
-                                {/* Browser Extension */}
-                                <div className="pt-4 border-t border-zinc-800">
-                                    <p className="text-xs font-medium text-zinc-400 flex items-center gap-2 mb-3">
-                                        <LinkIcon aria-hidden="true" className="w-4 h-4" /> Browser extension
-                                    </p>
-                                    <div className="bg-zinc-800/30 rounded-xl border border-zinc-800 p-4 space-y-4">
-                                        <p className="text-xs text-zinc-400 leading-relaxed">
-                                            Install the browser extension to sync your cookies from YouTube, Twitch, Kick and other sites. It re-syncs every few minutes while your browser is open; the server keeps nothing once it stops.
-                                        </p>
-
-                                        {/* API Token */}
-                                        {currentUser && currentUser !== 'Guest' && (
-                                            <div className="space-y-2">
-                                                <div className="flex items-center justify-between">
-                                                    <span className="ui-label">API token</span>
-                                                    {extensionToken?.last_sync_at && (
-                                                        <span className="text-[10px] text-zinc-500">
-                                                            Last sync: {new Date(extensionToken.last_sync_at * 1000).toLocaleString()}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                                <div className="flex items-center gap-2">
-                                                    <div className="flex-1 h-9 bg-zinc-900 border border-zinc-700 rounded-lg px-3 flex items-center">
-                                                        {isLoadingToken ? (
-                                                            <span className="text-xs text-zinc-500">Loading...</span>
-                                                        ) : extensionToken ? (
-                                                            <code className="text-[11px] font-mono text-zinc-300 truncate">
-                                                                {extensionToken.id.slice(0, 20)}...
-                                                            </code>
-                                                        ) : (
-                                                            <span className="text-xs text-zinc-500">No token</span>
-                                                        )}
-                                                    </div>
-                                                    <button
-                                                        onClick={() => {
-                                                            if (extensionToken) {
-                                                                navigator.clipboard.writeText(extensionToken.id);
-                                                                setIsCopyingToken(true);
-                                                                setTimeout(() => setIsCopyingToken(false), COPY_FEEDBACK_DURATION_MS);
-                                                                toast.success('Token copied!');
-                                                            }
-                                                        }}
-                                                        disabled={!extensionToken}
-                                                        className="h-9 px-3 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-zinc-400 hover:text-white transition-colors disabled:opacity-50"
-                                                        title="Copy token"
-                                                        aria-label="Copy the API token to the clipboard"
-                                                    >
-                                                        {isCopyingToken ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                                                    </button>
-                                                    <button
-                                                        onClick={async () => {
-                                                            setIsRegeneratingToken(true);
-                                                            try {
-                                                                const response = await regenerateExtensionToken();
-                                                                setExtensionToken(response.token);
-                                                                toast.success('Token regenerated!');
-                                                            } catch (err: unknown) {
-                                                                toast.error(getErrorMessage(err, 'Failed to regenerate'));
-                                                            } finally {
-                                                                setIsRegeneratingToken(false);
-                                                            }
-                                                        }}
-                                                        disabled={isRegeneratingToken}
-                                                        className="h-9 px-3 bg-amber-600/20 hover:bg-amber-600/30 border border-amber-600/30 rounded-lg text-amber-400 hover:text-amber-300 text-xs font-medium transition-colors disabled:opacity-50"
-                                                    >
-                                                        {isRegeneratingToken ? 'Regenerating...' : 'Regenerate'}
-                                                    </button>
-                                                </div>
-                                                {extensionToken && extensionToken.sync_count > 0 && (
-                                                    <div className="text-[10px] text-zinc-500">
-                                                        Synced {extensionToken.sync_count} time{extensionToken.sync_count !== 1 ? 's' : ''}
-                                                    </div>
-                                                )}
-                                            </div>
-                                        )}
-
-                                        {/* Download Links */}
-                                        <div className="space-y-2">
-                                            <span className="ui-label">Install the extension</span>
-                                            <p className="text-[10px] leading-relaxed text-zinc-500">
-                                                Install from the Chrome Web Store for automatic updates in Chrome or Edge,
-                                                then connect this site from the extension popup.
-                                            </p>
-                                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                                                <a
-                                                    href={EXTENSION_STORE_URL}
-                                                    target="_blank"
-                                                    rel="noopener noreferrer"
-                                                    className="flex items-center justify-center gap-2 h-10 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 rounded-lg text-xs font-medium text-zinc-300 hover:text-white transition-colors"
-                                                >
-                                                    <ExternalLink aria-hidden="true" className="w-4 h-4" />
-                                                    Chrome Web Store
-                                                </a>
-                                                <a
-                                                    href={extensionDownloadUrl('firefox')}
-                                                    className="flex items-center justify-center gap-2 h-10 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 rounded-lg text-xs font-medium text-zinc-300 hover:text-white transition-colors"
-                                                    download
-                                                >
-                                                    <Download aria-hidden="true" className="w-4 h-4" />
-                                                    Firefox
-                                                </a>
-                                                <a
-                                                    href={EXTENSION_SOURCE_URL}
-                                                    className="flex items-center justify-center gap-2 h-10 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 rounded-lg text-xs font-medium text-zinc-300 hover:text-white transition-colors"
-                                                    target="_blank"
-                                                    rel="noopener noreferrer"
-                                                >
-                                                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                                                        <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
-                                                    </svg>
-                                                    Source
-                                                </a>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                )
-            }
+            {showSettings && (
+                <RoomSettingsDialog
+                    onClose={() => setShowSettings(false)}
+                    initialSection={settingsSection}
+                    isAdmin={roles[currentUser] === 'admin'}
+                    signedIn={Boolean(currentUser) && currentUser !== 'Guest'}
+                    roomId={roomId}
+                    roomName={roomName}
+                    onRename={(name) => {
+                        pendingRenameRef.current = name;
+                        sendMsg('rename_room', { name });
+                    }}
+                    isPermanent={isPermanent}
+                    onTogglePermanent={() => sendMsg('toggle_permanent', {})}
+                    sponsorBlock={sponsorBlock}
+                    onSponsorBlockChange={(settings) => sendMsg('sponsorblock_settings', settings)}
+                    activeTheme={activeTheme}
+                    onThemeChange={setActiveTheme}
+                    fontSize={fontSize}
+                    onFontSizeChange={setFontSize}
+                    useProxy={useProxy}
+                    onProxyChange={setUseProxy}
+                    isLoadingCookies={isLoadingCookies}
+                    hasSavedCookies={hasSavedCookies}
+                    cookieStatus={cookieStatus}
+                    onForgetCookies={async () => {
+                        try {
+                            await forgetCookies();
+                            setHasSavedCookies(false);
+                            setCookieStatus({ has_cookies: false });
+                            toast.success('Cookies dropped from the server');
+                        } catch (err: unknown) {
+                            toast.error(getErrorMessage(err, 'Failed to forget cookies'));
+                        }
+                    }}
+                    userSettings={userSettings}
+                    onUserSettingsChange={async (patch) => {
+                        try {
+                            setUserSettings(await updateUserSettings(patch));
+                        } catch (err: unknown) {
+                            toast.error(getErrorMessage(err, 'Could not save the setting'));
+                        }
+                    }}
+                />
+            )}
         </main >
     );
 }

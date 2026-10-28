@@ -16,7 +16,8 @@ test('every theme card previews its own accent colour', async ({ page }) => {
   await page.goto(`/room/e2e-themes-${Date.now().toString(36)}?user=${encodeURIComponent(USER)}`);
   await expect(page.getByLabel('Connected to the room')).toBeVisible({ timeout: 15_000 });
 
-  await page.getByRole('button', { name: /quality and sync settings|settings/i }).first().click();
+  await page.getByRole('button', { name: 'Room settings' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Appearance' }).click();
   const swatches = page.locator('[data-theme-swatch]');
   await expect(swatches.first()).toBeVisible({ timeout: 10_000 });
 

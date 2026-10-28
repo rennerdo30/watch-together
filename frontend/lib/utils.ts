@@ -30,3 +30,8 @@ export function displayHost(url: string): string {
 export function looksLikeUrl(text: string): boolean {
     return /^https?:\/\/[^\s/?#]+\.[^\s/?#]+(?:[/?#]\S*)?$/i.test(text.trim());
 }
+
+/** The message of a thrown Error, or `fallback` for anything else. */
+export function getErrorMessage(error: unknown, fallback: string): string {
+    return error instanceof Error ? error.message : fallback;
+}

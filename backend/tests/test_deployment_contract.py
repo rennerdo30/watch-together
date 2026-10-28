@@ -1161,14 +1161,17 @@ class TestOneBrandMark:
 
     The favicon, the app logo and the extension icons were a purple-to-indigo
     circle left from an older theme, while the app itself is red; the home
-    page showed a generic TV icon and the extension its own purple glyph.
+    page showed a generic TV icon and the extension its own purple glyph. The
+    orange couch that replaced them neither matched the accent nor said
+    "video"; the mark is now two viewers before a screen, in teal, because a
+    red tile with a play shape is YouTube's look.
     """
 
     FRONTEND = REPO_ROOT / "frontend"
     EXTENSION = REPO_ROOT / "extension"
-    # The couch of the mark: its back, and its seat with the arms.
-    ECHO = "M17 33v-4a5 5 0 0 1 5-5h20a5 5 0 0 1 5 5v4"
-    PLAY = "M13 47V38a4 4 0 0 1 8 0v3h22v-3a4 4 0 0 1 8 0v9a4 4 0 0 1-4 4H17"
+    # The mark: the lit screen, and the shoulders of the two viewers.
+    ECHO = 'x="10" y="10" width="44" height="31" rx="6"'
+    PLAY = "M11 64v-5.5C11 52 16.5 48 23.5 48S36 52 36 58.5V64z"
 
     def test_every_logo_file_is_the_same_mark(self):
         for path in (self.FRONTEND / "public" / "logo.svg", self.FRONTEND / "public" / "favicon.svg",
@@ -1183,7 +1186,8 @@ class TestOneBrandMark:
                    *(self.EXTENSION / "icons").glob("*.svg")]
         for path in sources:
             text = path.read_text(encoding="utf-8").lower()
-            for purple in ("#8b5cf6", "#7c3aed", "#6366f1"):
+            # The old purples, and the orange of the couch mark.
+            for purple in ("#8b5cf6", "#7c3aed", "#6366f1", "#ff7a1a", "#ffa24c"):
                 assert purple not in text, f"{path} still uses {purple}"
 
     def test_the_headers_show_the_mark(self):
