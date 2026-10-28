@@ -896,7 +896,7 @@ export function CustomPlayer({
                         controlsVisible ? "opacity-100" : "opacity-0"
                     )}
                 >
-                    <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/60">
+                    <div className="mb-2 flex items-center gap-2 text-xs font-medium text-white/60">
                         <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
                         Now playing
                     </div>
