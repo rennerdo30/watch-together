@@ -6,9 +6,8 @@ import { syncCookiesAsExtension } from './extension-cookies';
  * Members without the extension have no session to offer the room, and most
  * videos need one. The room tells them once, above the URL box, and the
  * hint goes away for good when they dismiss it — or by itself once the
- * extension has synced their cookies. The "Install" buttons in Settings
- * download a build packaged by this very instance; they used to point at
- * addresses nothing served.
+ * extension has synced their cookies. Chrome installation uses the official
+ * store listing; Firefox development builds are packaged by this instance.
  */
 
 function uniqueRoomId(label: string): string {
@@ -55,13 +54,17 @@ test('a member whose extension has synced sees no hint', async ({ page, request 
   await expect(page.getByTestId('extension-hint')).toBeHidden();
 });
 
-test('the install buttons download builds packaged by this instance', async ({ page, request }) => {
+test('Chrome installs from the store and Firefox downloads from this instance', async ({ page, request }) => {
   await page.goto(`/room/${uniqueRoomId('download')}?user=${encodeURIComponent(freshUser('download'))}`);
   await expect(page.getByLabel('Connected to the room')).toBeVisible({ timeout: 15_000 });
   await page.getByRole('button', { name: 'Room settings' }).click();
   const dialog = page.getByRole('dialog');
 
-  for (const [label, browser] of [['Chrome / Edge', 'chrome'], ['Firefox', 'firefox']] as const) {
+  const chrome = dialog.getByRole('link', { name: 'Chrome Web Store' });
+  await expect(chrome).toHaveAttribute('href', 'https://chromewebstore.google.com/detail/watch-together-cookie-syn/beonlkadfoclpnfigngknbjfoifibagn');
+  await expect(chrome).not.toHaveAttribute('download');
+  await expect(chrome).toHaveAttribute('rel', 'noopener noreferrer');
+  for (const [label, browser] of [['Firefox', 'firefox']] as const) {
     const link = dialog.getByRole('link', { name: label });
     const href = await link.getAttribute('href');
     expect(href).toContain(`/api/extension/download/${browser}`);

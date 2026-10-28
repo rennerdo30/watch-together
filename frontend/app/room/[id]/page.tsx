@@ -60,6 +60,7 @@ import {
     COPY_FEEDBACK_DURATION_MS,
     EXTENSION_HINT_DISMISSED_KEY,
     EXTENSION_SOURCE_URL,
+    EXTENSION_STORE_URL,
     FONT_SIZE_DEFAULT,
     FONT_SIZE_MAX,
     FONT_SIZE_MIN,
@@ -1352,7 +1353,7 @@ export default function RoomPage() {
                         Your browser unloaded this tab to save memory, so videos the room played while it was away did not reach you.
                         To keep the room live in the background, open <span className="font-mono text-white">chrome://settings/performance</span> and
                         add this site under <span className="text-white">Always keep these sites active</span>, or
-                        connect the <a href={extensionDownloadUrl('chrome')} className="underline underline-offset-2 text-white hover:text-[color:var(--accent-primary)]">browser extension</a>, which keeps room tabs loaded for you.
+                        connect the <a href={EXTENSION_STORE_URL} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 text-white hover:text-[color:var(--accent-primary)]">browser extension</a>, which keeps room tabs loaded for you.
                     </span>
                     <button
                         type="button"
@@ -2679,23 +2680,19 @@ export default function RoomPage() {
                                         {/* Download Links */}
                                         <div className="space-y-2">
                                             <span className="ui-label">Install the extension</span>
-                                            {/* Chrome remembers an unpacked extension by the folder
-                                                it was loaded from and drops it when that folder
-                                                moves or is rewritten underneath it — which is why
-                                                one loaded straight from a checkout disappears. */}
                                             <p className="text-[10px] leading-relaxed text-zinc-500">
-                                                Unzip it somewhere permanent before loading it — not Downloads,
-                                                a temporary folder, or a checkout of the source. A browser forgets
-                                                an extension whose folder moves, and you would have to add it again.
+                                                Install from the Chrome Web Store for automatic updates in Chrome or Edge,
+                                                then connect this site from the extension popup.
                                             </p>
                                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                                                 <a
-                                                    href={extensionDownloadUrl('chrome')}
+                                                    href={EXTENSION_STORE_URL}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
                                                     className="flex items-center justify-center gap-2 h-10 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 rounded-lg text-xs font-medium text-zinc-300 hover:text-white transition-colors"
-                                                    download
                                                 >
-                                                    <Download aria-hidden="true" className="w-4 h-4" />
-                                                    Chrome / Edge
+                                                    <ExternalLink aria-hidden="true" className="w-4 h-4" />
+                                                    Chrome Web Store
                                                 </a>
                                                 <a
                                                     href={extensionDownloadUrl('firefox')}

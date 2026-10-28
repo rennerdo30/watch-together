@@ -5,6 +5,9 @@ export const APP_NAME = 'Watch Together';
 export const REPOSITORY_URL = 'https://github.com/rennerdo30/watch-together';
 
 /** The browser extension lives in the `extension/` folder of the main repo. */
+/** Published Chrome extension; store-managed installs receive automatic updates. */
+export const EXTENSION_STORE_URL = 'https://chromewebstore.google.com/detail/watch-together-cookie-syn/beonlkadfoclpnfigngknbjfoifibagn';
+
 export const EXTENSION_SOURCE_URL = `${REPOSITORY_URL}/tree/main/extension`;
 
 /** Packaged extension builds, served by the backend from the mounted source. */

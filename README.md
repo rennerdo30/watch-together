@@ -131,9 +131,10 @@ CI runs exactly these, plus manifest/syntax checks on the browser extension.
 Most videos only play from a server with a signed-in session. Cookies reach
 the server one way only: through the browser extension.
 
-1. Install the extension — Settings (gear icon) in any room offers a download
-   for Chrome/Edge and Firefox, packaged by the instance itself; the
-   [Nightly release](../../releases/tag/nightly) carries the same builds
+1. Install [Watch Together Cookie Sync from the Chrome Web Store](https://chromewebstore.google.com/detail/watch-together-cookie-syn/beonlkadfoclpnfigngknbjfoifibagn)
+   for Chrome or Edge. Settings in any room links to the store and offers a
+   Firefox development ZIP; [Nightly releases](../../releases/tag/nightly)
+   also carry development builds
 2. Log in to YouTube, Twitch or Kick in your browser
 3. Open your Watch Together instance while signed in, then connect it from the
    extension popup

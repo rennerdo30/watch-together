@@ -703,13 +703,15 @@ class TestExtensionIsDownloadableFromTheInstance:
             text = path.read_text(encoding="utf-8")
             assert 'href="/extension/' not in text, f"{path} still links to an unserved address"
 
-    def test_settings_link_to_the_download_endpoint(self):
+    def test_settings_link_to_chrome_store_and_firefox_download(self):
         constants = (self.FRONTEND / "lib" / "constants.ts").read_text(encoding="utf-8")
         assert "EXTENSION_DOWNLOAD_PATH = '/api/extension/download'" in constants
         api = (self.FRONTEND / "lib" / "api.ts").read_text(encoding="utf-8")
         assert "${EXTENSION_DOWNLOAD_PATH}/${browser}" in api
         room = (self.FRONTEND / "app" / "room" / "[id]" / "page.tsx").read_text(encoding="utf-8")
-        assert "extensionDownloadUrl('chrome')" in room
+        assert "https://chromewebstore.google.com/detail/watch-together-cookie-syn/beonlkadfoclpnfigngknbjfoifibagn" in constants
+        assert "href={EXTENSION_STORE_URL}" in room
+        assert "extensionDownloadUrl('chrome')" not in room
         assert "extensionDownloadUrl('firefox')" in room
         # There is no Safari build to offer.
         assert "extensionDownloadUrl('safari')" not in room

@@ -10,20 +10,20 @@ only connect to an instance operator you trust. Read the
 
 ## Install
 
-Open a room's Settings and use its extension download for your browser. You can
-also download the Chrome or Firefox ZIP from the project's
-[nightly release](https://github.com/rennerdo30/watch-together/releases/tag/nightly).
-There is no Chrome Web Store listing URL documented here yet.
-
 ### Chrome and Edge
 
-1. Extract the Chrome ZIP into a permanent folder.
-2. Open `chrome://extensions` in Chrome, or `edge://extensions` in Edge.
-3. Enable **Developer mode** and choose **Load unpacked**.
-4. Select the extracted folder containing `manifest.json`.
+Install [Watch Together Cookie Sync from the Chrome Web Store](https://chromewebstore.google.com/detail/watch-together-cookie-syn/beonlkadfoclpnfigngknbjfoifibagn).
+The same link is available in a room's Settings. Store-managed installations
+receive browser updates automatically; no Developer mode or unpacked folder is needed.
 
-Keep the folder in place. To update an unpacked installation, replace its files
-with the newer build and reload it on the browser's extensions page.
+### Development builds
+
+For extension development, download the Chrome ZIP from the project's
+[nightly release](https://github.com/rennerdo30/watch-together/releases/tag/nightly),
+extract it into a permanent folder, enable **Developer mode** in
+`chrome://extensions` or `edge://extensions`, and choose **Load unpacked**.
+Select the folder containing `manifest.json`. Keep the folder in place and reload
+the extension after replacing its files with a newer development build.
 
 ### Firefox
 
