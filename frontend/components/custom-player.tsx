@@ -892,16 +892,38 @@ export function CustomPlayer({
                     aria-label="Now playing"
                     aria-hidden={!controlsVisible}
                     className={cn(
-                        "pointer-events-none absolute inset-x-0 top-0 z-20 bg-gradient-to-b from-black/85 via-black/50 to-transparent px-5 pt-5 pb-14 sm:px-8 sm:pt-7 transition-opacity duration-300 motion-reduce:transition-none",
-                        controlsVisible ? "opacity-100" : "opacity-0"
+                        "pointer-events-none absolute inset-x-0 top-0 z-20 bg-gradient-to-b from-black/75 via-black/35 to-transparent transition-[opacity,transform] duration-300 ease-out motion-reduce:transition-none",
+                        isFullscreen ? "px-8 pt-7 pb-24" : "px-4 pt-3.5 pb-14",
+                        controlsVisible ? "translate-y-0 opacity-100" : "-translate-y-2 opacity-0"
                     )}
                 >
-                    <div className="mb-2 flex items-center gap-2 text-xs font-medium text-white/60">
-                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                        Now playing
+                    <div className={cn("flex items-center", isFullscreen ? "max-w-5xl gap-4" : "max-w-3xl gap-3")}>
+                        {channel && (
+                            <span
+                                aria-hidden="true"
+                                className={cn(
+                                    "flex shrink-0 items-center justify-center rounded-full bg-white/15 font-semibold text-white ring-1 ring-white/20 backdrop-blur-sm",
+                                    isFullscreen ? "h-11 w-11 text-base" : "h-8 w-8 text-xs"
+                                )}
+                            >
+                                {channel.trim().charAt(0).toUpperCase()}
+                            </span>
+                        )}
+                        <div className="min-w-0 [text-shadow:0_1px_3px_rgb(0_0_0/0.6)]">
+                            <h2
+                                title={title}
+                                className={cn(
+                                    "font-semibold leading-snug text-white",
+                                    isFullscreen ? "line-clamp-2 text-2xl tracking-tight" : "truncate text-[15px]"
+                                )}
+                            >
+                                {title}
+                            </h2>
+                            {channel && (
+                                <p className={cn("truncate text-white/70", isFullscreen ? "mt-0.5 text-base" : "text-xs")}>{channel}</p>
+                            )}
+                        </div>
                     </div>
-                    <h2 className="max-w-4xl line-clamp-2 text-lg font-semibold leading-snug tracking-tight text-white drop-shadow-md sm:text-2xl lg:text-3xl">{title}</h2>
-                    {channel && <p className="mt-2 max-w-4xl truncate text-sm font-medium text-white/70 sm:text-base">{channel}</p>}
                 </section>
             )}
 

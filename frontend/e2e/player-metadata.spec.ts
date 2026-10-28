@@ -19,6 +19,12 @@ test(`${fullscreen ? 'fullscreen' : 'normal'} metadata follows controls, hides w
   await expect(metadata).toContainText('A beautiful evening');
   await expect(metadata).toContainText('Evening Films');
   await expect(metadata).toHaveCSS('opacity', '1');
+  // A compact single line in the page, a larger heading in fullscreen: the
+  // overlay must not cover a third of a windowed player.
+  const heading = metadata.getByRole('heading');
+  const headingHeight = async () => (await heading.boundingBox())!.height;
+  if (fullscreen) await expect.poll(headingHeight).toBeGreaterThan(28);
+  else await expect.poll(headingHeight).toBeLessThanOrEqual(24);
   await expect(metadata).toHaveCSS('opacity', '0', { timeout: 8000 });
   await expect(video).toHaveCSS('cursor', 'none');
   await expect.poll(() => video.evaluate((v: HTMLVideoElement) => !v.paused && v.readyState >= 2)).toBe(true);
