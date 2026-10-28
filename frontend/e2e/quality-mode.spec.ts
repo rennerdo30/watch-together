@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 
 import { BANDWIDTH_MEMORY_KEY } from '../lib/bandwidth-memory';
 import { stubAdaptiveStream, type VideoRung } from './adaptive-fixture';
+import { openPlayerSettings } from './player-settings';
 
 /**
  * Auto quality is capped to what the player can show, plus a rung. That cap
@@ -34,8 +35,6 @@ async function openRoom(page: Page, label: string) {
   return media;
 }
 
-const settingsButton = (page: Page) =>
-  page.getByRole('button', { name: 'Quality and sync settings' });
 
 /** The rung auto settled on, read from the Auto button in the panel. */
 async function autoRung(page: Page): Promise<number> {
@@ -50,7 +49,7 @@ async function chooseMode(page: Page, mode: 'balanced' | 'highest' | 'saver') {
 
 test('the mode decides how far above the player auto may go', async ({ page }) => {
   await openRoom(page, 'modes');
-  await settingsButton(page).click();
+  await openPlayerSettings(page, 'Quality');
 
   // Balanced: the covering rung plus one. The 1280x720 viewport's player is
   // covered by 720, so auto settles on 1080 and 2160 stays out of reach.
@@ -73,7 +72,7 @@ test('the mode decides how far above the player auto may go', async ({ page }) =
 
 test('the chosen mode is this browser\'s, and survives a reload', async ({ page }) => {
   await openRoom(page, 'persist');
-  await settingsButton(page).click();
+  await openPlayerSettings(page, 'Quality');
   await chooseMode(page, 'highest');
   expect(await page.evaluate(() => localStorage.getItem('w2g-player-quality-mode')))
     .toBe('highest');
@@ -84,7 +83,7 @@ test('the chosen mode is this browser\'s, and survives a reload', async ({ page 
   await expect(media).toHaveCount(1, { timeout: 15_000 });
   await expect.poll(() => media.evaluate((v: HTMLVideoElement) => v.readyState >= 2),
     { timeout: 20_000 }).toBe(true);
-  await settingsButton(page).click();
+  await openPlayerSettings(page, 'Quality');
   await expect(page.getByLabel('Auto quality')).toHaveValue('highest');
   await expect.poll(() => autoRung(page), { timeout: 15_000 }).toBe(2160);
 });

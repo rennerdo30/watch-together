@@ -34,7 +34,7 @@ async function playingFixture(page: import('@playwright/test').Page) {
 
 test('a click on a faded control reveals the controls instead of pausing the room', async ({ page }) => {
   const { media, pauseFrames } = await playingFixture(page);
-  const settings = page.getByRole('button', { name: 'Quality and sync settings' });
+  const settings = page.getByRole('button', { name: 'Player settings', exact: true });
   const bar = page.getByTestId('control-bar');
 
   // Wake the controls, note where Settings is, then rest the pointer away
@@ -56,14 +56,14 @@ test('a click on a faded control reveals the controls instead of pausing the roo
   // With the controls up, the same click opens Settings — and still pauses nothing.
   await page.waitForTimeout(600);
   await settings.click();
-  await expect(page.getByLabel('Quality and sync settings').last()).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Player settings' })).toBeVisible();
   expect(pauseFrames).toHaveLength(0);
 });
 
 test('the controls do not fade while the pointer rests on them', async ({ page }) => {
   await playingFixture(page);
   const bar = page.getByTestId('control-bar');
-  const settings = page.getByRole('button', { name: 'Quality and sync settings' });
+  const settings = page.getByRole('button', { name: 'Player settings', exact: true });
   await settings.hover();
   await page.waitForTimeout(HIDE_DELAY_MS + 800);
   await expect(bar).toHaveCSS('pointer-events', 'auto');

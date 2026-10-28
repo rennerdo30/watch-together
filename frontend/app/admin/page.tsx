@@ -305,9 +305,11 @@ export default function AdminPage() {
         {/* Rooms */}
         <SectionCard title="Rooms" icon={<ListVideo aria-hidden="true" className="h-4 w-4" />}>
           {overview && overview.rooms.length > 0 ? (
-            <div className="overflow-x-auto">
+            // Bounded: with hundreds of rooms the table made the panel
+            // thousands of pixels tall and buried everything below it.
+            <div data-testid="admin-rooms" className="relative max-h-[28rem] overflow-auto">
               <table className="w-full text-left text-sm">
-                <thead className="ui-label text-neutral-500">
+                <thead className="ui-label sticky top-0 z-10 bg-[color:var(--bg-secondary)] text-neutral-500">
                   <tr>
                     <th className="pb-2 pr-4">Room</th>
                     <th className="pb-2 pr-4">Viewers</th>

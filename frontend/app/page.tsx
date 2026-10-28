@@ -3,8 +3,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { AlertTriangle, ArrowRight, Play, Plus, RefreshCw, Users, Video } from 'lucide-react';
+import { ArrowRight, Check, Play, RefreshCw, Users } from 'lucide-react';
 import { BrandMark } from '@/components/brand-mark';
+import { Mascot } from '@/components/mascot';
 import { fetchRooms, type RoomSummary } from '@/lib/api';
 import { ColorModeToggle } from '@/components/color-mode-toggle';
 import {
@@ -32,6 +33,8 @@ export default function Home() {
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // The mascot cheers while the pointer or focus is on "Create room".
+  const [excited, setExcited] = useState(false);
 
   const loadRooms = useCallback(async () => {
     try {
@@ -71,12 +74,12 @@ export default function Home() {
 
   return (
     <div className="app-shell flex min-h-dvh flex-col bg-neutral-950 text-white">
-      <header className="flex h-16 shrink-0 items-center justify-between gap-4 border-b border-white/10 px-4 sm:px-6">
-        <div className="flex items-center gap-3">
-          <BrandMark className="h-9 w-9 shrink-0" />
-          <span className="text-base font-semibold tracking-tight">{APP_NAME}</span>
+      <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-white/10 px-4 sm:px-6">
+        <div className="flex items-center gap-2.5">
+          <BrandMark className="h-8 w-8 shrink-0" />
+          <span className="text-[15px] font-semibold tracking-tight">{APP_NAME}</span>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           {!loading && !loadError && (
             <p className="flex items-center gap-2 text-sm text-neutral-400">
               <span
@@ -92,97 +95,101 @@ export default function Home() {
         </div>
       </header>
 
-      <div className="flex flex-1 flex-col lg:min-h-0 lg:flex-row">
-        <main className="flex flex-1 items-center justify-center px-4 py-12 sm:px-8 sm:py-16">
-          <div className="w-full max-w-md space-y-8">
-            <div className="space-y-3">
-              <h1 className="text-3xl font-semibold tracking-tight text-balance sm:text-4xl">
-                Watch videos together
-              </h1>
-              <p className="text-base text-neutral-400 sm:text-lg">
-                Synchronized playback with friends. YouTube, Twitch, and more.
-              </p>
-            </div>
+      {/* Two columns on a wide screen, stacked on a narrow one. The room list
+          scrolls inside its own panel: it used to stretch the page to the
+          height of every room, which with a few hundred rooms pushed the
+          create form out of sight. */}
+      <main className="mx-auto grid w-full max-w-6xl flex-1 items-center gap-10 px-4 py-10 sm:px-8 lg:grid-cols-[minmax(0,1fr)_24rem] lg:gap-16 lg:py-16">
+        <section aria-labelledby="hero-heading" className="relative">
+          <div aria-hidden="true" className="pointer-events-none absolute -left-24 -top-24 h-72 w-72 rounded-full bg-[color:var(--accent-glow)] blur-3xl" />
+          <Mascot
+            followPointer
+            mood={excited ? 'happy' : 'idle'}
+            className="relative mb-6 h-24 w-24 sm:h-28 sm:w-28"
+          />
+          <h1 id="hero-heading" className="relative text-4xl font-semibold tracking-tight text-balance sm:text-5xl">
+            Watch videos together
+          </h1>
+          <p className="relative mt-4 max-w-lg text-base text-neutral-400 sm:text-lg">
+            Synchronized playback with friends, wherever they are. YouTube, Twitch, Kick and more than a thousand other sites.
+          </p>
 
-            <form onSubmit={createRoom} className="space-y-3">
-              <div>
-                <label htmlFor="room-name" className="sr-only">
-                  Room name
-                </label>
-                <div className="relative">
-                  <Plus
-                    aria-hidden="true"
-                    className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-neutral-500"
-                  />
-                  <input
-                    id="room-name"
-                    name="room-name"
-                    value={roomName}
-                    onChange={(event) => setRoomName(event.target.value)}
-                    placeholder="Room name (optional)"
-                    autoComplete="off"
-                    aria-describedby="room-name-hint"
-                    className="h-14 w-full rounded-xl border border-neutral-700 bg-neutral-900 pl-12 pr-4 text-base placeholder:text-neutral-500 hover:border-neutral-600 focus:border-[color:var(--accent-primary)]"
-                  />
-                </div>
-                <p id="room-name-hint" className="mt-2 text-xs text-neutral-500">
-                  Letters, numbers, hyphens and underscores. Leave empty for a random room.
-                </p>
-              </div>
+          <form onSubmit={createRoom} className="relative mt-8 max-w-lg">
+            <label htmlFor="room-name" className="sr-only">
+              Room name
+            </label>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <input
+                id="room-name"
+                name="room-name"
+                value={roomName}
+                onChange={(event) => setRoomName(event.target.value)}
+                placeholder="Room name (optional)"
+                autoComplete="off"
+                aria-describedby="room-name-hint"
+                className="h-11 min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-4 text-sm placeholder:text-neutral-500 hover:border-white/20"
+              />
               <button
                 type="submit"
-                className="flex h-14 w-full items-center justify-center gap-2 rounded-xl bg-[color:var(--accent-primary)] text-base font-semibold on-accent-light shadow-md hover:brightness-110"
+                onPointerEnter={() => setExcited(true)}
+                onPointerLeave={() => setExcited(false)}
+                onFocus={() => setExcited(true)}
+                onBlur={() => setExcited(false)}
+                className="flex h-11 shrink-0 items-center justify-center gap-2 rounded-lg bg-[color:var(--accent-primary)] px-5 text-sm font-semibold on-accent shadow-md transition-[filter] hover:brightness-110"
               >
                 Create room
-                <ArrowRight aria-hidden="true" className="h-5 w-5" />
+                <ArrowRight aria-hidden="true" className="h-4 w-4" />
               </button>
-            </form>
+            </div>
+            <p id="room-name-hint" className="mt-2 text-xs text-neutral-500">
+              Letters, numbers, hyphens and underscores. Leave it empty for a random name.
+            </p>
+          </form>
 
-            <ul className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-neutral-400">
-              <li>No sign up required</li>
-              <li>Free forever</li>
-              <li>Self-hostable</li>
-            </ul>
-          </div>
-        </main>
+          <ul className="relative mt-8 flex flex-wrap gap-x-5 gap-y-2 text-sm text-neutral-400">
+            {['No sign-up', 'Free', 'Self-hostable'].map((feature) => (
+              <li key={feature} className="flex items-center gap-1.5">
+                <Check aria-hidden="true" className="h-4 w-4 text-[color:var(--accent-primary)]" />
+                {feature}
+              </li>
+            ))}
+          </ul>
+        </section>
 
-        <aside
+        <section
           aria-labelledby="active-rooms-heading"
-          className="app-surface flex w-full flex-col border-t border-white/10 bg-neutral-900/50 lg:w-96 lg:border-l lg:border-t-0"
+          className="app-surface flex max-h-[32rem] min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-neutral-900/60"
         >
-          <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-white/10 px-5">
-            <h2 id="active-rooms-heading" className="text-sm font-semibold">
+          <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-white/10 pl-4 pr-2">
+            <h2 id="active-rooms-heading" className="flex items-center gap-2 text-sm font-semibold">
               Active rooms
-            </h2>
-            <div className="flex items-center gap-2">
               {!loading && !loadError && (
-                <span className="ui-numeric text-sm text-neutral-400">
+                <span className="ui-numeric rounded-full bg-white/10 px-1.5 text-2xs font-medium text-neutral-300">
                   {numberFormatter.format(rooms.length)}
                 </span>
               )}
-              <button
-                type="button"
-                onClick={retry}
-                aria-label="Refresh the list of active rooms"
-                className="flex h-7 w-7 items-center justify-center rounded-lg text-neutral-400 hover:bg-white/10 hover:text-white"
-              >
-                <RefreshCw
-                  aria-hidden="true"
-                  className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`}
-                />
-              </button>
-            </div>
+            </h2>
+            <button
+              type="button"
+              onClick={retry}
+              aria-label="Refresh the list of active rooms"
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-neutral-400 hover:bg-white/10 hover:text-white"
+            >
+              <RefreshCw
+                aria-hidden="true"
+                className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`}
+              />
+            </button>
           </div>
 
-          <div className="flex-1 space-y-2 overflow-y-auto p-4 lg:min-h-0">
+          {/* `relative` so the rows' screen-reader text (absolutely positioned)
+              scrolls with the list instead of stretching the page. */}
+          <div data-testid="active-rooms-list" className="relative min-h-0 flex-1 overflow-y-auto p-2">
             {loading ? (
-              <ul className="space-y-2" aria-busy="true" aria-label="Loading active rooms">
+              <ul className="space-y-1" aria-busy="true" aria-label="Loading active rooms">
                 {Array.from({ length: SKELETON_ROW_COUNT }).map((_, index) => (
-                  <li
-                    key={index}
-                    className="flex items-center gap-4 rounded-xl bg-white/5 p-4"
-                  >
-                    <span className="h-10 w-10 shrink-0 animate-pulse rounded-lg bg-white/10" />
+                  <li key={index} className="flex items-center gap-3 rounded-xl p-2.5">
+                    <span className="h-9 w-9 shrink-0 animate-pulse rounded-lg bg-white/10" />
                     <span className="flex-1 space-y-2">
                       <span className="block h-3 w-2/3 animate-pulse rounded bg-white/10" />
                       <span className="block h-3 w-1/3 animate-pulse rounded bg-white/5" />
@@ -191,43 +198,40 @@ export default function Home() {
                 ))}
               </ul>
             ) : loadError ? (
-              <div
-                role="alert"
-                className="flex flex-col items-center gap-3 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-10 text-center"
-              >
-                <AlertTriangle aria-hidden="true" className="h-5 w-5 text-amber-400" />
+              <div role="alert" className="flex flex-col items-center gap-3 px-4 py-10 text-center">
+                <Mascot mood="sad" className="h-14 w-14" />
                 <p className="text-sm text-neutral-300">{loadError}</p>
                 <button
                   type="button"
                   onClick={retry}
-                  className="rounded-lg border border-white/10 px-3 py-1.5 text-xs font-medium text-neutral-300 hover:bg-white/10 hover:text-white"
+                  className="h-8 rounded-lg border border-white/10 px-3 text-xs font-medium text-neutral-300 hover:bg-white/10 hover:text-white"
                 >
                   Try again
                 </button>
               </div>
             ) : rooms.length > 0 ? (
-              <ul className="space-y-2">
+              <ul className="space-y-1">
                 {rooms.map((room) => (
                   <li key={room.id}>
                     <Link
                       href={`/room/${room.id}`}
-                      className="group flex items-center gap-4 rounded-xl bg-white/5 p-4 hover:bg-white/10"
+                      className="group flex items-center gap-3 rounded-xl p-2.5 hover:bg-white/5"
                     >
                       <span
                         aria-hidden="true"
-                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white/10 group-hover:bg-[color:var(--accent-primary)]"
+                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/10 group-hover:bg-[color:var(--accent-primary)]"
                       >
-                        <Play className="icon-on-surface h-4 w-4" />
+                        <Play className="icon-on-surface h-3.5 w-3.5" />
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate font-medium">{room.name || room.id}</span>
-                        <span className="block truncate text-sm text-neutral-400">
-                          {room.current_video || 'No video playing'}
+                        <span className="block truncate text-sm font-medium">{room.name || room.id}</span>
+                        <span className="block truncate text-xs text-neutral-400">
+                          {room.current_video || 'Nothing playing'}
                         </span>
                       </span>
-                      <span className="flex items-center gap-1.5 text-sm text-neutral-400">
-                        <Users aria-hidden="true" className="h-4 w-4" />
-                        {numberFormatter.format(room.active_users)}
+                      <span className="flex shrink-0 items-center gap-1 text-xs text-neutral-400">
+                        <Users aria-hidden="true" className="h-3.5 w-3.5" />
+                        <span className="ui-numeric">{numberFormatter.format(room.active_users)}</span>
                         <span className="sr-only">
                           {room.active_users === 1 ? 'viewer' : 'viewers'}
                         </span>
@@ -237,22 +241,17 @@ export default function Home() {
                 ))}
               </ul>
             ) : (
-              <div className="flex flex-col items-center justify-center px-4 py-12 text-center">
-                <span
-                  aria-hidden="true"
-                  className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-white/5"
-                >
-                  <Video className="h-5 w-5 text-neutral-400" />
-                </span>
+              <div className="flex flex-col items-center justify-center px-4 py-10 text-center">
+                <Mascot mood="sleepy" className="mb-3 h-14 w-14" />
                 <p className="text-sm font-medium text-neutral-300">No active rooms</p>
-                <p className="mt-1 text-sm text-neutral-500">Create one to get started</p>
+                <p className="mt-1 text-xs text-neutral-500">Create one and it shows up here.</p>
               </div>
             )}
           </div>
-        </aside>
-      </div>
+        </section>
+      </main>
 
-      <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-white/10 px-4 py-3 text-sm text-neutral-500 sm:px-6">
+      <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-white/10 px-4 py-3 text-xs text-neutral-500 sm:px-6">
         <span>{APP_NAME}</span>
         <a
           href={REPOSITORY_URL}

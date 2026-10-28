@@ -1163,15 +1163,15 @@ class TestOneBrandMark:
     circle left from an older theme, while the app itself is red; the home
     page showed a generic TV icon and the extension its own purple glyph. The
     orange couch that replaced them neither matched the accent nor said
-    "video"; the mark is now two viewers before a screen, in teal, because a
-    red tile with a play shape is YouTube's look.
+    "video". The mark is now a little screen with a face (also the app's
+    mascot), in teal: a red tile with a play shape is YouTube's look.
     """
 
     FRONTEND = REPO_ROOT / "frontend"
     EXTENSION = REPO_ROOT / "extension"
-    # The mark: the lit screen, and the shoulders of the two viewers.
-    ECHO = 'x="10" y="10" width="44" height="31" rx="6"'
-    PLAY = "M11 64v-5.5C11 52 16.5 48 23.5 48S36 52 36 58.5V64z"
+    # The mark: the screen, and the stand under it.
+    ECHO = 'x="11" y="15" width="42" height="29" rx="9"'
+    PLAY = "M24 50h16"
 
     def test_every_logo_file_is_the_same_mark(self):
         for path in (self.FRONTEND / "public" / "logo.svg", self.FRONTEND / "public" / "favicon.svg",

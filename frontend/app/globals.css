@@ -422,6 +422,72 @@ textarea:focus {
 }
 
 /* =============================================================================
+   Mascot (components/mascot.tsx)
+   Slow and small: it breathes, blinks and glances around. The reduced-motion
+   rule above stills all of it.
+   ========================================================================== */
+
+@keyframes mascot-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2.5px); }
+}
+
+@keyframes mascot-shadow {
+  0%, 100% { transform: scaleX(1); opacity: 0.18; }
+  50% { transform: scaleX(0.88); opacity: 0.12; }
+}
+
+@keyframes mascot-blink {
+  0%, 93%, 100% { transform: scaleY(1); }
+  96% { transform: scaleY(0.1); }
+}
+
+@keyframes mascot-look {
+  0%, 38% { transform: translateX(0); }
+  44%, 58% { transform: translateX(-3px); }
+  64%, 78% { transform: translateX(3px); }
+  84%, 100% { transform: translateX(0); }
+}
+
+@keyframes mascot-z {
+  0% { opacity: 0; transform: translate(0, 0); }
+  25% { opacity: 1; }
+  100% { opacity: 0; transform: translate(5px, -12px); }
+}
+
+.mascot .mascot-body {
+  animation: mascot-bob 3.4s ease-in-out infinite;
+}
+
+.mascot .mascot-shadow {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: mascot-shadow 3.4s ease-in-out infinite;
+}
+
+.mascot .mascot-eye {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: mascot-blink 4.8s infinite;
+}
+
+.mascot .mascot-look {
+  animation: mascot-look 11s ease-in-out infinite;
+}
+
+.mascot .mascot-eyes {
+  transition: transform 0.25s ease-out;
+}
+
+.mascot .mascot-z {
+  animation: mascot-z 2.8s ease-out infinite;
+}
+
+.mascot .mascot-z-late {
+  animation-delay: 1.4s;
+}
+
+/* =============================================================================
    Type scale
    -----------------------------------------------------------------------------
    Size and weight carry the hierarchy; case and letter-spacing are left

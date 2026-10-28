@@ -19,6 +19,13 @@ test('an admin sees the panel with every cache tier', async ({ page }) => {
   // The cache inspection actually loaded data (the budget renders once the
   // /api/admin/cache response arrives).
   await expect(page.getByText(/of .* budget/)).toBeVisible({ timeout: 15_000 });
+
+  // The rooms table scrolls in its panel rather than growing with every room.
+  const rooms = page.getByTestId('admin-rooms');
+  if (await rooms.count()) {
+    await expect(rooms).toHaveCSS('max-height', '448px');
+    await expect(rooms).toHaveCSS('overflow-y', 'auto');
+  }
 });
 
 test('a non-admin is refused', async ({ page }) => {

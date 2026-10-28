@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 import { stubAdaptiveStream } from './adaptive-fixture';
+import { openPlayerSettings } from './player-settings';
 
 /**
  * Signed stream URLs expire; past the `expire` in them the CDN answers 403
@@ -78,7 +79,7 @@ test('a manual quality survives the video being loaded again for fresh links', a
   const media = page.locator('video[data-stream-type="mse"]');
   await expect.poll(() => media.evaluate((v: HTMLVideoElement) => v.readyState), { timeout: 20_000 }).toBeGreaterThanOrEqual(2);
 
-  await page.getByRole('button', { name: 'Quality and sync settings' }).click();
+  await openPlayerSettings(page, 'Quality');
   await page.getByRole('button', { name: /720p/ }).click();
   await expect(page.getByRole('button', { name: /720p/ })).toHaveAttribute('aria-pressed', 'true');
 
@@ -90,7 +91,7 @@ test('a manual quality survives the video being loaded again for fresh links', a
   await expect.poll(() => afterReload.length, { timeout: 20_000 }).toBeGreaterThan(0);
 
   if (!(await page.getByRole('button', { name: 'Auto', exact: true }).isVisible())) {
-    await page.getByRole('button', { name: 'Quality and sync settings' }).click();
+    await openPlayerSettings(page, 'Quality');
   }
   await expect(page.getByRole('button', { name: /720p/ })).toHaveAttribute('aria-pressed', 'true');
   // Audio requests carry no rung; every video request after the reload is the pick.

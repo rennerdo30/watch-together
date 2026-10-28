@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { stubAdaptiveStream } from './adaptive-fixture';
+import { openPlayerSettings } from './player-settings';
 
 test.use({ launchOptions: { channel: 'chromium', args: ['--enable-unsafe-webgpu', '--enable-unsafe-swiftshader'] } });
 async function openPlayer(page: Page, label: string) {
@@ -11,7 +12,7 @@ async function openPlayer(page: Page, label: string) {
   const video = page.locator('video[data-stream-type="mse"]');
   await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.readyState)).toBeGreaterThanOrEqual(2);
   await video.evaluate((v: HTMLVideoElement) => { v.pause(); v.loop = true; v.muted = true; v.dataset.identity = 'original'; });
-  await page.getByRole('button', { name: 'Quality and sync settings', exact: true }).click();
+  await openPlayerSettings(page, 'Picture');
   return { video, manifests, select: page.getByLabel('Motion smoothing (beta)'), status: page.getByRole('status', { name: 'Motion smoothing status' }), layer: page.locator('[data-frame-generation]') };
 }
 

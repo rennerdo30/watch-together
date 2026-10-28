@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 
 import { resumePosition } from '../lib/playback';
 import { buildManifest, stubAdaptiveStream, type VideoRung } from './adaptive-fixture';
+import { openPlayerSettings } from './player-settings';
 
 /**
  * One player across videos, and the next one preloaded.
@@ -181,12 +182,12 @@ test('what one video left behind does not reach the next', async ({ page }) => {
     return route.fallback();
   });
 
-  const settings = page.getByRole('button', { name: 'Quality and sync settings' });
+  const settings = page.getByRole('button', { name: 'Player settings', exact: true });
   const media = await loadNow(page, FIRST);
   await expect.poll(() => media.evaluate((v: HTMLVideoElement) => v.readyState >= 2), { timeout: 20_000 }).toBe(true);
   await media.evaluate((v: HTMLVideoElement) => v.pause());
   await page.mouse.move(300, 120);
-  await settings.click();
+  await openPlayerSettings(page, 'Quality');
   await expect(page.getByRole('button', { name: /^1080p/ })).toBeVisible();
   await settings.click();
 
@@ -199,7 +200,7 @@ test('what one video left behind does not reach the next', async ({ page }) => {
   await expect(page.getByRole('alert').filter({ hasText: 'Playback Issue' })).toHaveCount(0);
   // And its quality list is its own.
   await page.mouse.move(300, 120);
-  await settings.click();
+  await openPlayerSettings(page, 'Quality');
   await expect(page.getByRole('button', { name: /^360p/ })).toBeVisible();
   await expect(page.getByRole('button', { name: /^1080p/ })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^720p/ })).toHaveCount(0);

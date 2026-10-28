@@ -14,6 +14,7 @@ import {
     MonitorUp, MonitorStop, Globe, Bell, BellOff, Volume2, AlertTriangle
 } from 'lucide-react';
 import { BrandMark } from '@/components/brand-mark';
+import { Mascot } from '@/components/mascot';
 import { prewarmPosition, prewarmVideo } from '@/lib/prewarm';
 import { StartupTimer, type PlaybackEngine } from '@/lib/playback-timing';
 import { resumePosition, type PlaybackStart } from '@/lib/playback';
@@ -1550,13 +1551,11 @@ export default function RoomPage() {
                                 />
                             </ErrorBoundary>
                         ) : isResolving ? null : (
-                            <div className="h-full w-full flex flex-col items-center justify-center gap-3 px-6 text-center">
-                                <div className="w-12 h-12 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center">
-                                    <Play aria-hidden="true" className="w-5 h-5 text-neutral-400" />
-                                </div>
-                                <div className="tracking-normal">
-                                    <h2 className="text-sm font-semibold text-neutral-200">Nothing playing yet</h2>
-                                    <p className="text-xs text-neutral-400 mt-1 max-w-xs">
+                            <div className="h-full w-full flex flex-col items-center justify-center gap-4 px-6 text-center">
+                                <Mascot followPointer className="h-20 w-20 sm:h-24 sm:w-24" />
+                                <div>
+                                    <h2 className="text-base font-semibold text-neutral-100">Nothing playing yet</h2>
+                                    <p className="text-sm text-neutral-400 mt-1 max-w-xs">
                                         Paste a video link below to start watching, or add one to the queue.
                                     </p>
                                 </div>
@@ -2067,9 +2066,12 @@ export default function RoomPage() {
                                 <div className="h-full flex flex-col">
                                     <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
                                         {queue.length === 0 && (
-                                            <p className="px-4 py-10 text-center text-xs text-neutral-400">
-                                                The queue is empty. Paste a link and choose Queue to line up a video.
-                                            </p>
+                                            <div className="flex flex-col items-center gap-3 px-4 py-10 text-center">
+                                                <Mascot mood="sleepy" className="h-12 w-12" />
+                                                <p className="max-w-[16rem] text-xs text-neutral-400">
+                                                    The queue is empty. Paste a link and choose Queue to line up a video.
+                                                </p>
+                                            </div>
                                         )}
                                         <SortableContext
                                             items={queue.map(item => item.original_url)}

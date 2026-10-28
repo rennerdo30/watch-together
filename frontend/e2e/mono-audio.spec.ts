@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 
 import { MONO_DOWNMIX_CONFIG } from '../lib/mono-audio';
 import { stubAdaptiveStream } from './adaptive-fixture';
+import { openPlayerSettings } from './player-settings';
 
 /**
  * Mono mode folds every channel into one, so both speakers carry the same mix.
@@ -124,14 +125,14 @@ async function openRoom(page: Page, label: string) {
 }
 
 const settingsButton = (page: Page) =>
-  page.getByRole('button', { name: 'Quality and sync settings' });
+  page.getByRole('button', { name: 'Player settings', exact: true });
 
 async function toggleMono(page: Page, expected: 'On' | 'Off') {
-  await settingsButton(page).click();
-  const toggle = page.getByRole('button', { name: /mono audio/i });
+  await openPlayerSettings(page, 'Sound');
+  const toggle = page.getByRole('switch', { name: /mono audio/i });
   await expect(toggle).toBeVisible();
   await toggle.click();
-  await expect(toggle).toHaveAttribute('aria-pressed', String(expected === 'On'));
+  await expect(toggle).toHaveAttribute('aria-checked', String(expected === 'On'));
   await settingsButton(page).click();
 }
 
@@ -236,7 +237,7 @@ test('mono survives a reload and sits after the normalization stage',
       'AudioWorkletNode', 'AudioDestinationNode',
     ]);
 
-    await settingsButton(page).click();
-    await expect(page.getByRole('button', { name: /mono audio/i }))
-      .toHaveAttribute('aria-pressed', 'true');
+    await openPlayerSettings(page, 'Sound');
+    await expect(page.getByRole('switch', { name: /mono audio/i }))
+      .toHaveAttribute('aria-checked', 'true');
   });

@@ -1,17 +1,18 @@
 'use client';
 
-import { parseFramegenMode, type FramegenMode } from '@/lib/framegen/policy';
+import type { FramegenMode } from '@/lib/framegen/policy';
 
-import { useEffect, useId, useRef, useState } from 'react';
-import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, Settings, Activity, PictureInPicture, Ear, Headphones } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, Settings, Activity, PictureInPicture, Ear } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { parseUpscaleMode, type UpscaleMode } from '@/lib/upscaling/policy';
-import { parseQualityMode, type QualityMode } from '@/lib/quality-mode';
+import type { UpscaleMode } from '@/lib/upscaling/policy';
+import type { QualityMode } from '@/lib/quality-mode';
 import { sponsorCategoryColor, sponsorCategoryLabel, type SponsorSegment } from '@/lib/sponsorblock';
 import { chapterAt, type VideoChapter } from '@/lib/chapters';
 import { storyboardFrame, type Storyboard } from '@/lib/storyboard';
 import { HOVER_PREWARM_DELAY_MS } from '@/lib/constants';
 import type { ShakaAudioTrack } from './player/hooks';
+import { PlayerSettingsMenu } from './player-settings-menu';
 
 
 interface PlayerControlsProps {
@@ -134,10 +135,6 @@ export function PlayerControls({
     chapters = [],
     onPointerOverChange,
 }: PlayerControlsProps) {
-    const enhancementSelectId = useId();
-    const framegenSelectId = useId();
-    const qualityModeSelectId = useId();
-    const audioTrackSelectId = useId();
     // Where on the seek bar the pointer is, as a fraction, or null when away.
     const [hoverFraction, setHoverFraction] = useState<number | null>(null);
     const progressRef = useRef<HTMLDivElement>(null);
@@ -189,6 +186,7 @@ export function PlayerControls({
     const currentChapter = chapterAt(chapters, currentTime);
 
     return (
+        <>
         <div className={cn(
             "absolute inset-0 pointer-events-none transition-all duration-300 z-40",
             visible ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0 pointer-events-none",
@@ -437,8 +435,8 @@ export function PlayerControls({
                         <button
                             type="button"
                             onClick={onSettingsToggle}
-                            title="Quality and sync settings"
-                            aria-label="Quality and sync settings"
+                            title="Player settings"
+                            aria-label="Player settings"
                             aria-expanded={showSettings}
                             className={cn(
                                 "w-8 h-8 rounded-full flex items-center justify-center transition-all",
@@ -476,239 +474,6 @@ export function PlayerControls({
             </div>
             </div>
 
-            {/* Quality Settings Panel */}
-            {showSettings && (
-                <div aria-label="Quality and sync settings" className="absolute bottom-20 right-2 sm:right-4 w-56 max-w-[calc(100%-1rem)] max-h-[calc(100%-5.5rem)] flex flex-col pointer-events-auto bg-zinc-900/95 backdrop-blur-xl border border-white/10 rounded-xl overflow-hidden shadow-2xl">
-                    <div className="px-4 py-3 border-b border-white/5 shrink-0">
-                        <span className="text-xs font-medium text-white">Quality</span>
-                    </div>
-
-                    <div className="p-2 min-h-0 overflow-y-auto">
-                        {onAudioTrackChange && audioTracks.length > 1 && (
-                            <div className="px-3 py-2 border-b border-white/5 mb-2">
-                                <label htmlFor={audioTrackSelectId} className="block text-xs text-white mb-2">
-                                    Audio track
-                                </label>
-                                <select
-                                    id={audioTrackSelectId}
-                                    aria-label="Audio track"
-                                    value={currentAudioTrack}
-                                    onChange={(event) => onAudioTrackChange(Number(event.target.value))}
-                                    className="w-full rounded-md border border-white/15 bg-zinc-800 px-2 py-2 text-xs text-white focus-visible:outline-2 focus-visible:outline-[color:var(--accent-primary)]"
-                                >
-                                    {audioTracks.map((track) => (
-                                        <option key={track.index} value={track.index}>
-                                            {track.label || `${track.language || 'Unknown language'}${track.isOriginal ? ' · Original' : ''}`}
-                                        </option>
-                                    ))}
-                                </select>
-                                <p className="mt-2 text-[10px] leading-relaxed text-zinc-400">
-                                    Your audio choice applies to this video only.
-                                </p>
-                            </div>
-                        )}
-                        {onEnhancementModeChange && (
-                            <div className="px-3 py-2 border-b border-white/5 mb-2">
-                                <label htmlFor={enhancementSelectId} className="flex items-center justify-between text-xs text-white mb-2">
-                                    Video enhancement
-                                    <span className="text-[10px] rounded px-1.5 py-0.5 bg-amber-400/10 text-amber-300">Beta</span>
-                                </label>
-                                <select id={enhancementSelectId} aria-label="Video enhancement (beta)"
-                                    value={enhancementMode}
-                                    onChange={event => onEnhancementModeChange(parseUpscaleMode(event.target.value))}
-                                    className="w-full rounded-md border border-white/15 bg-zinc-800 px-2 py-2 text-xs text-white focus-visible:outline-2 focus-visible:outline-[color:var(--accent-primary)]">
-                                    <option value="off">Off</option>
-                                    <option value="auto">Auto — detect content</option>
-                                    <option value="animation">Animation</option>
-                                    <option value="general">General / live action</option>
-                                </select>
-                                <p className="mt-2 text-[10px] leading-relaxed text-zinc-400">Runs on your device. Applies only to your picture. May increase battery use.</p>
-                                {enhancementMode !== 'off' && (
-                                    <p role="status" aria-label="Video enhancement status" className="mt-2 text-[10px] leading-relaxed text-amber-200/90">
-                                        {enhancementStatus}
-                                    </p>
-                                )}
-                            </div>
-                        )}
-                        {onFramegenModeChange && (
-                            <div className="px-3 py-2 border-b border-white/5 mb-2">
-                                <label className="block text-xs text-white mb-2" htmlFor={framegenSelectId}>Motion smoothing (beta)</label>
-                                <select id={framegenSelectId} aria-label="Motion smoothing (beta)" value={framegenMode}
-                                    onChange={event => onFramegenModeChange(parseFramegenMode(event.target.value))}
-                                    className="w-full rounded-md border border-white/15 bg-zinc-800 px-2 py-2 text-xs text-white">
-                                    <option value="off">Off</option><option value="30">30 fps</option><option value="60">60 fps</option>
-                                </select>
-                                <p className="mt-2 text-[10px] leading-relaxed text-zinc-400">Local AI for personal, non-commercial use. Adds 120 ms of picture/audio delay. Temporarily replaces upscaling; may increase battery use.</p>
-                                {framegenMode !== 'off' && <p role="status" aria-label="Motion smoothing status" className="mt-2 text-[10px] leading-relaxed text-amber-200/90">{framegenStatus}</p>}
-                            </div>
-                        )}
-                        {/* Mono audio */}
-                        {onToggleMono && (
-                            <div className="px-3 py-2 border-b border-white/5 mb-2">
-                                <button
-                                    type="button"
-                                    onClick={onToggleMono}
-                                    aria-pressed={Boolean(monoAudio)}
-                                    className="flex w-full items-center justify-between gap-2 text-xs text-white rounded-md focus-visible:outline-2 focus-visible:outline-[color:var(--accent-primary)]"
-                                >
-                                    <span className="flex items-center gap-1.5">
-                                        <Headphones aria-hidden="true" className="w-3.5 h-3.5" /> Mono audio
-                                    </span>
-                                    <span className={cn(
-                                        "text-[10px] rounded px-1.5 py-0.5",
-                                        monoAudio
-                                            ? "bg-[color:var(--accent-glow)] text-[color:var(--accent-primary)]"
-                                            : "bg-white/10 text-zinc-400"
-                                    )}>
-                                        {monoAudio ? 'On' : 'Off'}
-                                    </span>
-                                </button>
-                                <p className="mt-2 text-[10px] leading-relaxed text-zinc-400">
-                                    Both speakers play the same mix, so nothing is lost on one side. Affects only your audio.
-                                </p>
-                            </div>
-                        )}
-
-                        {onToggleNormalization && (
-                            <div className="px-3 py-2 border-b border-white/5 mb-2">
-                                <button type="button" aria-label="Normalize volume" aria-pressed={Boolean(normalizationActive)} onClick={onToggleNormalization}
-                                    className="flex w-full items-center justify-between gap-2 text-xs text-white rounded-md focus-visible:outline-2 focus-visible:outline-[color:var(--accent-primary)]">
-                                    <span>Normalize volume</span><span>{normalizationActive ? 'On' : 'Off'}</span>
-                                </button>
-                                <p className="mt-2 text-[10px] leading-relaxed text-zinc-400">Matches loudness across videos gradually. Runs locally, with silence gating and peak protection.</p>
-                                {normalizationActive && <p role="status" aria-label="Volume normalization status" className="mt-2 text-[10px] leading-relaxed text-amber-200/90">{normalizationStatus}</p>}
-                            </div>
-                        )}
-                        {onToggleNightMode && (
-                            <div className="px-3 py-2 border-b border-white/5 mb-2">
-                                <button type="button" aria-label="Night mode" aria-pressed={Boolean(nightModeActive)} onClick={onToggleNightMode}
-                                    className="flex w-full items-center justify-between gap-2 text-xs text-white rounded-md focus-visible:outline-2 focus-visible:outline-[color:var(--accent-primary)]">
-                                    <span>Night mode</span><span>{nightModeActive ? 'On' : 'Off'}</span>
-                                </button>
-                                <p className="mt-2 text-[10px] leading-relaxed text-zinc-400">Reduces the difference between quiet dialogue and loud action.</p>
-                            </div>
-                        )}
-                        {/* Night mode make-up gain */}
-                        {nightModeActive && onNightModeGainChange && typeof nightModeGain === 'number' && (
-                            <div className="px-3 py-2 border-b border-white/5 mb-2">
-                                <div className="flex justify-between items-center mb-2">
-                                    <span className="text-[10px] font-medium text-[color:var(--accent-primary)] flex items-center gap-1">
-                                        <Ear className="w-3 h-3" /> Gain
-                                    </span>
-                                    <span className="text-[10px] text-zinc-400">
-                                        {(20 * Math.log10(nightModeGain)).toFixed(1)} dB
-                                    </span>
-                                </div>
-                                <input
-                                    type="range"
-                                    min="0.5"
-                                    max="3.0"
-                                    step="0.1"
-                                    aria-label="Night mode gain"
-                                    value={nightModeGain}
-                                    onChange={(e) => onNightModeGainChange(parseFloat(e.target.value))}
-                                    className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-[color:var(--accent-primary)]"
-                                />
-                            </div>
-                        )}
-
-                        {/* Sync Threshold */}
-                        {onSyncThresholdChange && syncThreshold !== undefined && (
-                            <div className="px-3 py-2 border-b border-white/5 mb-2">
-                                <div className="flex justify-between items-center mb-2">
-                                    <span className="text-[10px] font-medium text-emerald-400 flex items-center gap-1">
-                                        <Activity className="w-3 h-3" /> Sync
-                                    </span>
-                                    <span className="text-[10px] text-zinc-400">
-                                        {syncThreshold}s
-                                    </span>
-                                </div>
-                                <input
-                                    type="range"
-                                    min="1"
-                                    max="10"
-                                    step="0.5"
-                                    aria-label="Sync threshold in seconds"
-                                    value={syncThreshold}
-                                    onChange={(e) => onSyncThresholdChange(parseFloat(e.target.value))}
-                                    className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-emerald-500"
-                                />
-                            </div>
-                        )}
-
-                        {/* What auto quality optimises for */}
-                        {onQualityModeChange && qualityMode && (
-                            <div className="px-3 py-2 border-b border-white/5 mb-2">
-                                <label htmlFor={qualityModeSelectId} className="block text-xs text-white mb-2">
-                                    Auto quality
-                                </label>
-                                <select id={qualityModeSelectId} aria-label="Auto quality"
-                                    value={qualityMode}
-                                    onChange={event => onQualityModeChange(parseQualityMode(event.target.value))}
-                                    className="w-full rounded-md border border-white/15 bg-zinc-800 px-2 py-2 text-xs text-white focus-visible:outline-2 focus-visible:outline-[color:var(--accent-primary)]">
-                                    <option value="balanced">Balanced — fits your player</option>
-                                    <option value="highest">Highest — ignore player size</option>
-                                    <option value="saver">Data saver — never sharper than shown</option>
-                                </select>
-                                <p className="mt-2 text-[10px] leading-relaxed text-zinc-400">
-                                    Balanced keeps seeks quick by not fetching more pixels than your
-                                    player shows. Highest follows your connection alone, so seeks on a
-                                    large video can take longer. Applies to this browser only.
-                                </p>
-                            </div>
-                        )}
-
-                        {/* Quality Options. A source with no ladder — a
-                            member's screen, a single-rendition stream —
-                            offers nothing to choose between. */}
-                        {qualities.length > 0 && (
-                        <>
-                        <button
-                            type="button"
-                            onClick={() => onQualityChange(-1)}
-                            aria-pressed={currentQuality === -1}
-                            className={cn(
-                                "w-full px-3 py-2 rounded-lg text-left text-xs font-medium transition-all flex items-center justify-between",
-                                currentQuality === -1
-                                    ? "bg-[color:var(--accent-glow)] text-[color:var(--accent-primary)]"
-                                    : "text-zinc-400 hover:bg-white/5 hover:text-white"
-                            )}
-                        >
-                            <span>Auto</span>
-                            {currentQuality === -1 && autoHeight ? (
-                                <span data-testid="auto-rung" className="text-[10px] text-zinc-500">{autoHeight}p</span>
-                            ) : null}
-                        </button>
-                        {qualities.map((q) => (
-                            <button
-                                key={q.index}
-                                type="button"
-                                onClick={() => onQualityChange(q.index)}
-                                aria-pressed={currentQuality === q.index}
-                                className={cn(
-                                    "w-full px-3 py-2 rounded-lg text-left text-xs font-medium transition-all flex items-center justify-between",
-                                    currentQuality === q.index
-                                        ? "bg-[color:var(--accent-glow)] text-[color:var(--accent-primary)]"
-                                        : "text-zinc-400 hover:bg-white/5 hover:text-white"
-                                )}
-                            >
-                                <div className="flex items-center gap-2">
-                                    <span>{q.height ? `${q.height}p` : `Level ${q.index}`}</span>
-                                    {q.vcodec && (
-                                        <span className="ui-label px-1.5 py-0.5 rounded bg-white/5">
-                                            {q.vcodec.includes('vp9') ? 'VP9' : q.vcodec.includes('av01') ? 'AV1' : q.vcodec.includes('avc') ? 'H264' : q.vcodec.split('.')[0]}
-                                        </span>
-                                    )}
-                                </div>
-                                <span className="text-[10px] text-zinc-500">{(q.bitrate / 1000).toFixed(0)}k</span>
-                            </button>
-                        ))}
-                        </>
-                        )}
-                    </div>
-                </div>
-            )}
-
             <style jsx global>{`
                 input[type='range'] {
                     -webkit-appearance: none;
@@ -731,5 +496,39 @@ export function PlayerControls({
                 }
             `}</style>
         </div>
+        {/* Outside the bar: its fade uses a transform, which would trap the
+            phone sheet's fixed position inside the player. */}
+        {showSettings && (
+            <PlayerSettingsMenu
+                onClose={onSettingsToggle}
+                currentQuality={currentQuality}
+                qualities={qualities}
+                onQualityChange={onQualityChange}
+                autoHeight={autoHeight}
+                qualityMode={qualityMode}
+                onQualityModeChange={onQualityModeChange}
+                audioTracks={audioTracks}
+                currentAudioTrack={currentAudioTrack}
+                onAudioTrackChange={onAudioTrackChange}
+                normalizationActive={normalizationActive}
+                onToggleNormalization={onToggleNormalization}
+                normalizationStatus={normalizationStatus}
+                nightModeActive={nightModeActive}
+                onToggleNightMode={onToggleNightMode}
+                nightModeGain={nightModeGain}
+                onNightModeGainChange={onNightModeGainChange}
+                monoAudio={monoAudio}
+                onToggleMono={onToggleMono}
+                enhancementMode={enhancementMode}
+                onEnhancementModeChange={onEnhancementModeChange}
+                enhancementStatus={enhancementStatus}
+                framegenMode={framegenMode}
+                onFramegenModeChange={onFramegenModeChange}
+                framegenStatus={framegenStatus}
+                syncThreshold={syncThreshold}
+                onSyncThresholdChange={onSyncThresholdChange}
+            />
+        )}
+        </>
     );
 }

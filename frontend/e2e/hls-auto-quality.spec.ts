@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { LIVE_EDGE_STALL_RELOAD_MS, LIVE_SYNC_MIN_SECONDS } from '../lib/constants';
 import { liveSyncTargetSeconds } from '../lib/live-latency';
+import { openPlayerSettings } from './player-settings';
 
 /** The fragmented-MP4 fixture, split into its init segment and its media. */
 function fmp4Fixture() {
@@ -74,7 +75,7 @@ test('HLS keeps Auto selected after adaptation and restores it without flushing 
   const { media } = await openHls(page);
   await expect.poll(() => media.evaluate((v: HTMLVideoElement) => v.readyState)).toBeGreaterThan(2);
   await media.evaluate((v: HTMLVideoElement) => v.pause());
-  await page.getByRole('button', { name: 'Quality and sync settings' }).click();
+  await openPlayerSettings(page, 'Quality');
   const auto = page.getByRole('button', { name: 'Auto', exact: true });
   await expect(auto).toHaveAttribute('aria-pressed', 'true');
   const manual = page.getByRole('button', { name: /240p/ });
@@ -280,7 +281,7 @@ http://localhost:3100/hls-fixture/fresh-high.m3u8
     return route.fallback();
   });
   await expect.poll(() => media.evaluate((v: HTMLVideoElement) => v.readyState)).toBeGreaterThan(2);
-  await page.getByRole('button', { name: 'Quality and sync settings' }).click();
+  await openPlayerSettings(page, 'Quality');
   await page.getByRole('button', { name: /240p/ }).click();
   await expect(page.getByRole('button', { name: /240p/ })).toHaveAttribute('aria-pressed', 'true');
 
@@ -293,7 +294,7 @@ http://localhost:3100/hls-fixture/fresh-high.m3u8
   await expect.poll(() => media.evaluate((v: HTMLVideoElement) => v.readyState), { timeout: 15_000 }).toBeGreaterThan(2);
 
   if (!(await page.getByRole('button', { name: 'Auto', exact: true }).isVisible())) {
-    await page.getByRole('button', { name: 'Quality and sync settings' }).click();
+    await openPlayerSettings(page, 'Quality');
   }
   await expect(page.getByRole('button', { name: /240p/ })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('button', { name: 'Auto', exact: true })).toHaveAttribute('aria-pressed', 'false');

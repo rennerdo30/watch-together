@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { stubAdaptiveStream } from './adaptive-fixture';
 import { PNG } from 'pngjs';
+import { openPlayerSettings } from './player-settings';
 
 // Full Chromium's new headless mode includes the normal GPU process. The
 // headless-shell executable can advertise an adapter then lose it immediately.
@@ -26,7 +27,7 @@ async function openVideo(page: Page, label: string, disableWebGPU = false) {
   const video = page.locator('video[data-stream-type="mse"]');
   await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.readyState)).toBeGreaterThanOrEqual(2);
   await video.evaluate((v: HTMLVideoElement) => { v.pause(); v.loop = true; v.dataset.identity = 'original'; });
-  await page.getByRole('button', { name: 'Quality and sync settings', exact: true }).click();
+  await openPlayerSettings(page, 'Picture');
   return { video, requests, select: page.getByLabel('Video enhancement (beta)'),
     status: page.getByRole('status', { name: 'Video enhancement status' }),
     layer: page.locator('[data-video-enhancement]') };
@@ -181,19 +182,24 @@ test('automatic mode uses confident local classifications and manual selection o
   expect(requests.length).toBe(baseline);
 });
 
-test('beta settings stay within a phone-sized player and remain usable', async ({ page }) => {
+test('on a phone the settings are a sheet that fits the screen, not a sliver of the player', async ({ page }) => {
+  // The menu used to be confined to the player, which on a phone is about
+  // 220 px tall: two settings were visible and the rest scrolled in a slot.
   await page.setViewportSize({ width: 390, height: 844 });
-  const { select, layer } = await openVideo(page, 'phone', true);
+  const { select } = await openVideo(page, 'phone', true);
   await select.selectOption('general');
-  const panel = page.locator('div[aria-label="Quality and sync settings"]');
-  const bounds = await panel.boundingBox();
-  const stage = await layer.boundingBox();
-  expect(bounds).not.toBeNull(); expect(stage).not.toBeNull();
-  expect(bounds!.y).toBeGreaterThanOrEqual(stage!.y);
-  expect(bounds!.x).toBeGreaterThanOrEqual(stage!.x);
-  expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(stage!.y + stage!.height);
-  await expect(select).toBeVisible();
-  await page.screenshot({ path: 'test-results/video-enhancement-phone.png' });
+  const panel = page.getByRole('dialog', { name: 'Player settings' });
+  const bounds = (await panel.boundingBox())!;
+  expect(bounds.x).toBeGreaterThanOrEqual(0);
+  expect(bounds.y).toBeGreaterThanOrEqual(0);
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
+  expect(bounds.y + bounds.height).toBeLessThanOrEqual(844);
+  await expect(select).toBeInViewport();
+  // The first page lists every setting without scrolling.
+  await panel.getByRole('button', { name: /back to all settings/ }).click();
+  for (const row of [/^Quality/, /^Sound/, /^Picture/, /^Sync/]) {
+    await expect(panel.getByRole('button', { name: row })).toBeInViewport({ ratio: 1 });
+  }
 });
 
 test('actual local classifier executes with finite binary probabilities and no external requests', async ({ page }) => {

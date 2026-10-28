@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { stubAdaptiveStream } from './adaptive-fixture';
+import { openPlayerSettings } from './player-settings';
 
 test('the shipped worklet levels quiet/loud stereo audio with bounded peaks', async ({ page }) => {
   test.setTimeout(60000);
@@ -41,27 +42,27 @@ test('normalization and Night mode are independent, local, and preserve the medi
   await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.readyState)).toBeGreaterThanOrEqual(2);
   await video.evaluate((v: HTMLVideoElement) => { v.pause(); v.dataset.identity = 'original'; });
   const baseline = manifests.length;
-  await page.getByRole('button', { name: 'Quality and sync settings', exact: true }).click();
-  const normalize = page.getByRole('button', { name: 'Normalize volume', exact: true });
-  const night = page.getByRole('button', { name: 'Night mode', exact: true });
-  await expect(normalize).toHaveAttribute('aria-pressed', 'true');
-  await expect(night).toHaveAttribute('aria-pressed', 'true');
+  await openPlayerSettings(page, 'Sound');
+  const normalize = page.getByRole('switch', { name: 'Normalize volume', exact: true });
+  const night = page.getByRole('switch', { name: 'Night mode', exact: true });
+  await expect(normalize).toHaveAttribute('aria-checked', 'true');
+  await expect(night).toHaveAttribute('aria-checked', 'true');
   await expect(page.getByRole('status', { name: 'Volume normalization status' })).toContainText('Active');
   await night.click();
-  await expect(night).toHaveAttribute('aria-pressed', 'false');
-  await expect(normalize).toHaveAttribute('aria-pressed', 'true');
+  await expect(night).toHaveAttribute('aria-checked', 'false');
+  await expect(normalize).toHaveAttribute('aria-checked', 'true');
   expect(await video.evaluate((v: HTMLVideoElement) => v.paused)).toBe(true);
   expect(await video.getAttribute('data-identity')).toBe('original');
   expect(manifests.length).toBe(baseline);
   await page.screenshot({ path: '/tmp/w2g-volume-normalization.png' });
   await page.reload(); await expect(page.getByLabel('Connected to the room')).toBeVisible();
-  await page.getByRole('button', { name: 'Quality and sync settings', exact: true }).click();
-  await expect(normalize).toHaveAttribute('aria-pressed', 'true'); await expect(night).toHaveAttribute('aria-pressed', 'false');
-  await normalize.click(); await expect(normalize).toHaveAttribute('aria-pressed', 'false');
+  await openPlayerSettings(page, 'Sound');
+  await expect(normalize).toHaveAttribute('aria-checked', 'true'); await expect(night).toHaveAttribute('aria-checked', 'false');
+  await normalize.click(); await expect(normalize).toHaveAttribute('aria-checked', 'false');
   await page.reload(); await expect(page.getByLabel('Connected to the room')).toBeVisible();
-  await page.getByRole('button', { name: 'Quality and sync settings', exact: true }).click();
-  await expect(normalize).toHaveAttribute('aria-pressed', 'false');
-  await expect(night).toHaveAttribute('aria-pressed', 'false');
+  await openPlayerSettings(page, 'Sound');
+  await expect(normalize).toHaveAttribute('aria-checked', 'false');
+  await expect(night).toHaveAttribute('aria-checked', 'false');
 });
 
 test('a worklet loading failure keeps original audio routing available', async ({ page }) => {
@@ -77,9 +78,9 @@ test('a worklet loading failure keeps original audio routing available', async (
   await page.getByPlaceholder('Paste video URL...').press('Enter');
   await expect(page.locator('video[data-stream-type="mse"]')).toHaveCount(1);
   await page.locator('video[data-stream-type="mse"]').evaluate((v: HTMLVideoElement) => v.pause());
-  await page.getByRole('button', { name: 'Quality and sync settings', exact: true }).click();
+  await openPlayerSettings(page, 'Sound');
   await expect(page.getByRole('status', { name: 'Volume normalization status' })).toContainText('Unavailable');
-  await expect(page.getByRole('button', { name: 'Night mode', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('switch', { name: 'Night mode', exact: true })).toHaveAttribute('aria-checked', 'true');
 });
 
 test('processor failure bypasses the dead node and Off/on creates one fresh audible path', async ({ page }) => {
@@ -110,8 +111,8 @@ test('processor failure bypasses the dead node and Off/on creates one fresh audi
   const video = page.locator('video[data-stream-type="mse"]');
   await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.readyState)).toBeGreaterThanOrEqual(2);
   await video.evaluate((v: HTMLVideoElement) => v.pause());
-  await page.getByRole('button', { name: 'Quality and sync settings', exact: true }).click();
-  const toggle = page.getByRole('button', { name: 'Normalize volume', exact: true });
+  await openPlayerSettings(page, 'Sound');
+  const toggle = page.getByRole('switch', { name: 'Normalize volume', exact: true });
   const status = page.getByRole('status', { name: 'Volume normalization status' });
   const chain = () => page.evaluate(() => {
     const { __volumeEdges: edges } = window as unknown as { __volumeEdges: { from: AudioNode; to: AudioNode }[] };
