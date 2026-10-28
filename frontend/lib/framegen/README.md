@@ -20,11 +20,24 @@ Do not describe the bundled model as unrestricted or use it in a paid service.
 Upstream: https://github.com/MONZikWasTaken/Framegen.
 
 A worker buffers two frames and samples an exact 30/60 fps media-time grid at
-arbitrary interpolation times (24→30 is not a speed change). Processing is capped
-at up to 1920×1080, padded to multiples of 16 (1920×1088 for Full HD), and
-presented through a canvas. 720p sources retain 1280×720 processing; larger
-sources are scaled down to the Full HD bound. Real-time throughput depends on
-the GPU; sustained overload returns to original playback.
+arbitrary interpolation times (24→30 is not a speed change). The whole path is on
+the GPU: a `VideoFrame` of the source is scaled into the model's input by a render
+pass (a 16×16 copy in the same pass feeds the scene-cut check), generated frames
+stay in a pool of GPU textures, and the worker draws the frame due at each media
+time into the page's canvas, which it owns (`transferControlToOffscreen`). The
+earlier path through a 2D canvas, a CPU read-back and an `ImageBitmap` per frame
+cost as much as the model at 4K.
+
+Processing size is chosen per GPU: the candidates are the source size (up to 4K),
+then 1440p, 1080p and 720p below it, padded to multiples of 16. On first use the
+worker tunes the model's convolution kernels for this GPU and size
+(`tuneConvRB`, a few seconds; it halves the model's cost) and measures one source
+frame's work; it takes the largest size within `FRAMEGEN_BUDGET_MS`. Tunes and
+costs are kept in `localStorage` (`wt_framegen_tune_v1`), keyed by adapter, so
+later starts are immediate. Sustained overload steps down one size; below the
+smallest size, original playback returns.
+Measured on an Apple M-series GPU (Metal), per source frame: 1080p→60 fps 9.6 ms,
+4K→60 fps processed at 1440p 20.7 ms (4K itself 30.7 ms, over budget).
 A small scene-difference sample bypasses neural interpolation for static frames
 and hard cuts; detection is heuristic and does not eliminate all artifacts.
 

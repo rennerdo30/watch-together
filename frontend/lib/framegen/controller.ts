@@ -1,21 +1,42 @@
-import { FRAMEGEN_DELAY_MS, FRAMEGEN_ROOT, processingSize, type GeneratedFrame } from './policy';
+import {
+  FRAMEGEN_BUDGET_MS, FRAMEGEN_DELAY_MS, FRAMEGEN_MIDS, FRAMEGEN_ROOT, FRAMEGEN_TUNE_KEY,
+  processingSizes, type ProcessingSize, type TuneCache,
+} from './policy';
 import { reportClientError } from '@/lib/client-errors';
 export interface FramegenStatus { state: 'off' | 'starting' | 'idle' | 'active' | 'unavailable'; message: string }
-interface Reply { frames?: GeneratedFrame[]; ms?: number; error?: string }
+interface Reply { count?: number; ms?: number; error?: string; size?: ProcessingSize; tunes?: TuneCache }
 
-/** Presentation-only: the original element remains the sole media/room clock. */
+/** Consecutive slow or skipped source frames before the worker steps down a size. */
+const SLOW_LIMIT = 8;
+/** A frame is slow when generation took more than this share of its interval. */
+const SLOW_SHARE = 0.85;
+
+function readTunes(): TuneCache {
+  try { return JSON.parse(localStorage.getItem(FRAMEGEN_TUNE_KEY) ?? '{}') as TuneCache; }
+  catch { return {}; }
+}
+function storeTunes(tunes: TuneCache | undefined) {
+  if (!tunes) return;
+  try { localStorage.setItem(FRAMEGEN_TUNE_KEY, JSON.stringify(tunes)); }
+  catch (error) { console.warn('[framegen] Could not keep the GPU tune:', error); }
+}
+
+/**
+ * Presentation-only: the original element remains the sole media/room clock.
+ * The worker owns the canvas; this side captures frames, asks for the frame
+ * due each animation frame, and decides when the overlay is shown.
+ */
 export class FramegenController {
   private worker?: Worker;
   private canvas: HTMLCanvasElement;
-  private context: CanvasRenderingContext2D;
   private pending?: { id: number; resolve: (data: Reply) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
   private nextId = 0;
   private epoch = 0;
   private disposed = false;
   private failed = false;
+  private ready = false;
   private busy = false;
   private reset = true;
-  private frames: GeneratedFrame[] = [];
   private callback?: number;
   private raf?: number;
   private lastTime?: number;
@@ -23,6 +44,10 @@ export class FramegenController {
   private missed = 0;
   private slow = 0;
   private lastPresentation = 0;
+  private presentPending = false;
+  /** Set while a frame is in flight; the step-down runs once it returns. */
+  private stepDownWanted = false;
+  private size?: ProcessingSize;
   private statusKey = '';
   private nativeFullscreen = false;
   private cleanups: (() => void)[] = [];
@@ -31,7 +56,6 @@ export class FramegenController {
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'absolute inset-0 w-full h-full object-contain pointer-events-none';
     this.canvas.setAttribute('aria-hidden', 'true'); this.canvas.style.visibility = 'hidden';
-    this.context = this.canvas.getContext('2d', { alpha: false })!;
     host.replaceChildren(this.canvas);
     const on = (target: EventTarget, event: string, action: () => void) => {
       target.addEventListener(event, action); this.cleanups.push(() => target.removeEventListener(event, action));
@@ -58,8 +82,11 @@ export class FramegenController {
     if (key !== this.statusKey) { this.statusKey = key; this.notify({ state, message }); }
   }
   private hide() { this.canvas.style.visibility = 'hidden'; this.delay(0); }
-  private clearFrames() { this.frames.forEach(f => f.frame.close()); this.frames = []; }
-  private invalidate() { this.epoch++; this.reset = true; this.lastTime = undefined; this.clearFrames(); this.hide(); }
+  private invalidate() {
+    this.epoch++; this.reset = true; this.lastTime = undefined; this.lastPresentation = 0;
+    this.worker?.postMessage({ type: 'clear' });
+    this.hide();
+  }
   private blocked() {
     return this.video.paused || this.video.ended || this.video.seeking || this.video.readyState < 2 ||
       document.hidden || this.nativeFullscreen || document.pictureInPictureElement === this.video ||
@@ -75,36 +102,53 @@ export class FramegenController {
       catch (error) { clearTimeout(timer); this.pending = undefined; reject(error); }
     });
   }
+  private get mids() { return FRAMEGEN_MIDS[this.fps === 60 ? '60' : '30']; }
   private async start() {
     try {
-      const size = processingSize(this.video.videoWidth, this.video.videoHeight);
-      if (!navigator.gpu || !size || !this.video.requestVideoFrameCallback || !this.context) throw new Error('This browser or source does not support motion smoothing');
+      const sizes = processingSizes(this.video.videoWidth, this.video.videoHeight);
+      if (!navigator.gpu || !sizes || !this.video.requestVideoFrameCallback || !this.canvas.transferControlToOffscreen) throw new Error('This browser or source does not support motion smoothing');
       if (this.video.mediaKeys) throw new Error('Protected video cannot be processed');
       const frame = new VideoFrame(this.video);
       const hdr = ['pq', 'hlg', 'smpte2084', 'arib-std-b67'].includes(String(frame.colorSpace.transfer)); frame.close();
       if (hdr) throw new Error('Original picture retained to preserve HDR');
-      this.canvas.width = size.width; this.canvas.height = size.height;
       this.worker = new Worker(`${FRAMEGEN_ROOT}/interpolation.worker.js`);
       this.worker.onmessage = ({ data }) => {
         if (data.type === 'fatal') { this.fail(data.error); return; }
-        if (!this.pending || this.pending.id !== data.id) { data.frames?.forEach((f: GeneratedFrame) => f.frame.close()); return; }
+        if (data.type === 'progress') { this.status('starting', data.message); return; }
+        if (data.type === 'presented') { this.presented(Boolean(data.shown)); return; }
+        if (!this.pending || this.pending.id !== data.id) return;
         const pending = this.pending; this.pending = undefined; clearTimeout(pending.timer);
         if (data.error) pending.reject(new Error(data.error)); else pending.resolve(data);
       };
       this.worker.onerror = (event) => { event.preventDefault(); this.fail('Frame generation worker failed'); };
       this.worker.onmessageerror = () => this.fail('Frame generation worker failed');
-      await this.request({ type: 'init', ...size }, [], 30000);
+      const offscreen = this.canvas.transferControlToOffscreen();
+      // Tuning a size the first time takes a few seconds per size.
+      const reply = await this.request({ type: 'init', sizes, mids: this.mids, budgetMs: FRAMEGEN_BUDGET_MS, tunes: readTunes(), canvas: offscreen }, [offscreen], 120000);
       if (this.disposed || this.failed) return;
+      storeTunes(reply.tunes); this.size = reply.size; this.ready = true;
       this.status('idle', 'Ready — play the video to smooth motion');
       this.capture(); this.present();
     } catch (error) {
       if (!this.disposed && !this.failed) this.fail(error instanceof Error ? error.message : 'Frame generation unavailable');
     }
   }
+  /** The GPU fell behind: process at the next smaller size, or give up below 720p. */
+  private async stepDown() {
+    this.ready = false; this.busy = true; this.invalidate();
+    try {
+      const reply = await this.request({ type: 'step-down', mids: this.mids }, [], 120000);
+      if (this.disposed || this.failed) return;
+      storeTunes(reply.tunes); this.size = reply.size; this.slow = 0; this.missed = 0; this.ready = true;
+    } catch (error) {
+      this.fail(error instanceof Error ? error.message : 'GPU cannot keep up');
+    } finally { this.busy = false; }
+  }
   private capture() {
     if (this.disposed || this.failed) return;
     this.callback = this.video.requestVideoFrameCallback((_now, metadata) => {
       this.callback = undefined; this.capture();
+      if (!this.ready) return;
       if (this.blocked()) { this.invalidate(); return; }
       if (this.lastTime !== undefined) {
         const dt = metadata.mediaTime - this.lastTime;
@@ -115,46 +159,55 @@ export class FramegenController {
         this.invalidate(); this.status('idle', 'Source already meets the selected frame rate'); return;
       }
       if (this.busy) {
-        if (++this.missed >= 8) this.fail('GPU cannot keep up; original playback continues');
+        if (++this.missed >= SLOW_LIMIT) this.stepDownWanted = true;
         return;
       }
       this.missed = 0; this.busy = true;
       const epoch = this.epoch;
       const reset = this.reset; this.reset = false;
-      void createImageBitmap(this.video).then(async bitmap => {
-        if (this.disposed || this.failed || epoch !== this.epoch) { bitmap.close(); return; }
-        const result = await this.request({ type: 'frame', frame: bitmap, time: metadata.mediaTime, fps: this.fps, reset }, [bitmap]);
-        if (this.disposed || this.failed || epoch !== this.epoch || this.blocked()) { result.frames?.forEach(f => f.frame.close()); return; }
-        this.slow = (result.ms ?? 0) > this.interval * 850 ? this.slow + 1 : Math.max(0, this.slow - 1);
-        if (this.slow >= 8) { result.frames?.forEach(f => f.frame.close()); this.fail('GPU cannot keep up; original playback continues'); return; }
-        this.frames.push(...result.frames ?? []);
-        while (this.frames.length > 20) this.frames.shift()!.frame.close();
-      }).catch(error => { if (!this.disposed && !this.failed) this.fail(error instanceof Error ? error.message : 'Frame capture failed'); })
-        .finally(() => { this.busy = false; });
+      const frame = new VideoFrame(this.video);
+      void this.request({ type: 'frame', frame, time: metadata.mediaTime, fps: this.fps, reset }, [frame])
+        .then(result => {
+          if (this.disposed || this.failed || epoch !== this.epoch) return;
+          this.slow = (result.ms ?? 0) > this.interval * 1000 * SLOW_SHARE ? this.slow + 1 : Math.max(0, this.slow - 1);
+          if (this.slow >= SLOW_LIMIT) this.stepDownWanted = true;
+        })
+        .catch(error => {
+          frame.close();
+          if (!this.disposed && !this.failed && epoch === this.epoch) this.fail(error instanceof Error ? error.message : 'Frame capture failed');
+        })
+        .finally(() => {
+          this.busy = false;
+          if (this.stepDownWanted && !this.disposed && !this.failed) { this.stepDownWanted = false; void this.stepDown(); }
+        });
     });
   }
   private present() {
     if (this.disposed || this.failed) return;
     this.raf = requestAnimationFrame(() => this.present());
     if (this.blocked()) { this.hide(); return; }
-    const time = this.video.currentTime - FRAMEGEN_DELAY_MS / 1000 * this.video.playbackRate;
-    let due: GeneratedFrame | undefined;
-    while (this.frames.length && this.frames[0].time <= time + 0.001) { due?.frame.close(); due = this.frames.shift(); }
-    if (due) {
-      this.context.drawImage(due.frame, 0, 0); due.frame.close();
+    if (!this.ready || this.presentPending || !this.worker) return;
+    this.presentPending = true;
+    this.worker.postMessage({ type: 'present', time: this.video.currentTime - FRAMEGEN_DELAY_MS / 1000 * this.video.playbackRate });
+  }
+  private presented(shown: boolean) {
+    this.presentPending = false;
+    if (this.disposed || this.failed || this.blocked()) return;
+    if (shown) {
       this.canvas.style.visibility = 'visible'; this.delay(FRAMEGEN_DELAY_MS);
       this.lastPresentation = performance.now();
-      this.status('active', `${Math.round(1 / this.interval)} → ${this.fps} fps · local AI · ${this.canvas.width}×${this.canvas.height} processing`);
+      const size = this.size ? ` · ${this.size.width}×${this.size.height} processing` : '';
+      this.status('active', `${Math.round(1 / this.interval)} → ${this.fps} fps · local AI${size}`);
     } else if (this.lastPresentation && performance.now() - this.lastPresentation > 250) {
-      this.hide(); this.reset = true; this.status('idle', 'Waiting for fresh frames');
+      this.hide(); this.reset = true; this.lastPresentation = 0; this.status('idle', 'Waiting for fresh frames');
     }
   }
   private stop() {
     if (this.callback !== undefined) this.video.cancelVideoFrameCallback(this.callback);
     if (this.raf !== undefined) cancelAnimationFrame(this.raf);
     if (this.pending) { clearTimeout(this.pending.timer); this.pending.reject(new Error('Frame generator stopped')); this.pending = undefined; }
-    this.worker?.terminate(); this.worker = undefined;
-    this.clearFrames(); this.hide();
+    this.worker?.terminate(); this.worker = undefined; this.ready = false;
+    this.hide();
   }
   private fail(message: string) {
     if (this.failed || this.disposed) return;

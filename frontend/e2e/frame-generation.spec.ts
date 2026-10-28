@@ -51,7 +51,7 @@ test('real WebGPU model generates distinct intermediate frames and preserves ori
       worker.postMessage({ ...payload, id: current }, transfer);
     });
     try {
-      await request({ type: 'init', width: 64, height: 64 });
+      await request({ type: 'init', sizes: [{ width: 64, height: 64 }], mids: 3, budgetMs: Infinity });
       const make = async (x: number) => {
         const c = new OffscreenCanvas(64, 64); const ctx = c.getContext('2d')!;
         ctx.fillStyle = '#0000ff'; ctx.fillRect(0, 0, 64, 64);
@@ -59,8 +59,9 @@ test('real WebGPU model generates distinct intermediate frames and preserves ori
         return createImageBitmap(c);
       };
       const a = await make(12); await request({ type: 'frame', frame: a, time: 0, fps: 60, reset: true }, [a]);
-      const b = await make(20); const reply = await request({ type: 'frame', frame: b, time: 1 / 24, fps: 60 }, [b]);
-      const frames = reply.frames as { time: number; frame: ImageBitmap }[];
+      const b = await make(20); await request({ type: 'frame', frame: b, time: 1 / 24, fps: 60 }, [b]);
+      const frames = (await request({ type: 'snapshot' })).frames as { time: number; frame: ImageBitmap }[];
+      worker.postMessage({ type: 'clear' });
       const values = frames.map(({ time, frame }) => {
         const c = new OffscreenCanvas(64, 64), ctx = c.getContext('2d')!; ctx.drawImage(frame, 0, 0); frame.close();
         const pixels = ctx.getImageData(0, 0, 64, 64).data;
@@ -73,8 +74,9 @@ test('real WebGPU model generates distinct intermediate frames and preserves ori
       const cutCanvas = new OffscreenCanvas(64, 64), cutContext = cutCanvas.getContext('2d')!;
       cutContext.fillStyle = '#00ff00'; cutContext.fillRect(0, 0, 64, 64);
       const cut = await createImageBitmap(cutCanvas);
-      const cutReply = await request({ type: 'frame', frame: cut, time: 2 / 24, fps: 60 }, [cut]);
-      const cutColors = (cutReply.frames as { frame: ImageBitmap }[]).map(({ frame }) => {
+      const b2 = await make(20); await request({ type: 'frame', frame: b2, time: 1 / 24, fps: 60, reset: true }, [b2]);
+      await request({ type: 'frame', frame: cut, time: 2 / 24, fps: 60 }, [cut]);
+      const cutColors = ((await request({ type: 'snapshot' })).frames as { frame: ImageBitmap }[]).map(({ frame }) => {
         cutContext.drawImage(frame, 0, 0); frame.close();
         return Array.from(cutContext.getImageData(0, 0, 1, 1).data).slice(0, 3);
       });
@@ -166,7 +168,7 @@ for (const [hdWidth, hdHeight] of [[1280, 720], [1920, 1088]]) {
         worker.postMessage({ ...payload, id: current }, transfer);
       });
       try {
-        await request({ type: 'init', width: hdWidth, height: hdHeight });
+        await request({ type: 'init', sizes: [{ width: hdWidth, height: hdHeight }], mids: 3, budgetMs: Infinity });
         const make = async (x: number) => {
           const c = new OffscreenCanvas(64, 64); const ctx = c.getContext('2d')!;
           ctx.fillStyle = '#0000ff'; ctx.fillRect(0, 0, 64, 64);
@@ -175,8 +177,8 @@ for (const [hdWidth, hdHeight] of [[1280, 720], [1920, 1088]]) {
           return createImageBitmap(hd);
         };
         const a = await make(12); await request({ type: 'frame', frame: a, time: 0, fps: 60, reset: true }, [a]);
-        const b = await make(20); const reply = await request({ type: 'frame', frame: b, time: 1 / 24, fps: 60 }, [b]);
-        const frames = reply.frames as { time: number; frame: ImageBitmap }[];
+        const b = await make(20); await request({ type: 'frame', frame: b, time: 1 / 24, fps: 60 }, [b]);
+        const frames = (await request({ type: 'snapshot' })).frames as { time: number; frame: ImageBitmap }[];
         const values = frames.map(({ time, frame }) => {
           const c = new OffscreenCanvas(64, 64), ctx = c.getContext('2d')!; if (frame.width !== hdWidth || frame.height !== hdHeight) throw new Error("HD output was downscaled"); ctx.drawImage(frame, 0, 0, 64, 64); frame.close();
           const pixels = ctx.getImageData(0, 0, 64, 64).data;
@@ -197,3 +199,39 @@ for (const [hdWidth, hdHeight] of [[1280, 720], [1920, 1088]]) {
   });
 
 }
+
+test('the worker takes the largest size the GPU keeps up with, tunes it once and keeps the tune', async ({ page }) => {
+  // Processing was capped at 1080p whatever the GPU, with untuned kernels:
+  // autotuning halves the model's cost, and a GPU with room left processes
+  // a 4K source above 1080p.
+  test.setTimeout(180000);
+  await page.goto('/');
+  const capable = await page.evaluate(async () => (await navigator.gpu?.requestAdapter())?.features.has('shader-f16') ?? false);
+  test.skip(!capable, 'No float16 WebGPU adapter in this browser');
+  const result = await page.evaluate(async () => {
+    const sizes = [{ width: 640, height: 368 }, { width: 320, height: 192 }];
+    const run = async (budgetMs: number, tunes: Record<string, unknown> = {}) => {
+      const worker = new Worker('/framegen/v1/interpolation.worker.js');
+      const progress: string[] = [];
+      try {
+        return await new Promise<{ size: { width: number }; tunes: Record<string, { ms: number }>; progress: string[] }>((resolve, reject) => {
+          worker.onmessage = ({ data }) => {
+            if (data.type === 'progress') { progress.push(data.message); return; }
+            if (data.error || data.type === 'fatal') reject(new Error(data.error)); else resolve({ ...data, progress });
+          };
+          worker.postMessage({ type: 'init', id: 1, sizes, mids: 3, budgetMs, tunes });
+        });
+      } finally { worker.terminate(); }
+    };
+    const roomy = await run(Infinity);
+    const tight = await run(0);
+    const again = await run(Infinity, roomy.tunes);
+    return { roomy, tight, again };
+  });
+  expect(result.roomy.size.width).toBe(640);
+  expect(result.tight.size.width).toBe(320);
+  // Tuned and measured on the first start, reused on the next.
+  expect(result.roomy.progress.some(message => message.includes('Optimizing for your GPU'))).toBe(true);
+  expect(Object.keys(result.roomy.tunes).some(key => key.endsWith('|640x368'))).toBe(true);
+  expect(result.again.progress).toEqual([]);
+});
