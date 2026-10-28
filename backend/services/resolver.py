@@ -412,6 +412,7 @@ def _build_resolve_response(url: str, info: dict, stream_info: dict) -> dict:
         "extractor_key": info.get("extractor_key"),
         "stream_url": stream_info["url"],
         "title": info.get("title", "Unknown Title"),
+        "channel": info.get("channel") or info.get("uploader"),
         "is_live": is_live_stream(info),
         "thumbnail": info.get("thumbnail"),
         "backend_engine": "yt-dlp",

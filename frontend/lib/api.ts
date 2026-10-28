@@ -43,6 +43,7 @@ export interface ResolveResponse {
     extractor_key?: string;
     stream_url: string;
     title: string;
+    channel?: string | null;
     is_live: boolean;
     thumbnail?: string;
     duration?: number;

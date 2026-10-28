@@ -1518,6 +1518,8 @@ export default function RoomPage() {
                                     isLive={videoData.is_live}
                                     onSourceExpired={handleSourceExpired}
                                     poster={videoData.thumbnail}
+                                    title={videoData.title}
+                                    channel={videoData.channel}
                                     autoPlay={syncState.isPlaying}
                                     onPlaybackGateChange={setPlaybackGate}
                                     initialTime={syncState.timestamp} // Pass initial sync timestamp

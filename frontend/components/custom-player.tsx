@@ -27,6 +27,7 @@ interface CustomPlayerProps {
     url: string | { src: string; type: string };
     poster?: string;
     title?: string;
+    channel?: string | null;
     autoPlay?: boolean;
     className?: string;
     isLive?: boolean;
@@ -187,6 +188,8 @@ const parseStoredGain = (stored: string | null, fallback: number) => {
 export function CustomPlayer({
     url,
     poster,
+    title,
+    channel,
     autoPlay = false,
     className,
     isLive,
@@ -851,12 +854,14 @@ export function CustomPlayer({
     }, []);
 
     // === RENDER ===
+    const controlsVisible = showControls || !isPlaying || showSettings;
     return (
         <div
             ref={containerRef}
             className={cn(
                 // `on-dark`: the video stage and its chrome stay dark in every colour scheme.
                 "on-dark relative w-full h-full bg-black flex items-center justify-center overflow-hidden group rounded-xl",
+                isFullscreen && !controlsVisible && "cursor-none",
                 className
             )}
             onDoubleClick={toggleFullscreen}
@@ -880,6 +885,25 @@ export function CustomPlayer({
                 className="absolute inset-0 pointer-events-none z-[1]" aria-hidden="true" />
             <div ref={enhancementHostRef} data-video-enhancement={enhancementStatus.state} data-enhancement-backend={enhancementStatus.backend}
                 className="absolute inset-0 pointer-events-none" aria-hidden="true" />
+
+            {/* Shares the control bar's visibility; never intercepts playback gestures. */}
+            {isFullscreen && title && (
+                <section
+                    aria-label="Now playing"
+                    aria-hidden={!controlsVisible}
+                    className={cn(
+                        "pointer-events-none absolute inset-x-0 top-0 z-20 bg-gradient-to-b from-black/85 via-black/50 to-transparent px-5 pt-5 pb-14 sm:px-8 sm:pt-7 transition-opacity duration-300 motion-reduce:transition-none",
+                        controlsVisible ? "opacity-100" : "opacity-0"
+                    )}
+                >
+                    <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/60">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                        Now playing
+                    </div>
+                    <h2 className="max-w-4xl line-clamp-2 text-lg font-semibold leading-snug tracking-tight text-white drop-shadow-md sm:text-2xl lg:text-3xl">{title}</h2>
+                    {channel && <p className="mt-2 max-w-4xl truncate text-sm font-medium text-white/70 sm:text-base">{channel}</p>}
+                </section>
+            )}
 
             {/* Loading Overlay */}
             {isLoading && (
@@ -1088,7 +1112,7 @@ export function CustomPlayer({
                 audioTracks={isMseMode ? shakaPlayer.audioTracks : []}
                 currentAudioTrack={isMseMode ? shakaPlayer.currentAudioTrack : -1}
                 seekableForDVR={isLive ? seekableRange : undefined}
-                visible={showControls || !isPlaying || showSettings}
+                visible={controlsVisible}
                 onPointerOverChange={(over) => { pointerOverControlsRef.current = over; }}
                 framegenMode={framegenMode}
                 onFramegenModeChange={setFramegenMode}
