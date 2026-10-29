@@ -406,7 +406,7 @@ function PicturePage({ enhancementMode, onEnhancementModeChange, enhancementStat
                         <option value="30">30 fps</option>
                         <option value="60">60 fps</option>
                     </select>
-                    <Help>Adds in-between frames with a local AI model, for personal, non-commercial use. Delays picture and sound by 120 ms and pauses video enhancement.</Help>
+                    <Help>Adds in-between frames with a local AI model, for personal, non-commercial use. Delays picture and sound by 120 ms. Video enhancement pauses while frames are added.</Help>
                     {framegenMode !== 'off' && <Status label="Motion smoothing status">{framegenStatus}</Status>}
                 </SettingRow>
             )}

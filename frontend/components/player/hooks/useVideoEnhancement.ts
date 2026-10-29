@@ -24,5 +24,5 @@ export function useVideoEnhancement(video: HTMLVideoElement | null, source: stri
     });
     return () => { cancelled = true; controller?.dispose(); };
   }, [video, source, mode, suspended]);
-  return { hostRef, mode, setMode, status: mode === 'off' ? OFF : suspended ? { state: 'idle' as const, message: 'Upscaling paused while motion smoothing is selected' } : status };
+  return { hostRef, mode, setMode, status: mode === 'off' ? OFF : suspended ? { state: 'idle' as const, message: 'Paused while motion smoothing adds frames' } : status };
 }

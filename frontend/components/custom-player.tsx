@@ -394,7 +394,10 @@ export function CustomPlayer({
 
     const { hostRef: framegenHostRef, status: framegenStatus } = useFrameGeneration(mediaElement, isMseMode ? manifestUrl! : src,
         audio.delayReady, setFramegenDelay, framegenMode, !!isLive || isShareMode);
-    const framegenOwnsPicture = framegenMode !== 'off' && framegenCapability.ready && framegenStatus.state !== 'unavailable';
+    // Smoothing holds the picture only while it may draw: not when it failed,
+    // and not when the source already plays at the chosen rate.
+    const framegenOwnsPicture = framegenMode !== 'off' && framegenCapability.ready && framegenStatus.state !== 'unavailable'
+        && !framegenStatus.passthrough;
     const { hostRef: enhancementHostRef, mode: enhancementMode, setMode: setEnhancementMode, status: enhancementStatus } =
         useVideoEnhancement(mediaElement, isMseMode ? manifestUrl! : src, framegenOwnsPicture);
 

@@ -235,3 +235,29 @@ test('the worker takes the largest size the GPU keeps up with, tunes it once and
   expect(Object.keys(result.roomy.tunes).some(key => key.endsWith('|640x368'))).toBe(true);
   expect(result.again.progress).toEqual([]);
 });
+
+test('a source already at the chosen rate leaves the picture to video enhancement', async ({ page }) => {
+  // Smoothing that had nothing to add still held the picture, so upscaling
+  // said "paused while motion smoothing is selected" on a 60 fps video.
+  test.setTimeout(120000);
+  await page.addInitScript(() => {
+    // Report frames 1/60 s apart: a 60 fps source, whatever the fixture is.
+    const original = HTMLVideoElement.prototype.requestVideoFrameCallback;
+    let frame = 0;
+    HTMLVideoElement.prototype.requestVideoFrameCallback = function (callback) {
+      return original.call(this, (now, metadata) => callback(now, { ...metadata, mediaTime: ++frame / 60 }));
+    };
+  });
+  const { video, select, status } = await openPlayer(page, 'passthrough');
+  const capable = await page.evaluate(async () => (await navigator.gpu?.requestAdapter())?.features.has('shader-f16') ?? false);
+  test.skip(!capable, 'No float16 WebGPU adapter in this browser');
+  const enhancement = page.getByRole('status', { name: 'Video enhancement status' });
+  await page.getByLabel('Video enhancement (beta)').selectOption('general');
+  await select.selectOption('30');
+  await expect(status).toContainText('Ready', { timeout: 60000 });
+  await video.evaluate((v: HTMLVideoElement) => v.play());
+  await expect(status).toContainText('Already 60 fps', { timeout: 20000 });
+  await expect(enhancement).not.toContainText('motion smoothing');
+  await expect(page.locator('[data-video-enhancement] canvas')).toHaveCount(1, { timeout: 20000 });
+  await expect(page.locator('[data-frame-generation] canvas')).toBeHidden();
+});

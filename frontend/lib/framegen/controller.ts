@@ -9,6 +9,8 @@ export interface FramegenStatus {
   message: string;
   /** Stepped aside because another app is using the GPU heavily. */
   busyGpu?: boolean;
+  /** The source already plays at the target rate: nothing is drawn, the picture is free for others. */
+  passthrough?: boolean;
 }
 interface Reply { count?: number; ms?: number; error?: string; size?: ProcessingSize; tunes?: TuneCache; baselineMs?: number }
 
@@ -86,10 +88,10 @@ export class FramegenController {
       on(video, 'loadeddata', ready);
     }
   }
-  private status(state: FramegenStatus['state'], message: string, busyGpu = false) {
+  private status(state: FramegenStatus['state'], message: string, busyGpu = false, passthrough = false) {
     if (this.disposed) return;
     const key = state + message;
-    if (key !== this.statusKey) { this.statusKey = key; this.notify({ state, message, busyGpu }); }
+    if (key !== this.statusKey) { this.statusKey = key; this.notify({ state, message, busyGpu, passthrough }); }
   }
   private rebase(baselineMs: number | undefined) {
     this.contention.rebase(baselineMs === undefined ? undefined : baselineMs + FramegenController.FRAME_OVERHEAD_MS);
@@ -189,7 +191,7 @@ export class FramegenController {
       if (interval === undefined) { this.status('idle', 'Measuring the video\'s frame rate…'); return; }
       this.interval = interval;
       if (!needsGeneration(interval, this.fps)) {
-        this.status('idle', `Already ${Math.round(1 / interval)} fps — nothing to add at this setting`); return;
+        this.hide(); this.status('idle', `Already ${Math.round(1 / interval)} fps — nothing to add at this setting`, false, true); return;
       }
       if (this.busy) {
         if (++this.missed >= SLOW_LIMIT) this.stepDownWanted = true;
