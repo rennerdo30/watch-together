@@ -56,3 +56,11 @@ def test_a_refusal_may_not_be_stored_by_any_cache(client):
     assert response.status_code == 403
     assert "no-store" in response.headers["cache-control"]
     assert response.headers["cdn-cache-control"] == "no-store"
+
+
+def test_the_players_per_request_tag_is_ignored(client):
+    """Players tag each proxied request (&rq=…, see jump-cache.ts); it changes nothing here."""
+    tagged = client.get("/api/proxy", params={"url": BIG, "user": "viewer@example.com", "rq": "abc1"})
+    plain = client.get("/api/proxy", params={"url": BIG, "user": "viewer@example.com"})
+    assert tagged.status_code == plain.status_code == 403
+    assert tagged.json() == plain.json()

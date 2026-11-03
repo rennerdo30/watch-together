@@ -113,7 +113,8 @@ export async function fetchJumpDestination(originalUrl: string, seconds: number,
         if (spans.has(key) || inFlight.has(key)) return false;
         inFlight.add(key);
         try {
-            const response = await fetch(uri, { headers: { Range: `bytes=${start}-${end}` }, cache: 'no-store' });
+            const response = await fetch(tagProxiedRequest(uri),
+                { headers: { Range: `bytes=${start}-${end}` }, cache: 'no-store' });
             if (response.status !== 206) return false;
             const headers: Record<string, string> = {};
             response.headers.forEach((value, name) => { headers[name] = value; });
@@ -150,6 +151,28 @@ interface ShakaRequest {
 
 let installed = false;
 
+/** Distinguishes this page load's requests from every earlier one's. */
+const PAGE_TAG = Math.random().toString(36).slice(2, 8);
+let requestCount = 0;
+
+/**
+ * A proxied media URL made unique to this request.
+ *
+ * A stream's proxied URL stays the same for hours (one resolve), so every
+ * reload asks for exactly the same address. Something between one viewer's
+ * browser and Cloudflare stored a refusal for such an address and replayed
+ * it on every reload, same Cloudflare ray each time, for requests our
+ * server never saw: that video never played for them again, while new
+ * videos did. A per-request tag the server ignores cannot be matched by
+ * any stored copy. Our own caches key on the stream inside `url=`, so they
+ * are unaffected; the in-page cache below is looked up by the untagged URI.
+ */
+export function tagProxiedRequest(uri: string): string {
+    if (!/\/api\/proxy\?/.test(uri)) return uri;
+    requestCount += 1;
+    return `${uri}&rq=${PAGE_TAG}${requestCount.toString(36)}`;
+}
+
 /**
  * Answer segment requests from the cache before the network. Installed once
  * per page; every request it does not hold goes to Shaka's own fetch plugin
@@ -171,7 +194,8 @@ export function installJumpCache(shaka: ShakaNetworking): void {
                 });
             }
         }
-        return HttpFetchPlugin.parse(uri, request, requestType, progressUpdated, headersReceived, config);
+        return HttpFetchPlugin.parse(tagProxiedRequest(uri), request, requestType, progressUpdated, headersReceived,
+            config);
     };
     for (const scheme of ['http', 'https']) {
         NetworkingEngine.registerScheme(scheme, plugin, NetworkingEngine.PluginPriority.APPLICATION, true);
