@@ -36,6 +36,8 @@ export const PROGRAMMATIC_SEEK_TTL_MS = 10_000;
  * once the manifest and the first segments are in: seconds on a slow link.
  */
 export const LOAD_START_SEEK_TTL_MS = 60_000;
+/** How long after the room commands a start its `play` event is expected. */
+export const PROGRAMMATIC_PLAY_WINDOW_MS = 2_000;
 
 /** Room ids are restricted to the same character set the backend accepts. */
 export const ROOM_ID_ALLOWED_PATTERN = /[^a-zA-Z0-9-_]/g;

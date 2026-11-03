@@ -243,7 +243,6 @@ export default function RoomPage() {
     const authRecoveryRef = useRef<ReturnType<typeof createRoomAuthRecovery> | null>(null);
     const [signInRequired, setSignInRequired] = useState(false);
     const playerRef = useRef<RoomPlayer | null>(null);
-    const internalUpdateCount = useRef(0); // Counter to prevent feedback loops during sync
     const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
     // Set when the server closes the room for good; blocks the reconnect.
     const roomClosedRef = useRef(false);
@@ -615,7 +614,6 @@ export default function RoomPage() {
     const handleWsMessage = (msg: WsMessage) => {
         const type = msg.type;
         const payload = msg.payload ?? {};
-        internalUpdateCount.current += 1; // Increment counter to block local events
 
         switch (type) {
             case 'sync':
@@ -920,7 +918,8 @@ export default function RoomPage() {
 
         // Update sync state from server - this is the authoritative state
         // Only update fields that are actually in the payload
-        if (type === 'sync' || type === 'play' || type === 'pause' || type === 'seek') {
+        // A heartbeat is only sent while the room plays, and says so.
+        if (type === 'sync' || type === 'play' || type === 'pause' || type === 'seek' || type === 'heartbeat') {
             setSyncState(prev => ({
                 isPlaying: type === 'play' ? true : type === 'pause' ? false : (payload.is_playing ?? prev.isPlaying),
                 timestamp: payload.timestamp ?? prev.timestamp,
@@ -928,8 +927,6 @@ export default function RoomPage() {
             }));
         }
 
-        // Decrement counter after a short delay to allow player events to settle
-        setTimeout(() => { internalUpdateCount.current = Math.max(0, internalUpdateCount.current - 1); }, 300);
     };
 
     const sendMsg = (type: string, payload?: unknown) => {
@@ -1505,7 +1502,13 @@ export default function RoomPage() {
                                     audioUrl={getDashUrls()?.audioUrl}
                                     availableQualities={getDashUrls()?.availableQualities}
                                     onPlay={() => {
-                                        if (internalUpdateCount.current === 0 && !syncState.isPlaying) {
+                                        // Plays the room commanded are filtered out by the
+                                        // player itself. This used to ignore every play
+                                        // within 300 ms of *any* room message — chat,
+                                        // presence, another viewer's report — so in a busy
+                                        // room a viewer's click played locally and never
+                                        // reached the room, which stayed paused.
+                                        if (!syncState.isPlaying) {
                                             // A live position is only meaningful in this
                                             // player's timeline; never publish it.
                                             const t = videoData.is_live ? 0 : (playerRef.current?.currentTime() || 0);

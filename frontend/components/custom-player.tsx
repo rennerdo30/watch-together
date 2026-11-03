@@ -22,7 +22,7 @@ import { forgetBandwidth, readRememberedEstimate } from '@/lib/bandwidth-memory'
 import {
     PLAYER_STATS_REFRESH_MS, QUALITY_REPORT_INTERVAL_MS,
     SHARE_LIVE_EDGE_CHECK_MS, SHARE_LIVE_EDGE_MAX_SECONDS, SHAKA_PREFERRED_VIDEO_CODECS,
-    LOAD_START_SEEK_TTL_MS, PROGRAMMATIC_SEEK_TTL_MS,
+    LOAD_START_SEEK_TTL_MS, PROGRAMMATIC_SEEK_TTL_MS, PROGRAMMATIC_PLAY_WINDOW_MS,
 } from '@/lib/constants';
 import { useFrameGeneration, useFramegenPreference, useFramegenCapability } from './player/hooks/useFrameGeneration';
 import { useVideoEnhancement } from './player/hooks/useVideoEnhancement';
@@ -248,6 +248,11 @@ export function CustomPlayer({
         pendingProgrammaticSeeksRef.current.push({ time, at: Date.now(), ttlMs: LOAD_START_SEEK_TTL_MS });
     }, []);
     const pendingProgrammaticPauseRef = useRef(false);
+    // When the room last told this player to play (playerRef.play). The
+    // `play` event that follows is the room's, not the viewer's, and must not
+    // be published back; every other `play` — the button, a click on the
+    // picture, a key, the OS media controls — is the viewer's and always is.
+    const pendingProgrammaticPlayAtRef = useRef(0);
 
     // A live share is its own source: no manifest, no proxy, no engine.
     const isShareMode = !!shareSource;
@@ -311,6 +316,7 @@ export function CustomPlayer({
         // Commanded seeks and pauses belong to the video they were aimed at.
         pendingProgrammaticSeeksRef.current = [];
         pendingProgrammaticPauseRef.current = false;
+        pendingProgrammaticPlayAtRef.current = 0;
     }, [sourceKey]);
 
     // === PERSISTED AUDIO PREFERENCES ===
@@ -503,6 +509,12 @@ export function CustomPlayer({
 
         const handleVideoPlay = () => {
             setIsPlaying(true);
+            // A commanded start the browser refused fires no `play`; the
+            // window keeps such a mark from swallowing the viewer's next one.
+            if (Date.now() - pendingProgrammaticPlayAtRef.current < PROGRAMMATIC_PLAY_WINDOW_MS) {
+                pendingProgrammaticPlayAtRef.current = 0;
+                return;
+            }
             onPlay?.();
         };
         const handleVideoPause = () => {
@@ -610,6 +622,7 @@ export function CustomPlayer({
                 play: async () => {
                     const video = videoRef.current;
                     if (!video) return;
+                    if (video.paused) pendingProgrammaticPlayAtRef.current = Date.now();
                     // A `play` broadcast by another member is not a gesture
                     // from *this* viewer, so the policy applies to it exactly
                     // as it does to autoplay.
