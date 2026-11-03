@@ -30,7 +30,7 @@ import yt_dlp
 # Import modules
 from core.persistent_log import attach_persistent_log
 from core.config import (
-    PERSISTENT_LOG_FILE, PERSISTENT_LOG_MAX_BYTES, PERSISTENT_LOG_BACKUPS,
+    PERSISTENT_LOG_FILE, PERSISTENT_LOG_MAX_BYTES, PERSISTENT_LOG_BACKUPS, SEEK_SOON_AFTER_JOIN_SECONDS,
     LOUDNESS_RESPONSE_WAIT_SECONDS,
     CACHE_DIR, YTDLP_CACHE_DIR, GUEST_IDENTITY,
     MAX_CACHEABLE_FILE_BYTES, FORMAT_CACHE_TTL_SECONDS,
@@ -1784,6 +1784,9 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
     )
     if not connected:
         return
+    # For the logs: a seek seconds after joining is a player starting up,
+    # not a viewer choosing a position (see the "seek" handler below).
+    socket_opened_at = time.monotonic()
     # A room restored from the database, or one whose last member left
     # mid-video, has no segments loaded yet.
     sponsor_skipper.ensure_loaded(room_id)
@@ -1844,7 +1847,16 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
 
             elif msg_type == "seek":
                 seek_timestamp = payload.get("timestamp", 0)
-                current_video = manager.room_states.get(room_id, {}).get("video_data")
+                room_state = manager.room_states.get(room_id, {})
+                current_video = room_state.get("video_data")
+                if isinstance(seek_timestamp, (int, float)):
+                    connected_for = time.monotonic() - socket_opened_at
+                    soon = connected_for < SEEK_SOON_AFTER_JOIN_SECONDS
+                    logger.log(
+                        logging.WARNING if soon else logging.INFO,
+                        "Room seek%s: room=%s member=%s from=%.1f to=%.1f connected_for=%.1fs",
+                        " right after joining" if soon else "", room_id, user_email,
+                        manager._current_position(room_state), seek_timestamp, connected_for)
                 await manager.update_state(room_id, {"timestamp": seek_timestamp})
                 await manager.broadcast({"type": "seek", "payload": payload}, room_id, exclude=websocket)
                 if current_video and isinstance(seek_timestamp, (int, float)):

@@ -303,3 +303,26 @@ class TestRoomRename:
             listing = client.get("/api/rooms").json()
             entry = next(r for r in listing if r["id"] == "rename-listed")
             assert entry["name"] == "Listed"
+
+
+def test_a_room_seek_is_logged_with_who_where_and_how_soon_after_joining(caplog):
+    """'A refresh moved the room' could not be checked: seeks were not logged."""
+    import logging
+    from fastapi.testclient import TestClient
+    from main import app
+    with caplog.at_level(logging.INFO, logger="main"):
+        client = TestClient(app)
+        with client.websocket_connect("/ws/seek-log-room?user=mover@example.com") as ws:
+            ws.receive_json()
+            ws.send_json({"type": "seek", "payload": {"timestamp": 42.5}})
+            ws.send_json({"type": "ping", "payload": {}})
+            for _ in range(5):
+                if any("Room seek" in r.getMessage() for r in caplog.records):
+                    break
+                ws.receive_json()
+    line = next(r.getMessage() for r in caplog.records if "Room seek" in r.getMessage())
+    assert "room=seek-log-room" in line and "member=mover@example.com" in line
+    assert "to=42.5" in line and "connected_for=" in line
+    # Seconds after joining: the refresh-bug signature, kept as a warning.
+    record = next(r for r in caplog.records if "Room seek" in r.getMessage())
+    assert record.levelname == "WARNING" and "right after joining" in line

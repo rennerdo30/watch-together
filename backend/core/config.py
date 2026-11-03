@@ -560,6 +560,10 @@ LOUDNESS_SILENT_LUFS = -69.9
 PERSISTENT_LOG_FILE = os.environ.get("PERSISTENT_LOG_FILE", "data/logs/warnings.log")
 PERSISTENT_LOG_MAX_BYTES = 5 * 1024 * 1024
 PERSISTENT_LOG_BACKUPS = 3
+# A room seek this soon after the member's socket opened is logged as a
+# warning: a player starting up publishing its start position as a seek
+# (a refresh moving the room) looks exactly like this.
+SEEK_SOON_AFTER_JOIN_SECONDS = 15
 
 # Ensure directories exist
 for directory in [CACHE_DIR, "data", YTDLP_CACHE_DIR]:
