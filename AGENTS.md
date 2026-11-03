@@ -76,6 +76,7 @@ backend/
 │   ├── metrics.py            # Per-transfer proxy metrics
 │   ├── prefetcher.py         # Segment prefetching
 │   ├── sponsorblock.py       # SponsorBlock lookup + server-side room-wide skipping
+│   ├── program_loudness.py   # Whole-video loudness: audio rendition through ffmpeg's EBU R128 meter
 │   ├── stream_owner.py       # Stream URL -> member whose cookies fetch it (manifest probes, proxy)
 │   ├── user_settings.py      # Per-user preferences (JSON per identity, cached)
 │   └── watch_history.py      # Opt-in YouTube history: tracking URLs captured from yt-dlp, pinged per member

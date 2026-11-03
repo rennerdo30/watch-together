@@ -29,6 +29,7 @@ import yt_dlp
 
 # Import modules
 from core.config import (
+    LOUDNESS_RESPONSE_WAIT_SECONDS,
     CACHE_DIR, YTDLP_CACHE_DIR, GUEST_IDENTITY,
     MAX_CACHEABLE_FILE_BYTES, FORMAT_CACHE_TTL_SECONDS,
     METRICS_DEFAULT_SAMPLE_LIMIT, POT_PROVIDER_EXTRACTOR_ARGS,
@@ -88,6 +89,7 @@ from services.watch_history import reporter as history_reporter
 from services import stream_owner
 from services import stream_expiry
 from services import shared_browser
+from services import program_loudness
 from services import startup_timing
 from services.share_relay import RelayRefused, relay as share_relay
 
@@ -1093,6 +1095,34 @@ async def segment_spans(
     proxy_base = _proxy_base(request)
     return {"spans": [{"uri": proxied_url(stream_url, proxy_base), "start": start, "end": end}
                       for stream_url, start, end in spans]}
+
+
+@app.get("/api/loudness")
+async def program_loudness_endpoint(
+    request: Request,
+    url: str = Query(..., max_length=QUEUE_URL_MAX_LENGTH, description="The video's original URL"),
+    room: str = Query(None),
+):
+    """The whole video's integrated loudness, for one gain across all of it.
+
+    The player's leveller otherwise only knows what it has played; after a
+    jump it was guessing from scratch. Measured once per stream on first
+    request (seconds for a normal video) and answered from memory after
+    that; `integrated_lufs` is null when there is nothing to measure — a
+    live stream, an HLS source — or the measurement failed. A measurement
+    still running after LOUDNESS_RESPONSE_WAIT_SECONDS answers `pending`
+    and carries on; the player asks again.
+    """
+    video, _room_id, _user = await _announced_video(request, url, room)
+    if not video:
+        return {"integrated_lufs": None, "pending": False}
+    try:
+        lufs = await asyncio.wait_for(
+            program_loudness.integrated_loudness(await get_proxy_client(), video),
+            LOUDNESS_RESPONSE_WAIT_SECONDS)
+    except asyncio.TimeoutError:
+        return {"integrated_lufs": None, "pending": True}
+    return {"integrated_lufs": lufs, "pending": False}
 
 
 @app.get("/api/prewarm", status_code=202)

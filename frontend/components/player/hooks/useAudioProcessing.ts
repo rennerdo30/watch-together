@@ -13,6 +13,12 @@ export interface UseAudioProcessingOptions {
     /** Make-up gain applied after the compressor (default 1.0) */
     gain: number;
     normalizeLoudness?: boolean;
+    /**
+     * The current video's integrated loudness (LUFS) measured over the whole
+     * of it by the server, or null while unknown. Once known, the leveller
+     * applies one gain for the entire video instead of its running estimate.
+     */
+    programLoudnessLufs?: number | null;
     /** Fold every channel into one, played identically by both speakers */
     mono: boolean;
     /** Fixed local presentation buffer used by frame interpolation. */
@@ -28,6 +34,8 @@ export interface UseAudioProcessingReturn {
     delayReady: boolean;
     loudnessStatus: 'off' | 'starting' | 'active' | 'unavailable';
     loudnessGainDb: number;
+    /** Whether the gain comes from the whole video's loudness (not an estimate so far). */
+    loudnessWholeVideo: boolean;
 }
 
 // Global WeakMap to track which elements have MediaElementSourceNodes
@@ -67,7 +75,8 @@ const COMPRESSOR_CONFIG = {
  *   never spends one of the browser's handful of AudioContexts
  */
 export function useAudioProcessing(options: UseAudioProcessingOptions): UseAudioProcessingReturn {
-    const { sourceElement, nightMode, gain, mono, normalizeLoudness = false, delayMs = 0, prepareDelay = false } = options;
+    const { sourceElement, nightMode, gain, mono, normalizeLoudness = false, delayMs = 0, prepareDelay = false,
+        programLoudnessLufs = null } = options;
 
     // Refs for audio nodes (persist across renders)
     const audioContextRef = useRef<AudioContext | null>(null);
@@ -87,6 +96,8 @@ export function useAudioProcessing(options: UseAudioProcessingOptions): UseAudio
     const [normalizerReady, setNormalizerReady] = useState(false);
     const [normalizerFailed, setNormalizerFailed] = useState(false);
     const [loudnessGainDb, setLoudnessGainDb] = useState(0);
+    const [loudnessWholeVideo, setLoudnessWholeVideo] = useState(false);
+    const programLufsRef = useRef<number | null>(programLoudnessLufs);
 
     // State
     const [isConnected, setIsConnected] = useState(false);
@@ -284,7 +295,8 @@ export function useAudioProcessing(options: UseAudioProcessingOptions): UseAudio
                         channelCount: 2, channelCountMode: 'explicit', channelInterpretation: 'speakers',
                     });
                     node.port.onmessage = ({ data }) => {
-                        if (normalizerRef.current === node && Number.isFinite(data.gainDb)) setLoudnessGainDb(data.gainDb);
+                        if (normalizerRef.current !== node || !Number.isFinite(data.gainDb)) return;
+                        setLoudnessGainDb(data.gainDb); setLoudnessWholeVideo(data.program === true);
                     };
                     node.addEventListener('processorerror', () => {
                         if (normalizerRef.current !== node) return;
@@ -295,7 +307,7 @@ export function useAudioProcessing(options: UseAudioProcessingOptions): UseAudio
                     normalizerRef.current = node;
                 }
                 normalizerRef.current.port.postMessage({ type: 'volume', volume: sourceElement.muted ? 0 : sourceElement.volume });
-                normalizerRef.current.port.postMessage({ type: 'reset' });
+                normalizerRef.current.port.postMessage({ type: 'reset', programLufs: programLufsRef.current });
                 setNormalizerFailed(false); setNormalizerReady(true);
             } catch { if (!cancelled) { setNormalizerFailed(true); setNormalizerReady(false); reportClientError({ source: 'media', message: 'Volume normalization could not load; original audio routing retained' }); } }
         })();
@@ -311,12 +323,21 @@ export function useAudioProcessing(options: UseAudioProcessingOptions): UseAudio
     }, [normalizeLoudness, isConnected, sourceElement]);
 
     useEffect(() => {
+        programLufsRef.current = programLoudnessLufs;
+        normalizerRef.current?.port.postMessage({ type: 'program', lufs: programLoudnessLufs });
+    }, [programLoudnessLufs]);
+
+    // Only a new source starts the measurement over. A seek, a SponsorBlock
+    // skip or a quality switch is the same video: resetting there put the
+    // gain back to unity and the jump played unlevelled — a video turned down
+    // by 10 dB was loud for the two seconds re-measuring took.
+    useEffect(() => {
         if (!sourceElement) return;
-        const reset = () => normalizerRef.current?.port.postMessage({ type: 'reset' });
+        const reset = () => normalizerRef.current?.port.postMessage({ type: 'reset', programLufs: programLufsRef.current });
         const volume = () => normalizerRef.current?.port.postMessage({ type: 'volume', volume: sourceElement.muted ? 0 : sourceElement.volume });
         sourceElement.addEventListener('volumechange', volume);
-        for (const event of ['seeking', 'emptied', 'loadeddata']) sourceElement.addEventListener(event, reset);
-        return () => { sourceElement.removeEventListener('volumechange', volume); for (const event of ['seeking', 'emptied', 'loadeddata']) sourceElement.removeEventListener(event, reset); };
+        sourceElement.addEventListener('emptied', reset);
+        return () => { sourceElement.removeEventListener('volumechange', volume); sourceElement.removeEventListener('emptied', reset); };
     }, [sourceElement]);
 
     // === EFFECT: Update gain value ===
@@ -392,5 +413,6 @@ export function useAudioProcessing(options: UseAudioProcessingOptions): UseAudio
         delayReady: prepareDelay && isConnected && audioRunning,
         loudnessStatus: !normalizeLoudness ? 'off' : normalizerFailed || !isSupported ? 'unavailable' : normalizerReady && isConnected ? 'active' : 'starting',
         loudnessGainDb,
+        loudnessWholeVideo: normalizeLoudness && normalizerReady && loudnessWholeVideo,
     };
 }

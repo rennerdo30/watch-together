@@ -62,3 +62,33 @@ test('normalization preserves user volume and mute instead of chasing them', () 
   expect(tone(quiet, 0, 3).rms).toBe(0);
   expect(quiet.gainDb).toBe(beforeMute);
 });
+
+test('a known programme loudness sets one gain for the whole video, through silence and loud stretches', () => {
+  const normalizer = new LoudnessNormalizer(48000);
+  // The server measured the video at -28 LUFS: it wants +10 dB throughout.
+  normalizer.setProgramLoudness(-28);
+  tone(normalizer, 0.03, 3);
+  expect(normalizer.gainDb).toBeCloseTo(LOUDNESS_CONFIG.targetLufs + 28, 3);
+  // A skip into a much louder stretch: the running estimate would cut by
+  // ~20 dB over seconds; the whole-video gain does not move, only the
+  // peak limiter holds the samples under the ceiling.
+  const loud = tone(normalizer, 0.5, 4);
+  expect(normalizer.gainDb).toBeCloseTo(10, 3);
+  expect(loud.max).toBeLessThanOrEqual(normalizer.peak + 1e-6);
+  // Silence (a pause, a quiet scene) does not unwind it either.
+  tone(normalizer, 0, 3);
+  expect(normalizer.gainDb).toBeCloseTo(10, 3);
+  expect(normalizer.programKnown).toBe(true);
+});
+
+test('the programme gain is bounded and a new video forgets it', () => {
+  const normalizer = new LoudnessNormalizer(48000);
+  normalizer.setProgramLoudness(-80);
+  tone(normalizer, 0.01, 4);
+  expect(normalizer.gainDb).toBeCloseTo(LOUDNESS_CONFIG.maxBoostDb, 3);
+  normalizer.reset();
+  expect(normalizer.programKnown).toBe(false);
+  expect(normalizer.gainDb).toBe(0);
+  normalizer.setProgramLoudness(NaN);
+  expect(normalizer.programKnown).toBe(false);
+});

@@ -538,6 +538,23 @@ ADMIN_PLAYBACK_HISTORY_LIMIT = 50  # Recent reports the admin overview returns
 STARTUP_TIMING_HISTORY_CAPACITY = 200
 ADMIN_STARTUP_TIMING_LIMIT = 50
 
+# Whole-video loudness (services/program_loudness.py): the audio-only
+# rendition is read once, in ranged chunks, through ffmpeg's EBU R128 meter,
+# so a player can apply one gain for the whole video instead of guessing from
+# what it has played so far.
+LOUDNESS_FFMPEG_BINARY = "ffmpeg"
+LOUDNESS_FETCH_CHUNK_BYTES = 8 * 1024 * 1024  # One upstream request per chunk
+LOUDNESS_MAX_BYTES = 256 * 1024 * 1024  # About 4 h of 128 kbit/s audio; longer is not measured
+LOUDNESS_TIMEOUT_SECONDS = 180  # One measurement, fetch and decode together
+# How long /api/loudness waits for a running measurement before answering
+# "pending" (the player asks again). Under nginx's 20 s /api read timeout.
+LOUDNESS_RESPONSE_WAIT_SECONDS = 15
+LOUDNESS_CONCURRENCY = 2  # Measurements running at once (ffmpeg processes)
+LOUDNESS_RESULT_CAPACITY = 2000  # Measured streams remembered
+# ebur128 reports -70 LUFS (its absolute gate) for a programme with no
+# audible content; a number at or below this is "nothing to measure".
+LOUDNESS_SILENT_LUFS = -69.9
+
 # Ensure directories exist
 for directory in [CACHE_DIR, "data", YTDLP_CACHE_DIR]:
     if not os.path.exists(directory):

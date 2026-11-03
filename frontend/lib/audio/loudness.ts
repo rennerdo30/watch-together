@@ -1,4 +1,12 @@
-/** Streaming K-weighted loudness levelling, not whole-program EBU R128 mastering.
+/** K-weighted loudness levelling for playback.
+ *
+ * Two sources of truth, best first:
+ * - the programme loudness: the whole video's integrated loudness, measured
+ *   once by the server (`/api/loudness`). With it the gain is one number for
+ *   every second of the video, wherever playback jumps to.
+ * - a running estimate from what has been played, used until (or instead of,
+ *   for live streams) the programme figure arrives.
+ *
  * Filter design: ITU BS.1770 / De Man bilinear transform, sample-rate adjusted.
  * Reference: https://github.com/csteinmetz1/pyloudnorm (DeMan filter definitions).
  * Gate is deliberately conservative (-60 LUFS and -10 LU relative) for playback.
@@ -6,6 +14,8 @@
 export const LOUDNESS_CONFIG = {
   targetLufs: -18, gateLufs: -60, maxBoostDb: 12, maxCutDb: -24,
   riseDbPerSecond: 1, fallDbPerSecond: 6, peakDb: -1,
+  /** How fast the gain moves to a known programme gain, either way. */
+  programDbPerSecond: 6,
 } as const;
 type Coefficients = readonly [number, number, number, number, number];
 export function kWeighting(rate: number): [Coefficients, Coefficients] {
@@ -47,6 +57,8 @@ export class LoudnessNormalizer {
   private limiter = 1;
   private sinceSignal = 0;
   private inputVolume = 1;
+  /** The fixed gain the programme loudness calls for, once it is known. */
+  private programDb: number | null = null;
   gainDb = 0;
   measuredLufs: number | null = null;
   readonly peak = 10 ** (LOUDNESS_CONFIG.peakDb / 20);
@@ -58,12 +70,27 @@ export class LoudnessNormalizer {
   setInputVolume(volume: number) {
     this.inputVolume = Number.isFinite(volume) ? Math.max(0, Math.min(1, volume)) : 1;
   }
+  /** The whole video's integrated loudness (LUFS), or null when unknown. */
+  setProgramLoudness(lufs: number | null) {
+    this.programDb = lufs === null || !Number.isFinite(lufs) ? null
+      : Math.max(LOUDNESS_CONFIG.maxCutDb, Math.min(LOUDNESS_CONFIG.maxBoostDb, LOUDNESS_CONFIG.targetLufs - lufs));
+    if (this.programDb !== null) this.targetDb = this.programDb;
+  }
+  get programKnown() { return this.programDb !== null; }
+  /** A new video: nothing measured carries over, the programme figure included. */
   reset() {
     this.filters = []; this.energy.fill(0); this.history.fill(0);
     this.position = this.filled = this.sum = this.hop = this.historyIndex = this.historyLength = 0;
     this.targetDb = this.gainDb = this.sinceSignal = 0; this.limiter = 1; this.measuredLufs = null;
+    this.programDb = null;
   }
   private measure() {
+    this.measureRunning();
+    // A known programme loudness decides the gain; the running estimate is
+    // still kept for display, but neither silence nor a loud stretch moves it.
+    if (this.programDb !== null) this.targetDb = this.programDb;
+  }
+  private measureRunning() {
     const power = Math.max(0, this.sum / this.energy.length);
     const momentary = -0.691 + 10 * Math.log10(Math.max(1e-20, power));
     if (momentary < LOUDNESS_CONFIG.gateLufs) {
@@ -105,7 +132,8 @@ export class LoudnessNormalizer {
       this.position = (this.position + 1) % this.energy.length;
       this.filled = Math.min(this.energy.length, this.filled + 1);
       if (++this.hop >= Math.round(this.rate * 0.1)) { this.hop = 0; if (this.filled === this.energy.length) this.measure(); }
-      const step = (this.targetDb < this.gainDb ? LOUDNESS_CONFIG.fallDbPerSecond : LOUDNESS_CONFIG.riseDbPerSecond) / this.rate;
+      const step = (this.programDb !== null ? LOUDNESS_CONFIG.programDbPerSecond
+        : this.targetDb < this.gainDb ? LOUDNESS_CONFIG.fallDbPerSecond : LOUDNESS_CONFIG.riseDbPerSecond) / this.rate;
       this.gainDb += Math.max(-step, Math.min(step, this.targetDb - this.gainDb));
       const gain = 10 ** (this.gainDb / 20);
       const userCeiling = this.peak * this.inputVolume;

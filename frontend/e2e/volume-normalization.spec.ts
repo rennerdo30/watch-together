@@ -169,3 +169,54 @@ test('real media-element volume remains effective through the normalization work
   expect(result.ratio).toBeGreaterThan(0.22); expect(result.ratio).toBeLessThan(0.28);
   expect(result.muted).toBeLessThan(0.00001);
 });
+
+test('a seek keeps the leveller\'s gain and the whole-video loudness reaches it', async ({ page }) => {
+  // A seek (a SponsorBlock skip) used to reset the leveller to unity, so the
+  // jump played unlevelled for the ~2 s re-measuring took.
+  await page.addInitScript(() => {
+    const messages: { type?: string; lufs?: unknown; programLufs?: unknown }[] = [];
+    Object.assign(window, { __normalizerMessages: messages });
+    const Original = window.AudioWorkletNode;
+    window.AudioWorkletNode = class extends Original {
+      constructor(...args: ConstructorParameters<typeof Original>) {
+        super(...args);
+        const post = this.port.postMessage.bind(this.port);
+        this.port.postMessage = (message: unknown, ...rest: unknown[]) => {
+          messages.push(message as never);
+          return (post as (...a: unknown[]) => void)(message, ...rest);
+        };
+      }
+    };
+  });
+  await stubAdaptiveStream(page, 'https://youtu.be/loudness-program');
+  const asked: string[] = [];
+  await page.route('**/api/loudness**', (route) => {
+    asked.push(route.request().url());
+    // The first answer is "still measuring", as for a long video.
+    const body = asked.length === 1 ? { integrated_lufs: null, pending: true } : { integrated_lufs: -8, pending: false };
+    return route.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' },
+      body: JSON.stringify(body) });
+  });
+  const roomId = `e2e-loudness-${Date.now().toString(36)}`;
+  await page.goto(`/room/${roomId}?user=volume@example.com`);
+  await expect(page.getByLabel('Connected to the room')).toBeVisible();
+  await page.getByPlaceholder('Paste video URL...').fill('https://youtu.be/loudness-program');
+  await page.getByPlaceholder('Paste video URL...').press('Enter');
+  const video = page.locator('video[data-stream-type="mse"]');
+  await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.readyState)).toBeGreaterThanOrEqual(2);
+
+  type Message = { type?: string; lufs?: unknown };
+  const messages = () => page.evaluate(() => (window as unknown as { __normalizerMessages: Message[] }).__normalizerMessages);
+  await expect.poll(async () => (await messages()).some(m => m.type === 'program' && m.lufs === -8)).toBe(true);
+  const params = new URL(asked[0]).searchParams;
+  expect(params.get('url')).toBe('https://youtu.be/loudness-program');
+  expect(params.get('room')).toBe(roomId);
+
+  const before = (await messages()).length;
+  await video.evaluate(async (v: HTMLVideoElement) => {
+    v.currentTime = Math.min(2, v.duration / 2);
+    await new Promise(resolve => v.addEventListener('seeked', resolve, { once: true }));
+  });
+  const afterSeek = (await messages()).slice(before);
+  expect(afterSeek.filter(m => m.type === 'reset')).toEqual([]);
+});

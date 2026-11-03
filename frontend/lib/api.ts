@@ -448,6 +448,21 @@ export function segmentSpansUrl(originalUrl: string, seconds: number, height: nu
     return `${BACKEND_ORIGIN}/api/segment-spans?${params.toString()}`;
 }
 
+/**
+ * Where the whole-video loudness of the video behind a manifest is answered.
+ *
+ * It takes the manifest's own query (the video, the room, the dev identity),
+ * so whoever may load the manifest may ask, about exactly that video.
+ */
+export function programLoudnessUrl(manifestUrl: string): string | null {
+    const base = typeof window === 'undefined' ? 'http://localhost' : window.location.href;
+    let parsed: URL;
+    try { parsed = new URL(manifestUrl, base); } catch { return null; }
+    if (!parsed.pathname.endsWith('/api/dash-manifest') || !parsed.searchParams.get('url')) return null;
+    parsed.pathname = parsed.pathname.replace(/\/api\/dash-manifest$/, '/api/loudness');
+    return manifestUrl.startsWith('http') ? parsed.toString() : `${parsed.pathname}${parsed.search}`;
+}
+
 export function dashManifestUrl(originalUrl: string, roomId: string): string {
     // Identity travels as a query parameter in development mode, the same
     // way the other client calls carry it.

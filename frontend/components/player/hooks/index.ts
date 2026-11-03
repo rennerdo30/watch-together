@@ -6,3 +6,5 @@ export type { UseHlsPlayerOptions, UseHlsPlayerReturn, HlsQualityLevel, HlsStats
 
 export { useShakaPlayer, AUTO_QUALITY } from './useShakaPlayer';
 export type { UseShakaPlayerOptions, UseShakaPlayerReturn, ShakaQualityLevel, ShakaAudioTrack, ShakaStats, ShakaPreloadTarget, ShakaLoadPlan } from './useShakaPlayer';
+
+export { useProgramLoudness } from './useProgramLoudness';

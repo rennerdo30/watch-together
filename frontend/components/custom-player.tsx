@@ -9,7 +9,7 @@ import { Loader2, Info, Activity, Play, VolumeX } from 'lucide-react';
 import { PlayerControls } from './player-controls';
 import { QualityOption } from '@/lib/api';
 import {
-    useAudioProcessing, useHlsPlayer, useShakaPlayer, HlsQualityLevel, AUTO_QUALITY,
+    useAudioProcessing, useProgramLoudness, useHlsPlayer, useShakaPlayer, HlsQualityLevel, AUTO_QUALITY,
     type ShakaLoadPlan, type ShakaPreloadTarget,
 } from './player/hooks';
 import { startPlayback, type PlaybackStart } from '@/lib/playback';
@@ -382,10 +382,15 @@ export function CustomPlayer({
 
     // === AUDIO PROCESSING HOOK ===
     // Both engines carry audio on the video element.
+    // Only adaptive (MSE) videos have an audio rendition the server can read
+    // end to end; live and HLS sources level on the running estimate alone.
+    const programLoudnessLufs = useProgramLoudness(mediaElement, isMseMode && !isLive ? manifestUrl : undefined,
+        isLoudnessEnabled);
     const audio = useAudioProcessing({
         sourceElement: mediaElement,
         nightMode: isNightModeEnabled,
         normalizeLoudness: isLoudnessEnabled,
+        programLoudnessLufs,
         gain: nightModeGain,
         mono: isMonoEnabled,
         prepareDelay: framegenMode !== 'off' && framegenCapability.ready && !isLive && !isShareMode,
@@ -1169,7 +1174,7 @@ export function CustomPlayer({
                 enhancementStatus={enhancementStatus.message}
                 normalizationActive={isLoudnessEnabled}
                 onToggleNormalization={() => setIsLoudnessEnabled(!isLoudnessEnabled)}
-                normalizationStatus={audio.loudnessStatus === 'active' ? `Active · ${audio.loudnessGainDb >= 0 ? '+' : ''}${audio.loudnessGainDb.toFixed(1)} dB adjustment` : audio.loudnessStatus === 'unavailable' ? 'Unavailable — original audio continues' : 'Preparing local loudness measurement…'}
+                normalizationStatus={audio.loudnessStatus === 'active' ? `Active · ${audio.loudnessGainDb >= 0 ? '+' : ''}${audio.loudnessGainDb.toFixed(1)} dB ${audio.loudnessWholeVideo ? 'for the whole video' : 'adjustment (estimate so far)'}` : audio.loudnessStatus === 'unavailable' ? 'Unavailable — original audio continues' : 'Preparing local loudness measurement…'}
                 nightModeActive={isNightModeEnabled}
                 onToggleNightMode={toggleNightMode}
                 nightModeGain={nightModeGain}

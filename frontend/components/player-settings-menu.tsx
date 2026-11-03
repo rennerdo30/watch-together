@@ -325,7 +325,7 @@ function SoundPage(props: PlayerSettingsMenuProps) {
                 <SettingRow
                     className="py-3"
                     title="Normalize volume"
-                    description="Evens out loudness between videos, gradually. Runs on your device."
+                    description="Evens out loudness between videos: one level per video, measured over all of it."
                     control={<Switch checked={Boolean(normalizationActive)} onChange={onToggleNormalization} label="Normalize volume" />}
                 >
                     {normalizationActive && normalizationStatus && <Status label="Volume normalization status">{normalizationStatus}</Status>}

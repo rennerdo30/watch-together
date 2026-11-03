@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Whole-video loudness normalization
+
+- The server measures each video's integrated loudness over its entire audio
+  rendition (ffmpeg EBU R128, `/api/loudness`), once per stream; the player
+  applies that one gain to the whole video instead of guessing from what it
+  has played. Live and HLS sources keep the running estimate.
+- A seek or SponsorBlock skip no longer resets the leveller to unity, which
+  made the jump play unlevelled, and briefly loud, until it re-measured.
+
 ### Reauthenticate disconnected rooms
 
 - Check for an expired Access login only after the room socket has closed.

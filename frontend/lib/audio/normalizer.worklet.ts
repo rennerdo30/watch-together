@@ -12,7 +12,10 @@ class NormalizerProcessor extends AudioWorkletProcessor {
   private alive = true;
   constructor() {
     super(); this.port.onmessage = ({ data }) => {
-      if (data.type === 'reset') this.normalizer.reset();
+      // A reset is a new video; it carries that video's programme loudness
+      // when it is already known, so the two cannot arrive out of order.
+      if (data.type === 'reset') { this.normalizer.reset(); this.normalizer.setProgramLoudness(data.programLufs ?? null); }
+      if (data.type === 'program') this.normalizer.setProgramLoudness(data.lufs ?? null);
       if (data.type === 'dispose') this.alive = false;
       if (data.type === 'volume') this.normalizer.setInputVolume(data.volume);
     };
@@ -23,7 +26,7 @@ class NormalizerProcessor extends AudioWorkletProcessor {
     this.samples += outputs[0]?.[0]?.length ?? 0;
     if (this.samples >= sampleRate) {
       this.samples = 0;
-      this.port.postMessage({ gainDb: this.normalizer.gainDb, loudness: this.normalizer.measuredLufs });
+      this.port.postMessage({ gainDb: this.normalizer.gainDb, loudness: this.normalizer.measuredLufs, program: this.normalizer.programKnown });
     }
     return true;
   }
