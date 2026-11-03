@@ -1270,3 +1270,12 @@ class TestLogsCanBeRead:
     def test_errors_are_one_command_away(self):
         script = (REPO_ROOT / "deploy" / "host-status.sh").read_text()
         assert "--errors" in script and "error_report.py" in script
+
+    def test_a_deploy_never_leaves_the_disk_under_the_cache_floor(self):
+        """Build cache kept for speed pushed the host under MIN_DISK_FREE_GB."""
+        deploy = (REPO_ROOT / "deploy" / "deploy.sh").read_text()
+        floor_mb = int(re.search(r'DEPLOY_CACHE_FLOOR_MB="\$\{DEPLOY_CACHE_FLOOR_MB:-(\d+)\}"', deploy)[1])
+        config = (BACKEND / "core" / "config.py").read_text()
+        backend_floor_gb = float(re.search(r'"MIN_DISK_FREE_GB", "([\d.]+)"', config)[1])
+        assert floor_mb > backend_floor_gb * 1024
+        assert "docker builder prune -af" in deploy.split("DEPLOY_CACHE_FLOOR_MB * 1024")[1]

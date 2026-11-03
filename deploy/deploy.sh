@@ -43,6 +43,10 @@ DRY_RUN=0
 # and a cap by age let a busy day fill the host).
 DEPLOY_MIN_FREE_MB="${DEPLOY_MIN_FREE_MB:-1024}"
 DEPLOY_BUILD_CACHE_MAX="${DEPLOY_BUILD_CACHE_MAX:-1gb}"
+# Free space the backend needs to keep its segment cache on (its
+# MIN_DISK_FREE_GB, 2 GB) plus a margin for the cache to fill into. Build
+# cache kept for faster builds is given up first when the disk is short.
+DEPLOY_CACHE_FLOOR_MB="${DEPLOY_CACHE_FLOOR_MB:-2560}"
 
 for arg in "$@"; do
 	case "$arg" in
@@ -237,6 +241,20 @@ else
 	# go: nothing a running or stopped container uses, and no volume.
 	$SSH "docker image prune -f >/dev/null && docker builder prune -f --max-used-space ${DEPLOY_BUILD_CACHE_MAX} >/dev/null" \
 		&& green "  ✓ old images and build cache pruned"
+	# The kept build cache must not cost viewers the segment cache: below
+	# the backend's free-space floor it switches itself off (it did, on
+	# 2026-11-03, with 1 GB of build cache on a 19 GB disk).
+	free_kb=$($SSH "df -Pk ${REMOTE} | awk 'NR==2 {print \$4}'")
+	if [ "${free_kb:-0}" -lt $((DEPLOY_CACHE_FLOOR_MB * 1024)) ]; then
+		$SSH "docker builder prune -af >/dev/null" || true
+		free_kb=$($SSH "df -Pk ${REMOTE} | awk 'NR==2 {print \$4}'")
+		if [ "${free_kb:-0}" -lt $((DEPLOY_CACHE_FLOOR_MB * 1024)) ]; then
+			red "  ✗ only $((free_kb / 1024)) MB free after dropping the build cache: the segment cache stays off."
+			red "    Free space on the host (other projects' images, logs) or grow the disk."
+		else
+			green "  ✓ build cache dropped to keep the segment cache on ($((free_kb / 1024)) MB free)"
+		fi
+	fi
 
 	# nginx.conf is a bind mount, so `up -d` sees no change to the service
 	# and leaves the container running with the config it started with. A
