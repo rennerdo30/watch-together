@@ -139,6 +139,12 @@ export interface UseShakaPlayerOptions {
     qualityMode?: QualityMode;
     autoPlay?: boolean;
     initialTime?: number;
+    /**
+     * Called before the player moves the element to a position of its own
+     * accord — where a load starts. That move fires `seeked` like a viewer's
+     * seek; the owner must not report it to the room as one.
+     */
+    onPositionSet?: (seconds: number) => void;
     onError?: (error: string) => void;
     /** The CDN refused the stream URLs (403/410): they need re-resolving. */
     onSourceExpired?: () => Promise<void>;
@@ -760,6 +766,7 @@ export function useShakaPlayer(options: UseShakaPlayerOptions): UseShakaPlayerRe
                     manifestReportedRef.current = true;
                     callbackRefs.current.onManifestReady?.(true);
                 }
+                if (startAt > 0) callbackRefs.current.onPositionSet?.(startAt);
                 await player.load(manager ?? manifestUrl, startAt > 0 ? startAt : null, DASH_MIME_TYPE);
                 if (cancelled) return;
                 loadingRef.current = false;

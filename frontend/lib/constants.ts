@@ -26,6 +26,16 @@ export const COOKIE_MEMORY_TTL_MINUTES = 30;
 
 /** How often the landing page refreshes the list of active rooms. */
 export const ROOM_LIST_POLL_INTERVAL_MS = 10_000;
+/**
+ * How long a seek this player commanded (sync correction) is remembered so
+ * its `seeked` is not reported to the room as the viewer's own.
+ */
+export const PROGRAMMATIC_SEEK_TTL_MS = 10_000;
+/**
+ * The same for the position a load starts at, whose `seeked` arrives only
+ * once the manifest and the first segments are in: seconds on a slow link.
+ */
+export const LOAD_START_SEEK_TTL_MS = 60_000;
 
 /** Room ids are restricted to the same character set the backend accepts. */
 export const ROOM_ID_ALLOWED_PATTERN = /[^a-zA-Z0-9-_]/g;

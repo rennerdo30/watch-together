@@ -26,6 +26,8 @@ export interface UseHlsPlayerOptions {
     enabled: boolean;
     autoPlay?: boolean;
     initialTime?: number;
+    /** Called before the hook moves the element to `initialTime`; see useShakaPlayer. */
+    onPositionSet?: (seconds: number) => void;
     isLive?: boolean;
     onManifestParsed?: (levels: HlsQualityLevel[]) => void;
     onError?: (error: string) => void;
@@ -90,6 +92,7 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
         onLoadingChange,
         onBufferingChange,
         onPlaybackStart,
+        onPositionSet,
     } = options;
 
     // HLS instance ref
@@ -118,6 +121,7 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
         onLoadingChange,
         onBufferingChange,
         onPlaybackStart,
+        onPositionSet,
     });
     useEffect(() => {
         callbackRefs.current = {
@@ -127,9 +131,10 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
             onLoadingChange,
             onBufferingChange,
             onPlaybackStart,
+            onPositionSet,
         };
     }, [onManifestParsed, onError, onSourceExpired, onLoadingChange,
-        onBufferingChange, onPlaybackStart]);
+        onBufferingChange, onPlaybackStart, onPositionSet]);
 
     // State
     const [isLoading, setIsLoading] = useState(true);
@@ -217,6 +222,7 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
                 callbackRefs.current.onLoadingChange?.(false);
 
                 if (initialTime > 0 && Number.isFinite(initialTime)) {
+                    callbackRefs.current.onPositionSet?.(initialTime);
                     video.currentTime = initialTime;
                 }
 
@@ -396,6 +402,7 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
 
                 // Set initial time if provided
                 if (initialTime > 0 && Number.isFinite(initialTime) && !isLive) {
+                    callbackRefs.current.onPositionSet?.(initialTime);
                     video.currentTime = initialTime;
                 }
 
@@ -503,6 +510,7 @@ export function useHlsPlayer(options: UseHlsPlayerOptions): UseHlsPlayerReturn {
                 callbackRefs.current.onLoadingChange?.(false);
 
                 if (initialTime > 0 && Number.isFinite(initialTime) && !isLive) {
+                    callbackRefs.current.onPositionSet?.(initialTime);
                     video.currentTime = initialTime;
                 }
 

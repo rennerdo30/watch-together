@@ -22,6 +22,7 @@ import { forgetBandwidth, readRememberedEstimate } from '@/lib/bandwidth-memory'
 import {
     PLAYER_STATS_REFRESH_MS, QUALITY_REPORT_INTERVAL_MS,
     SHARE_LIVE_EDGE_CHECK_MS, SHARE_LIVE_EDGE_MAX_SECONDS, SHAKA_PREFERRED_VIDEO_CODECS,
+    LOAD_START_SEEK_TTL_MS, PROGRAMMATIC_SEEK_TTL_MS,
 } from '@/lib/constants';
 import { useFrameGeneration, useFramegenPreference, useFramegenCapability } from './player/hooks/useFrameGeneration';
 import { useVideoEnhancement } from './player/hooks/useVideoEnhancement';
@@ -239,7 +240,13 @@ export function CustomPlayer({
     // that completed near an incoming message and echoed server seeks that
     // completed after the window. Matching the landing position against the
     // commanded targets can.
-    const pendingProgrammaticSeeksRef = useRef<{ time: number; at: number }[]>([]);
+    const pendingProgrammaticSeeksRef = useRef<{ time: number; at: number; ttlMs: number }[]>([]);
+    // The engines' own moves: where a load (or a reload after a refused URL)
+    // starts. Its `seeked` reported as the viewer's seek moved the whole room
+    // to that position — on every refresh, a position already seconds stale.
+    const expectLoadStartSeek = useCallback((time: number) => {
+        pendingProgrammaticSeeksRef.current.push({ time, at: Date.now(), ttlMs: LOAD_START_SEEK_TTL_MS });
+    }, []);
     const pendingProgrammaticPauseRef = useRef(false);
 
     // A live share is its own source: no manifest, no proxy, no engine.
@@ -341,6 +348,7 @@ export function CustomPlayer({
         enabled: !isMseMode && !isShareMode,
         autoPlay,
         initialTime,
+        onPositionSet: expectLoadStartSeek,
         isLive,
         onManifestParsed: (levels: HlsQualityLevel[]) => {
             setHlsQualities(levels);
@@ -364,6 +372,7 @@ export function CustomPlayer({
         qualityMode,
         autoPlay,
         initialTime,
+        onPositionSet: expectLoadStartSeek,
         onError: setError,
         onSourceExpired,
         onPlaybackStart: setPlaybackGate,
@@ -511,7 +520,7 @@ export function CustomPlayer({
             // A superseded correction never fires its own `seeked`; expire it
             // so it cannot swallow a genuine user seek near the same spot.
             pendingProgrammaticSeeksRef.current = pending.filter(
-                (entry) => now - entry.at < 10_000);
+                (entry) => now - entry.at < entry.ttlMs);
             const index = pendingProgrammaticSeeksRef.current.findIndex(
                 (entry) => Math.abs(entry.time - landed) < 1.0);
             if (index !== -1) {
@@ -620,7 +629,7 @@ export function CustomPlayer({
                 currentTime: (time?: number) => {
                     if (time !== undefined && videoRef.current) {
                         pendingProgrammaticSeeksRef.current.push(
-                            { time, at: Date.now() });
+                            { time, at: Date.now(), ttlMs: PROGRAMMATIC_SEEK_TTL_MS });
                         videoRef.current.currentTime = time;
                     }
                     return videoRef.current?.currentTime || 0;
