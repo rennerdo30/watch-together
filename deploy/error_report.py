@@ -154,7 +154,8 @@ def report(records, media_lines, hours, disk=None, out=sys.stdout):
     else:
         write(f"{ok} succeeded. Failed, by status / range / user:")
     for (status, ranged, user), group in sorted(failed.items(), key=lambda kv: -kv[1].count)[:MAX_ROWS]:
-        hint = "  ← a download manager, refused on purpose" if status == 403 and ranged == "NO RANGE" else ""
+        hint = ("  ← whole-file request: a download manager, or an extension stripping the player's Range header"
+                if status == 403 and ranged == "NO RANGE" else "")
         write(f"{group.count:5}  {status}  {ranged:8}  {user:32} {_span(group)}{hint}")
     write()
     write("── whole-file downloads refused, by user ───────────")
