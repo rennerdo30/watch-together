@@ -311,6 +311,9 @@ The in-memory cookie store is emptied between tests.
 
 ## Important Notes
 
+- Something broken in production? `./deploy/host-status.sh --errors` first: client errors,
+  failed proxy requests by user, refusals, backend warnings (kept across deploys in
+  `data/logs/warnings.log`) and the disk floor
 - Room state persists for 5 minutes after last user leaves
 - Cookies are held in memory only, while the extension keeps refreshing them; nothing
   under `data/` ever contains one

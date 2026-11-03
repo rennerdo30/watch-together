@@ -1237,3 +1237,36 @@ class TestDeploymentDependencyRefresh:
         dockerfile = (REPO_ROOT / "frontend/Dockerfile").read_text()
         assert "RUN npm ci" in dockerfile
         assert "legacy-peer-deps" not in dockerfile
+
+
+class TestLogsCanBeRead:
+    """Diagnosing a viewer's trouble must not depend on luck.
+
+    A playback complaint was unanswerable: the proxy log had no time and no
+    user, and every deploy discarded the backend log with the client errors
+    in it. The host disk is 19 GB; unbounded container logs eat into the
+    floor below which the segment cache switches itself off.
+    """
+
+    def test_the_media_log_says_when_and_who(self):
+        conf = (REPO_ROOT / "nginx" / "nginx.conf").read_text()
+        media = conf.split("log_format media")[1].split(";")[0]
+        assert "$time_iso8601" in media
+        assert "$http_cf_access_authenticated_user_email" in media
+        # --perf parses the leading fields by position; they stay first.
+        assert media.strip().startswith("'$status $body_bytes_sent bytes '")
+
+    def test_every_service_log_is_capped(self):
+        compose = (REPO_ROOT / "deploy" / "docker-compose.yml").read_text()
+        services = re.split(r"\n(?:volumes|networks):\n", compose.split("\nservices:\n")[1])[0]
+        names = re.findall(r"^  ([a-z][\w-]*):\n", services, flags=re.M)
+        assert names, "no services parsed"
+        for name in names:
+            block = services.split(f"\n  {name}:\n")[1] if f"\n  {name}:\n" in services else services.split(f"  {name}:\n")[1]
+            block = re.split(r"\n  [a-z][\w-]*:\n", block)[0]
+            assert "logging: *capped_logs" in block, f"{name} has an uncapped log"
+        assert 'max-size: "50m"' in compose
+
+    def test_errors_are_one_command_away(self):
+        script = (REPO_ROOT / "deploy" / "host-status.sh").read_text()
+        assert "--errors" in script and "error_report.py" in script

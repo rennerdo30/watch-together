@@ -249,6 +249,9 @@ Tests run against a temporary database and cookie directory (see
 
 ## Important Notes
 
+- Something broken in production? `./deploy/host-status.sh --errors` first: client errors,
+  failed proxy requests by user, refusals, backend warnings (kept across deploys in
+  `data/logs/warnings.log`) and the disk floor
 - Room state persists for 5 minutes after last user leaves
 - User cookies are stored in `data/cookies/{email}.txt` (Netscape format, mode 0600)
 - Room IDs are sanitized to alphanumeric + hyphen/underscore only

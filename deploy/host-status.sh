@@ -25,6 +25,10 @@
 #                                                 # first-frame times, medians and p90
 #   ./deploy/host-status.sh --seek=<video-url>     # cost of a ranged read at increasing
 #                                                 # depths, upstream and through the proxy
+#   ./deploy/host-status.sh --errors[=HOURS]       # what went wrong, for whom, when (default
+#                                                 # 24 h): client errors, failed proxy
+#                                                 # requests, refusals, backend warnings, disk.
+#                                                 # Survives deploys (data/logs/warnings.log)
 #   ./deploy/host-status.sh --host=10.0.0.5 --user=admin
 
 set -euo pipefail
@@ -54,6 +58,9 @@ RUN_QUALITY=0
 QUALITY_VIEWER=""
 RUN_STARTUP=0
 SEEK_URL=""
+RUN_ERRORS=0
+ERROR_HOURS=24
+TAIL_SET=0
 
 for arg in "$@"; do
 	case "$arg" in
@@ -61,7 +68,7 @@ for arg in "$@"; do
 		--host=*)   SSH_HOST="${arg#--host=}" ;;
 		--remote=*) REMOTE="${arg#--remote=}" ;;
 		--logs=*)   LOGS_SERVICE="${arg#--logs=}" ;;
-		--tail=*)   TAIL_LINES="${arg#--tail=}" ;;
+		--tail=*)   TAIL_LINES="${arg#--tail=}"; TAIL_SET=1 ;;
 		--probe=*)  PROBE_PATH="${arg#--probe=}" ;;
 		--diag)     RUN_DIAG=1 ;;
 		--clients=*) CLIENTS_URL="${arg#--clients=}" ;;
@@ -75,8 +82,19 @@ for arg in "$@"; do
 		--quality=*) RUN_QUALITY=1; QUALITY_VIEWER="${arg#--quality=}" ;;
 		--startup) RUN_STARTUP=1 ;;
 		--seek=*) SEEK_URL="${arg#--seek=}" ;;
+		--errors) RUN_ERRORS=1 ;;
+		--errors=*) RUN_ERRORS=1; ERROR_HOURS="${arg#--errors=}" ;;
 	esac
 done
+
+# The report reads the whole retained nginx log unless told otherwise.
+if [ "$RUN_ERRORS" = "1" ] && [ "$TAIL_SET" = "0" ]; then
+	TAIL_LINES=all
+fi
+ERROR_REPORT_PY=""
+if [ "$RUN_ERRORS" = "1" ]; then
+	ERROR_REPORT_PY="$(cat "$(dirname "$0")/error_report.py")"
+fi
 
 if [ -z "$SSH_HOST" ]; then
 	echo "✗ no deployment host set (deploy/target.env or --host=)." >&2
@@ -102,6 +120,9 @@ ssh -o BatchMode=yes -o ConnectTimeout=15 "${SSH_USER}@${SSH_HOST}" \
 	 WT_QUALITY_VIEWER=$(printf '%q' "$QUALITY_VIEWER") \
 	 WT_STARTUP=$(printf '%q' "$RUN_STARTUP") \
 	 WT_SEEK_URL=$(printf '%q' "$SEEK_URL") \
+	 WT_ERRORS=$(printf '%q' "$RUN_ERRORS") \
+	 WT_ERROR_HOURS=$(printf '%q' "$ERROR_HOURS") \
+	 WT_ERROR_REPORT_PY=$(printf '%q' "$ERROR_REPORT_PY") \
 	 bash -s" <<'REMOTE_SCRIPT'
 set -u
 REMOTE="$WT_REMOTE"
@@ -120,7 +141,17 @@ RUN_QUALITY="${WT_QUALITY:-0}"
 QUALITY_VIEWER="${WT_QUALITY_VIEWER:-}"
 RUN_STARTUP="${WT_STARTUP:-0}"
 SEEK_URL="${WT_SEEK_URL:-}"
+RUN_ERRORS="${WT_ERRORS:-0}"
 COMPOSE="docker compose -f deploy/docker-compose.yml --env-file ${REMOTE}/.env"
+
+# deploy/error_report.py, shipped in an environment variable and run in the
+# backend container (it reads the data volume there), the nginx log on stdin.
+if [ "$RUN_ERRORS" = "1" ]; then
+	cd "$REMOTE" || exit 1
+	$COMPOSE logs --no-log-prefix --tail "${TAIL_LINES}" nginx 2>/dev/null \
+		| $COMPOSE exec -T -e WT_ERROR_HOURS="${WT_ERROR_HOURS:-24}" backend python -c "$WT_ERROR_REPORT_PY"
+	exit 0
+fi
 
 if [ -n "$LOGS_SERVICE" ]; then
 	cd "$REMOTE" || exit 1

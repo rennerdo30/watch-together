@@ -16,7 +16,7 @@ import json
 import logging
 from functools import partial
 from typing import Optional
-from urllib.parse import urljoin, quote, urlparse
+from urllib.parse import urljoin, quote, urlparse, parse_qs
 import re
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect, Request
@@ -28,7 +28,9 @@ import aiofiles
 import yt_dlp
 
 # Import modules
+from core.persistent_log import attach_persistent_log
 from core.config import (
+    PERSISTENT_LOG_FILE, PERSISTENT_LOG_MAX_BYTES, PERSISTENT_LOG_BACKUPS,
     LOUDNESS_RESPONSE_WAIT_SECONDS,
     CACHE_DIR, YTDLP_CACHE_DIR, GUEST_IDENTITY,
     MAX_CACHEABLE_FILE_BYTES, FORMAT_CACHE_TTL_SECONDS,
@@ -123,6 +125,7 @@ sponsor_skipper.prewarm = _warm_skip_destination
 # tell a player's ranged request apart from an intermediary rewriting it.
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
+attach_persistent_log(PERSISTENT_LOG_FILE, PERSISTENT_LOG_MAX_BYTES, PERSISTENT_LOG_BACKUPS)
 logger = logging.getLogger(__name__)
 
 # Allowed origins for CORS (set via environment variable, comma-separated)
@@ -1172,6 +1175,18 @@ async def proxy_options():
     )
 
 
+def _stream_label(url: str) -> tuple:
+    """(itag, mime) of a googlevideo URL, for logs: the host alone says nothing."""
+    stream = parse_qs(urlparse(url).query)
+    return (stream.get("itag") or ["?"])[0], (stream.get("mime") or ["?"])[0]
+
+
+def _referring_room(request: Request) -> Optional[str]:
+    """The room a browser request came from, read from its Referer (logs only)."""
+    path = urlparse(request.headers.get("referer", "")).path
+    return sanitize_room_id(path[len("/room/"):]) if path.startswith("/room/") else None
+
+
 @app.get("/api/proxy")
 async def proxy_stream(request: Request, url: str):
     """Proxy HLS manifests and segments to bypass CORS/restrictions."""
@@ -1189,9 +1204,11 @@ async def proxy_stream(request: Request, url: str):
     # A bare GET for a whole large media file is never a player; refuse it
     # before spending a DNS lookup or an upstream connection on it.
     if is_whole_file_grab(url, request.headers.get("range")):
+        itag, mime = _stream_label(url)
         logger.warning(
-            f"Refused whole-file media download of {url[:80]} "
-            f"(user {user_email or 'anonymous'}, UA {request.headers.get('user-agent', '?')[:60]})")
+            "Refused whole-file media download: user=%s itag=%s mime=%s room=%s ua=%s",
+            user_email or "anonymous", itag, mime,
+            _referring_room(request) or "-", request.headers.get("user-agent", "?")[:120])
         raise HTTPException(
             status_code=403,
             detail="Whole-file media downloads are not served; players request byte ranges")

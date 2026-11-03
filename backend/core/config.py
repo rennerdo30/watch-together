@@ -555,6 +555,12 @@ LOUDNESS_RESULT_CAPACITY = 2000  # Measured streams remembered
 # audible content; a number at or below this is "nothing to measure".
 LOUDNESS_SILENT_LUFS = -69.9
 
+# Warnings and errors also go to a rotating file in the data volume, which
+# survives deploys (core/persistent_log.py); read with host-status.sh --errors.
+PERSISTENT_LOG_FILE = os.environ.get("PERSISTENT_LOG_FILE", "data/logs/warnings.log")
+PERSISTENT_LOG_MAX_BYTES = 5 * 1024 * 1024
+PERSISTENT_LOG_BACKUPS = 3
+
 # Ensure directories exist
 for directory in [CACHE_DIR, "data", YTDLP_CACHE_DIR]:
     if not os.path.exists(directory):

@@ -25,12 +25,24 @@ name: watch-together
 x-doh-resolver: &doh_resolver
   - ${WT_DNS_IP:-172.28.0.53}
 
+# Container logs are capped: the host disk is small (19 GB, shared), and an
+# unbounded json-file log is one more way to push it under the backend's
+# MIN_DISK_FREE floor, where the segment cache switches itself off. Logs
+# that must outlive a deploy go to the data volume instead (backend:
+# data/logs/warnings.log, read with host-status.sh --errors).
+x-logging: &capped_logs
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
 services:
   backend:
     build:
       context: ../backend
     image: watch-together/backend:latest
     restart: unless-stopped
+    logging: *capped_logs
     dns: *doh_resolver
     depends_on:
       - dns
@@ -95,6 +107,7 @@ services:
     # Solves YouTube BotGuard challenges so yt-dlp can obtain PO tokens.
     image: brainicism/bgutil-ytdlp-pot-provider:2.0.2
     restart: unless-stopped
+    logging: *capped_logs
     dns: *doh_resolver
     depends_on:
       - dns
@@ -111,6 +124,7 @@ services:
       context: ../frontend
     image: watch-together/frontend:latest
     restart: unless-stopped
+    logging: *capped_logs
     dns: *doh_resolver
     depends_on:
       - dns
@@ -129,6 +143,7 @@ services:
   nginx:
     image: nginx:1.30.6-alpine
     restart: unless-stopped
+    logging: *capped_logs
     dns: *doh_resolver
     depends_on:
       - dns
@@ -158,6 +173,7 @@ services:
     image: ghcr.io/m1k1o/neko/chromium:3.2.0
     profiles: [ browser ]
     restart: unless-stopped
+    logging: *capped_logs
     dns: *doh_resolver
     depends_on:
       - dns
@@ -204,6 +220,7 @@ services:
     # disappeared in 2026.2.0 and a floating tag crash-looped the stack.
     image: adguard/dnsproxy:v0.86.0
     restart: unless-stopped
+    logging: *capped_logs
     # --cache: every proxied segment that misses the cache resolves its
     # googlevideo host first; uncached, that was an HTTPS round trip to
     # Cloudflare in front of each fetch. --cache-optimistic answers an
@@ -222,6 +239,7 @@ services:
     image: cloudflare/cloudflared:latest
     pull_policy: always
     restart: unless-stopped
+    logging: *capped_logs
     dns: *doh_resolver
     depends_on:
       - dns

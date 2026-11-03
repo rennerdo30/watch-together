@@ -18,6 +18,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Identity for tests comes from the ?user= query parameter.
 os.environ.setdefault("DEVELOPMENT_MODE", "true")
+# Importing main attaches the persistent warning log; keep it out of data/.
+os.environ.setdefault("PERSISTENT_LOG_FILE", os.path.join(
+    tempfile.mkdtemp(prefix="watch-together-logs-"), "warnings.log"))
 
 
 @pytest.fixture(scope="session", autouse=True)

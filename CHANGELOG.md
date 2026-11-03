@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### A refresh no longer moves the room
+
+- Reloading the page started the video at the room's position, and the
+  player's own move there was reported to the room as the viewer's seek,
+  so everyone jumped to a position already seconds stale. The engines now
+  announce the positions they set themselves (load start, reload after a
+  refused URL) and those are never published.
+
+### Logs that answer "what went wrong, for whom, when"
+
+- `./deploy/host-status.sh --errors[=HOURS]`: client errors, failed proxy
+  requests by status / range / user, refused downloads, other backend
+  warnings and the disk floor, on one screen.
+- Backend warnings and errors are also written to `data/logs/warnings.log`
+  (rotating, 20 MB at most), so they survive deploys.
+- The nginx media log carries a timestamp and the Access user; refusals name
+  the user, stream and room instead of a truncated URL.
+- Every container log is capped (3 × 50 MB) on the small host disk.
+
 ### Whole-video loudness normalization
 
 - The server measures each video's integrated loudness over its entire audio

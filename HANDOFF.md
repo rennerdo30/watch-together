@@ -18,6 +18,27 @@ change it in the same commit that makes it untrue. Newest state first.
   open ones were merged on 2026-09-15. *Security alerts are disabled* on the
   repo — enabling them (Settings → Code security) is worth doing.
 
+## Reading errors from the host
+
+Start here for any "playback is broken for someone" report:
+
+```sh
+./deploy/host-status.sh --errors        # last 24 h; --errors=72 for three days
+```
+
+It groups browser-reported client errors, failed proxy requests (status,
+ranged or not, user, first/last time), refused whole-file downloads, other
+backend warnings, and the disk against the cache's floor. Backend warnings
+persist in the data volume (`data/logs/warnings.log*`), so a deploy no
+longer erases them; nginx lines written before 2026-11-04 have no time or
+user and are counted apart.
+
+Known noise: `403 NO RANGE` rows are a download manager in a viewer's
+browser being refused on purpose (see *Performance* below). The host disk is
+19 GB and shared: when free space drops under `MIN_DISK_FREE_GB` (2 GB) the
+segment cache switches itself off — it did on 2026-11-03; old pulled images
+and build cache were removed to recover.
+
 ## Reading per-viewer telemetry from the host
 
 "Which rung is this viewer on, and why" is answered from the backend log,

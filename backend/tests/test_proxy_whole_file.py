@@ -39,3 +39,12 @@ def test_the_refusal_happens_before_any_upstream_work(client, monkeypatch):
     monkeypatch.setattr(main_module, "open_upstream_stream", fetch)
     client.get("/api/proxy", params={"url": BIG, "user": "viewer@example.com"})
     assert touched == [], "the grab reached the network path"
+
+
+def test_the_refusal_names_who_and_which_stream(client, caplog):
+    """The log line used to carry the first 80 characters of the URL: only the host."""
+    with caplog.at_level("WARNING"):
+        client.get("/api/proxy", params={"url": BIG, "user": "viewer@example.com"},
+                   headers={"Referer": "https://w2g.example/room/abc123"})
+    line = next(r.getMessage() for r in caplog.records if "Refused whole-file" in r.getMessage())
+    assert "user=viewer@example.com" in line and "itag=399" in line and "room=abc123" in line
