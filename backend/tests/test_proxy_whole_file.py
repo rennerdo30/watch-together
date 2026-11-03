@@ -64,3 +64,28 @@ def test_the_players_per_request_tag_is_ignored(client):
     plain = client.get("/api/proxy", params={"url": BIG, "user": "viewer@example.com"})
     assert tagged.status_code == plain.status_code == 403
     assert tagged.json() == plain.json()
+
+
+def test_a_range_given_in_the_url_is_used_when_the_header_was_stripped(client, monkeypatch):
+    """An extension stripped the Range header: every segment was refused as a whole-file grab."""
+    import main as main_module
+    import services.upstream as upstream
+    sent = []
+
+    async def fetch(_client, url, headers=None, *args, **kwargs):
+        sent.append((url, dict(headers or {})))
+        raise upstream.UnsafeUpstreamError("stop here")
+
+    monkeypatch.setattr(main_module, "open_upstream_stream", fetch)
+    monkeypatch.setattr(upstream, "pin_url", lambda url: (_ for _ in ()).throw(AssertionError("no DNS")))
+    response = client.get("/api/proxy", params={"url": BIG, "user": "viewer@example.com", "br": "0-699"})
+    assert response.status_code != 403, response.text
+    assert sent, "the request never reached the upstream fetch"
+    url, headers = sent[0]
+    # googlevideo takes the range in its query; anything else in the header.
+    assert "range=0-699" in url or headers.get("Range") == "bytes=0-699"
+
+
+def test_a_malformed_url_range_is_rejected(client):
+    response = client.get("/api/proxy", params={"url": BIG, "user": "viewer@example.com", "br": "0-1;evil"})
+    assert response.status_code == 422

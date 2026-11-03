@@ -68,7 +68,7 @@ test('a destination is fetched as described, span by span', async () => {
   expect(Object.fromEntries(described.searchParams)).toMatchObject({ url: 'https://youtu.be/x', t: '130', h: '1080', codec: 'av01' });
   // Fetched under a per-request tag (no stored copy can answer it), kept
   // under the URI the manifest uses, which is what Shaka will ask for.
-  expect(requested[1].url.startsWith(`${URI}&rq=`)).toBe(true);
+  expect(requested[1].url).toMatch(new RegExp(`^${URI.replace(/[.?*+^$()|[\]\\]/g, '\\$&')}&br=10-19&rq=[a-z0-9]+$`));
   expect(requested[1].range).toBe('bytes=10-19');
   expect(takeSpan(URI, 'bytes=10-19')).not.toBeNull();
 });
@@ -103,8 +103,9 @@ test('the Shaka plugin answers a stored span from memory and passes everything e
   expect(plugin!(URI, { headers: { Range: 'bytes=0-9' } }, 1)).toBe('network');
   expect(plugin!(URI, { headers: {} }, 0)).toBe('network');
   expect(delegated).toHaveLength(2);
-  for (const uri of delegated) expect(uri.startsWith(`${URI}&rq=`)).toBe(true);
-  expect(delegated[0]).not.toBe(delegated[1]);
+  // The range rides in the URL too; a request without one carries only the tag.
+  expect(delegated[0].startsWith(`${URI}&br=0-9&rq=`)).toBe(true);
+  expect(delegated[1].startsWith(`${URI}&rq=`)).toBe(true);
 });
 
 // ── In the room: the announcement reaches the player ─────────────────────────

@@ -113,7 +113,7 @@ export async function fetchJumpDestination(originalUrl: string, seconds: number,
         if (spans.has(key) || inFlight.has(key)) return false;
         inFlight.add(key);
         try {
-            const response = await fetch(tagProxiedRequest(uri),
+            const response = await fetch(tagProxiedRequest(uri, `bytes=${start}-${end}`),
                 { headers: { Range: `bytes=${start}-${end}` }, cache: 'no-store' });
             if (response.status !== 206) return false;
             const headers: Record<string, string> = {};
@@ -167,10 +167,14 @@ let requestCount = 0;
  * any stored copy. Our own caches key on the stream inside `url=`, so they
  * are unaffected; the in-page cache below is looked up by the untagged URI.
  */
-export function tagProxiedRequest(uri: string): string {
+export function tagProxiedRequest(uri: string, range?: string): string {
     if (!/\/api\/proxy\?/.test(uri)) return uri;
     requestCount += 1;
-    return `${uri}&rq=${PAGE_TAG}${requestCount.toString(36)}`;
+    // The byte range rides in the URL too (`br=`): some extensions strip the
+    // Range header from media requests, and without it the proxy sees a
+    // whole-file download and refuses it. The header still wins server-side.
+    const bytes = /^bytes=(\d+-\d*)$/.exec(range ?? '')?.[1];
+    return `${uri}${bytes ? `&br=${bytes}` : ''}&rq=${PAGE_TAG}${requestCount.toString(36)}`;
 }
 
 /**
@@ -194,8 +198,8 @@ export function installJumpCache(shaka: ShakaNetworking): void {
                 });
             }
         }
-        return HttpFetchPlugin.parse(tagProxiedRequest(uri), request, requestType, progressUpdated, headersReceived,
-            config);
+        return HttpFetchPlugin.parse(tagProxiedRequest(uri, request.headers.Range ?? request.headers.range), request,
+            requestType, progressUpdated, headersReceived, config);
     };
     for (const scheme of ['http', 'https']) {
         NetworkingEngine.registerScheme(scheme, plugin, NetworkingEngine.PluginPriority.APPLICATION, true);

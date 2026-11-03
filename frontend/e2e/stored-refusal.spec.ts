@@ -15,6 +15,7 @@ test('every proxied media request carries its own tag', () => {
   const uri = 'https://w2g.example/api/proxy?url=https%3A%2F%2Fcdn%2Fa';
   const first = tagProxiedRequest(uri), second = tagProxiedRequest(uri);
   expect(first).toMatch(/&rq=[a-z0-9]+$/);
+  expect(tagProxiedRequest(uri, 'bytes=700-2939')).toMatch(/&br=700-2939&rq=[a-z0-9]+$/);
   expect(first).not.toBe(second);
   expect(tagProxiedRequest('https://w2g.example/api/dash-manifest?url=x')).toBe('https://w2g.example/api/dash-manifest?url=x');
 });
@@ -49,4 +50,31 @@ test('a reload plays even where every URL already seen is answered with a stored
   await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.readyState), { timeout: 15_000 })
     .toBeGreaterThanOrEqual(2);
   expect(replayed).toBe(0);
+});
+
+test('playback works when something strips the Range header from media requests', async ({ page }) => {
+  // A viewer's browser (an extension) removed Range from the player's media
+  // requests: the proxy saw whole-file downloads and refused every one.
+  await stubAdaptiveStream(page, VIDEO);
+  let stripped = 0;
+  await page.route('**/api/proxy**', (route) => {
+    const headers = { ...route.request().headers() };
+    if (headers.range) { delete headers.range; stripped++; }
+    // What the proxy then sees, and does for a large googlevideo rendition:
+    // no range anywhere is a whole-file download, refused.
+    if (!new URL(route.request().url()).searchParams.get('br')) {
+      return route.fulfill({ status: 403, contentType: 'application/json',
+        body: JSON.stringify({ detail: 'Whole-file media downloads are not served; players request byte ranges' }) });
+    }
+    return route.fallback({ headers });
+  });
+  const roomId = `e2e-stripped-range-${Date.now().toString(36)}`;
+  await page.goto(`/room/${roomId}?user=stripped@example.com`);
+  await expect(page.getByLabel('Connected to the room')).toBeVisible();
+  await page.getByPlaceholder('Paste video URL...').fill(VIDEO);
+  await page.getByPlaceholder('Paste video URL...').press('Enter');
+  const video = page.locator('video[data-stream-type="mse"]');
+  await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.readyState), { timeout: 15_000 })
+    .toBeGreaterThanOrEqual(2);
+  expect(stripped).toBeGreaterThan(0);
 });

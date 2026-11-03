@@ -170,7 +170,10 @@ export async function stubAdaptiveStream(
     const target = new URL(route.request().url()).searchParams.get('url') ?? '';
     const isAudio = target.includes('audio');
     const bytes = isAudio ? audio : video;
-    const range = /^bytes=(\d+)-(\d*)$/.exec(route.request().headers().range ?? '');
+    // Like the proxy: the Range header, or the same range carried as `br=`.
+    const requested = new URL(route.request().url());
+    const br = requested.searchParams.get('br');
+    const range = /^bytes=(\d+)-(\d*)$/.exec(route.request().headers().range ?? (br ? `bytes=${br}` : ''));
     const start = range ? Number(range[1]) : 0;
     const end = range?.[2] ? Math.min(Number(range[2]), bytes.length - 1) : bytes.length - 1;
     route.fulfill({

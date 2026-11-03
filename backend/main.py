@@ -1208,10 +1208,21 @@ def _referring_room(request: Request) -> Optional[str]:
 
 
 @app.get("/api/proxy")
-async def proxy_stream(request: Request, url: str):
+async def proxy_stream(
+    request: Request,
+    url: str,
+    br: Optional[str] = Query(None, pattern=r"^\d+-\d*$", max_length=40,
+                              description="The byte range, also sent in the URL: see below"),
+):
     """Proxy HLS manifests and segments to bypass CORS/restrictions."""
     if not url:
         raise HTTPException(status_code=400, detail="Missing URL")
+    # The player sends its byte range twice: as the Range header and as `br=`
+    # in the URL. Some browser extensions (download managers) strip the
+    # header from media requests; a viewer's every segment then arrived as a
+    # whole-file request, was refused, and nothing played. The header wins
+    # when both are present.
+    requested_range = request.headers.get("range") or (f"bytes={br}" if br else "")
 
     request_started = time.monotonic()
 
@@ -1223,7 +1234,7 @@ async def proxy_stream(request: Request, url: str):
 
     # A bare GET for a whole large media file is never a player; refuse it
     # before spending a DNS lookup or an upstream connection on it.
-    if is_whole_file_grab(url, request.headers.get("range")):
+    if is_whole_file_grab(url, requested_range or None):
         itag, mime = _stream_label(url)
         logger.warning(
             "Refused whole-file media download: user=%s itag=%s mime=%s room=%s ua=%s",
@@ -1264,7 +1275,7 @@ async def proxy_stream(request: Request, url: str):
         "User-Agent": request.headers.get("user-agent", "Mozilla/5.0"),
         "Referer": referer,
         "Accept-Language": "en-US,en;q=0.9",
-        "Range": request.headers.get("range", ""),
+        "Range": requested_range,
     }
     if not outgoing_headers["Range"]:
         del outgoing_headers["Range"]
