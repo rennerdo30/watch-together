@@ -95,6 +95,9 @@ from services import program_loudness
 from services import startup_timing
 from services.share_relay import RelayRefused, relay as share_relay
 
+# Endpoints whose error responses must never be stored by any cache.
+ERROR_NO_STORE_PATHS = frozenset({"/api/proxy", "/api/dash-manifest", "/api/segment-spans", "/api/loudness"})
+
 # Room-wide SponsorBlock skipping; armed from the WebSocket handler below.
 sponsor_skipper = SponsorSkipper(manager)
 # A skip moves the room; the history reporter closes the watched range there
@@ -559,6 +562,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def errors_are_never_stored(request: Request, call_next):
+    """No cache may keep an error from the media endpoints.
+
+    A refusal or failure is about one request at one moment. Stored by
+    anything between the player and here, it is replayed for later,
+    legitimate requests of the same URL — a viewer's player was answered
+    with the same refusal, same Cloudflare ray, on every reload, by a copy
+    our server never saw again.
+    """
+    response = await call_next(request)
+    if response.status_code >= 400 and request.url.path in ERROR_NO_STORE_PATHS:
+        response.headers["Cache-Control"] = "private, no-store, no-transform"
+        response.headers["CDN-Cache-Control"] = "no-store"
+    return response
+
 
 # Include API routers
 app.include_router(cookies_router)

@@ -48,3 +48,11 @@ def test_the_refusal_names_who_and_which_stream(client, caplog):
                    headers={"Referer": "https://w2g.example/room/abc123"})
     line = next(r.getMessage() for r in caplog.records if "Refused whole-file" in r.getMessage())
     assert "user=viewer@example.com" in line and "itag=399" in line and "room=abc123" in line
+
+
+def test_a_refusal_may_not_be_stored_by_any_cache(client):
+    """A stored refusal was replayed to a viewer's player on every reload."""
+    response = client.get("/api/proxy", params={"url": BIG, "user": "viewer@example.com"})
+    assert response.status_code == 403
+    assert "no-store" in response.headers["cache-control"]
+    assert response.headers["cdn-cache-control"] == "no-store"

@@ -1253,6 +1253,8 @@ class TestLogsCanBeRead:
         media = conf.split("log_format media")[1].split(";")[0]
         assert "$time_iso8601" in media
         assert "$http_cf_access_authenticated_user_email" in media
+        # A client report's cf-ray is found (or proven absent) in one search.
+        assert "$http_cf_ray" in media
         # --perf parses the leading fields by position; they stay first.
         assert media.strip().startswith("'$status $body_bytes_sent bytes '")
 
