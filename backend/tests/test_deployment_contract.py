@@ -1279,3 +1279,12 @@ class TestLogsCanBeRead:
         backend_floor_gb = float(re.search(r'"MIN_DISK_FREE_GB", "([\d.]+)"', config)[1])
         assert floor_mb > backend_floor_gb * 1024
         assert "docker builder prune -af" in deploy.split("DEPLOY_CACHE_FLOOR_MB * 1024")[1]
+
+    def test_every_response_says_it_came_through_our_server(self):
+        """A failed request without the mark was answered before it got here."""
+        conf = (REPO_ROOT / "nginx" / "nginx.conf").read_text()
+        assert 'add_header X-W2G-Origin "nginx" always;' in conf
+        # A location with its own add_header would silently drop the
+        # server-level ones, the mark included.
+        server = conf.split('add_header X-W2G-Origin')[1]
+        assert "add_header" not in server.split("location", 1)[1]

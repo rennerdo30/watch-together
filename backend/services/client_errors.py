@@ -38,6 +38,9 @@ class ClientError(BaseModel):
     http_status: int | None = Field(default=None, ge=100, le=599)
     resource: str = Field(default='', max_length=2000)
     stack: str = Field(default='', max_length=4000)
+    # Who answered a failed request (origin reached or not, server, cf-ray,
+    # cf-mitigated, request type, error page title); see client-errors.ts.
+    answer: str = Field(default='', max_length=500)
     user_agent: str = Field(default='', max_length=500)
 
 
@@ -61,7 +64,7 @@ class ClientErrors:
         if count >= 20:
             return False
         data = report.model_dump()
-        for key in ('message', 'stack', 'user_agent'):
+        for key in ('message', 'stack', 'user_agent', 'answer'):
             data[key] = redact(data[key])
         data['resource'] = safe_url(data['resource']) if data['resource'] else ''
         data['member'] = member

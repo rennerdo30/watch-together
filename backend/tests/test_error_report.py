@@ -32,7 +32,8 @@ def log_dir(tmp_path):
         f'"http_status": 403, "member": "a@example.com", "room": "r1", "count": 2}}\n')
     (tmp_path / "warnings.log").write_text(
         f'{stamp(5)} WARNING services.client_errors: Client error: {{"source": "shaka", "code": 1001, '
-        f'"http_status": 403, "member": "b@example.com", "room": "r1", "count": 1}}\n'
+        f'"http_status": 403, "member": "b@example.com", "room": "r1", "count": 1, '
+        f'"answer": "origin=NOT-REACHED server=cloudflare cf-ray=abc-FRA"}}\n'
         f"{stamp(4)} WARNING main: Refused whole-file media download: user=b@example.com itag=399 "
         f"mime=video/mp4 room=r1 ua=Mozilla\n"
         f"{stamp(3)} ERROR main: Proxy failed for 12345 bytes\n"
@@ -66,6 +67,7 @@ def test_the_report_groups_what_matters(log_dir):
     assert "    2  403  NO RANGE  b@example.com" in text and "download manager" in text
     assert "(before timestamps were logged)" in text  # The 502 has no t=.
     assert "itags 399" in text
+    assert "answered: origin=NOT-REACHED server=cloudflare cf-ray=abc-FRA" in text
     # Messages differing only in numbers are one row; old records are outside the window.
     assert "    2  ERRO main: Proxy failed for # bytes" in text
     assert "outside the window" not in text

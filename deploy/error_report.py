@@ -100,7 +100,8 @@ def summarise_backend(records):
                 event = {"message": message}
             key = (event.get("source", "?"), str(event.get("code") or event.get("message", "?"))[:70],
                    event.get("http_status") or "")
-            client[key].add(when, int(event.get("count") or 1), member=event.get("member"), room=event.get("room"))
+            client[key].add(when, int(event.get("count") or 1), member=event.get("member"), room=event.get("room"),
+                            answer=event.get("answer"))
             continue
         match = REFUSAL.search(message)
         if match:
@@ -144,6 +145,8 @@ def report(records, media_lines, hours, disk=None, out=sys.stdout):
     for (source, what, status), group in sorted(client.items(), key=lambda kv: -kv[1].count)[:MAX_ROWS]:
         write(f"{group.count:5}  {source:8} {what:40} {('HTTP ' + str(status)) if status else '':9} {_span(group)}")
         write(f"       members: {group.describe('member')}   rooms: {group.describe('room')}")
+        if group.values.get("answer"):
+            write(f"       answered: {group.describe('answer', 3)}")
     write()
     write("── proxied media requests that failed (nginx) ───────────")
     if not failed:

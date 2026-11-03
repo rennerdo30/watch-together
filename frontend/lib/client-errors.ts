@@ -8,6 +8,8 @@ type Report = {
     http_status?: number;
     resource?: string;
     stack?: string;
+    /** Who answered a failed request, and what they said: no URLs, no values. */
+    answer?: string;
 };
 
 function safeUrl(value: string): string {
@@ -45,9 +47,43 @@ export function reportClientError(report: Report): void {
             message: redact(report.message || 'Unknown client error').slice(0, 2000),
             stack: redact(report.stack ?? '').slice(0, 4000),
             resource: report.resource ? safeUrl(report.resource) : '',
+            answer: redact(report.answer ?? '').slice(0, 500),
             user_agent: navigator.userAgent.slice(0, 500),
         }),
     }).catch(() => { /* A failed report must not create another error. */ });
+}
+
+/** Shaka's request types (shaka.net.NetworkingEngine.RequestType), for reading a report. */
+const SHAKA_REQUEST_TYPES = ['manifest', 'segment', 'license', 'app', 'timing', 'server-certificate', 'key', 'ads', 'content-steering'];
+
+/**
+ * Who answered a failed HTTP request, from Shaka's BAD_HTTP_STATUS data
+ * ([uri, status, responseText, headers, requestType]).
+ *
+ * Only identifying facts leave the page: whether our nginx saw it
+ * (`x-w2g-origin`), the `server`, Cloudflare's ray id and mitigation
+ * verdict, the request type, and the error page's title or first words.
+ * A 403 our server never saw is someone else's: the ray id finds it in
+ * Cloudflare's Security Events.
+ */
+export function describeHttpAnswer(data: unknown[] | undefined): string | undefined {
+    if (!Array.isArray(data)) return undefined;
+    const headers = (data[3] && typeof data[3] === 'object' ? data[3] : {}) as Record<string, unknown>;
+    const header = (name: string) => {
+        const value = headers[name] ?? headers[name.toLowerCase()];
+        return typeof value === 'string' ? value.slice(0, 80) : '';
+    };
+    const parts = [headers['x-w2g-origin'] ? 'origin=reached' : 'origin=NOT-REACHED'];
+    for (const name of ['server', 'cf-ray', 'cf-mitigated', 'cf-cache-status', 'content-type']) {
+        const value = header(name);
+        if (value) parts.push(`${name}=${value}`);
+    }
+    if (typeof data[4] === 'number') parts.push(`request=${SHAKA_REQUEST_TYPES[data[4]] ?? data[4]}`);
+    const body = typeof data[2] === 'string' ? data[2] : '';
+    const title = body.match(/<title[^>]*>([^<]{1,120})<\/title>/i)?.[1]
+        ?? body.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
+    if (title) parts.push(`body="${title.replace(/"/g, "'")}"`);
+    return parts.join(' ');
 }
 
 export function reportPlayerError(source: 'shaka' | 'hls', detail: unknown, message: string): void {
@@ -56,9 +92,11 @@ export function reportPlayerError(source: 'shaka' | 'hls', detail: unknown, mess
     const status = source === 'shaka' && code === 1001 ? Number(data?.data?.[1]) : Number(data?.response?.code);
     reportClientError({
         source, code,
-        // Shaka data also includes response bodies/headers: never transmit them.
+        // Shaka data also includes response bodies and headers: only the
+        // identifying facts describeHttpAnswer picks out are transmitted.
         message: source === 'shaka' ? `Shaka error code=${code ?? 'unknown'} category=${typeof data?.category === 'number' ? data.category : 'unknown'}` : message,
         http_status: Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined,
         resource: source === 'shaka' && typeof data?.data?.[0] === 'string' ? data.data[0] : data?.url,
+        answer: source === 'shaka' && code === 1001 ? describeHttpAnswer(data?.data) : undefined,
     });
 }

@@ -78,3 +78,19 @@ def test_rate_limit_recovers_and_duplicates_expire(monkeypatch):
     clock[0] += 61
     assert client_errors.history.record('viewer', report)
     assert len(client_errors.history.snapshot()) == 2
+
+
+def test_who_answered_a_failed_request_is_kept_and_redacted(client):
+    """A 403 that never reached the server was unexplainable: the report said only 'HTTP 403'."""
+    answer = ('origin=NOT-REACHED server=cloudflare cf-ray=8f1e2d3c4b5a6978-FRA cf-mitigated=challenge '
+              'request=segment body="Just a moment... https://w2g.example/x?token=SECRET"')
+    response = client.post('/api/client-errors?user=viewer@example.com', json={
+        'source': 'shaka', 'message': 'Shaka error code=1001 category=1', 'code': 1001, 'http_status': 403,
+        'answer': answer})
+    assert response.status_code == 202
+    event = client.get('/api/admin/overview?user=admin@example.com').json()['client_errors'][-1]
+    assert 'origin=NOT-REACHED' in event['answer'] and 'cf-ray=8f1e2d3c4b5a6978-FRA' in event['answer']
+    assert 'SECRET' not in event['answer']
+    too_long = client.post('/api/client-errors?user=viewer@example.com', json={
+        'source': 'shaka', 'message': 'x', 'answer': 'a' * 501})
+    assert too_long.status_code == 422
