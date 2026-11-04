@@ -355,7 +355,9 @@ COOKIE_FILE_MODE = 0o600  # The scratch file: owner read/write only
 COOKIE_SHARE_EXTRACTORS = frozenset({
     "youtube",
     "twitch:vod", "twitch:clips", "twitch:stream",
-    "kick:vod", "kick:clips", "kick:live",
+    # yt-dlp 2026.10.26 split Kick clips: `kick:clip` is one clip, while
+    # `kick:clips` and `kick:videos` are a channel's lists and never lend.
+    "kick:vod", "kick:clip", "kick:live",
 })
 # Cookies a site sets only for a signed-in account. Every visitor gets some
 # cookies (YouTube's VISITOR_INFO1_LIVE, YSC and PREF), so holding cookies for
