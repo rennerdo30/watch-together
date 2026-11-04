@@ -1,226 +1,187 @@
 # Watch Together
 
-[Documentation](https://rennerdo30.github.io/watch-together/) · [Extension privacy policy](https://rennerdo30.github.io/watch-together/privacy/) · [Chrome Web Store submission guide](docs/chrome-web-store.md)
+<p align="center">
+  <img src="frontend/public/logo.svg" width="96" alt="Watch Together logo: a teal screen with a face">
+</p>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Docker](https://img.shields.io/badge/Docker-Ready-blue?logo=docker)](docker-compose.yml)
-[![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
-[![CI](https://github.com/rennerdo30/watch-together/actions/workflows/ci.yml/badge.svg)](https://github.com/rennerdo30/watch-together/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/rennerdo30/watch-together/actions/workflows/codeql.yml/badge.svg)](https://github.com/rennerdo30/watch-together/actions/workflows/codeql.yml)
+<p align="center">
+  <b>Press play once. Everyone's watching.</b><br>
+  A watch party you run yourself, for YouTube, Twitch, Kick and 1800+ other sites.<br>
+  Every browser in the room plays on one clock, within half a second of each other.
+</p>
 
-A real-time video synchronization platform for watching YouTube, Twitch, and 1800+ other sites together. Built with Next.js 16, FastAPI, and yt-dlp.
+<p align="center">
+  <a href="https://rennerdo30.github.io/watch-together/"><b>Website</b></a> ·
+  <a href="https://rennerdo30.github.io/watch-together/docs/">Documentation</a> ·
+  <a href="https://chromewebstore.google.com/detail/watch-together-cookie-syn/beonlkadfoclpnfigngknbjfoifibagn">Browser extension</a> ·
+  <a href="https://rennerdo30.github.io/watch-together/privacy/">Privacy</a> ·
+  <a href="LICENSE">MIT license</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/rennerdo30/watch-together/actions/workflows/ci.yml"><img src="https://github.com/rennerdo30/watch-together/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/rennerdo30/watch-together/actions/workflows/codeql.yml"><img src="https://github.com/rennerdo30/watch-together/actions/workflows/codeql.yml/badge.svg" alt="CodeQL"></a>
+</p>
+
+![A Watch Together room named Movie night: a video playing, playback controls, the link box, and the Audience tab listing alex, mia and sam](docs/public/shots/room-dark.png)
+
+## Why Watch Together
+
+Hosted watch parties play what their own player can, from the few sites they
+support, with whoever happens to be on their servers. Watch Together is yours:
+a link from almost any site plays for the whole room, rooms are just links, and
+only the people you let in get in.
+
+Two things make it more than a shared player. **Sync is the server's job**: it
+holds the room's position, sends it every five seconds, and each browser
+corrects itself quietly, speeding up by five percent when a little behind and
+seeking only when more than three seconds off. And **one signed-in member is
+enough**: the browser extension lends their session to the room, so videos
+that need an account play for everyone, without a cookie ever touching the
+disk.
 
 ## Features
 
-- **Universal Video Support**: Uses `yt-dlp` to resolve streams from YouTube, Twitch, Vimeo, Dailymotion, and 1800+ other sites
-- **Real-time Synchronization**: Sub-second accurate sync via WebSockets with intelligent drift correction
-- **DASH/HLS Streaming**: Separate video/audio streams with quality selection up to 4K
-- **Segment Caching & Prefetch**: Position-aware bucket cache on disk plus an in-memory LRU for hot segments, with look-ahead prefetching of upcoming video/audio segments
-- **Livestream Chat**: On-demand chat panel with Twitch, YouTube, Kick and Owncast adapters. Other providers can use a custom HTTPS chat embed URL or open the original stream. Custom URLs stay with that stream in the current browser tab. Chat updates live independently of the buffered video; provider sign-in and embedding restrictions still apply.
-- **Room System**: Create custom rooms with persistent queue and playback state, showing who added each video
-- **Seek Preview**: Hovering the timeline shows the frame under the pointer (YouTube storyboards)
-- **SponsorBlock**: Community-marked sponsor, self-promotion and reminder segments in YouTube videos are skipped for the whole room at once (the server seeks everyone), shown on the seek bar, and chosen per room by its admin
-- **Cookie Authentication**: Bypass age-restrictions and regional blocks with your own cookies
-- **YouTube Watch History (opt-in)**: While the extension is syncing your cookies, videos the room watches can be recorded in your own YouTube history with the position you stopped at, the way YouTube's player reports it. Off until you switch it on in the settings dialog
-- **Browser Extension**: Automatic cookie sync from your browser (Chrome/Firefox)
-- **Audio**: Loudness normalization with one gain per video (its whole-programme loudness, measured by the server) and Night mode compression, with mono audio and configurable Night mode gain
-- **Screen Sharing**: Share your own gameplay with the room, live. The browser captures the screen (with audio), encodes it with `MediaRecorder`, and pushes it up a WebSocket of its own; **the server relays the stream** to every viewer, which plays it through Media Source Extensions. One sharer at a time, roughly half a second of delay, and a viewer who joins mid-share still gets a picture — the server retains the stream's opening bytes for exactly that. It travels through the origin because the origin publishes no ports and the tunnel carries HTTP and WebSocket only, so every viewer's copy is bandwidth the server sends
-- **Shared Browser (opt-in)**: A real browser running on the server, in the room's player — everyone watches the same page and the room's admin drives it. Runs as a [neko](https://github.com/m1k1o/neko) container, off by default: its picture is WebRTC, which a Cloudflare Tunnel cannot carry, so it needs either a UDP range opened on the host or a TURN relay. Until one is configured the room says so plainly instead of offering a button. See [deploy/README.md](deploy/README.md#the-shared-browser-neko--opt-in-and-why)
-- **Mono Audio**: Fold both channels into one so nothing panned to one side is lost when listening with a single earbud or with hearing on one side. Per viewer, in player settings
-- **Client-side Video Enhancement (Beta)**: Opt-in local upscaling with automatic animation/live-action selection, WebGPU neural processing and a lightweight WebGL fallback. Open player settings → Video enhancement. [Compatibility and implementation details](frontend/lib/upscaling/README.md).
-- **Modern UI**: Light and dark colour schemes (following the OS by default), six accent themes plus a custom one, drag-and-drop queue management
-- **Cloudflare Integration**: Zero Trust authentication and tunnel support
+| | |
+|---|---|
+| **Almost any site** | Links are resolved on the server with `yt-dlp`: YouTube, Twitch, Kick, Vimeo, Dailymotion and 1800+ others, up to 4K. |
+| **One clock for the room** | Play, pause and seek go through the server. Small drift is corrected with a 1.05× / 0.95× playback rate, large drift with one seek; each browser allows for its own latency. |
+| **Real adaptive playback** | YouTube serves audio and video as separate files with no manifest, so the server writes a real DASH manifest from their own index and Shaka plays both through **one** video element. HLS sources play through hls.js. |
+| **Fast starts and jumps** | The opening seconds, the next queue entry and the destination of every sponsor skip are fetched ahead, at exactly the byte spans the player will ask for. |
+| **A shared queue** | Drag to reorder, see who added what. A link is queued at once and resolved behind it. |
+| **SponsorBlock for the room** | Sponsor, self-promotion and reminder segments are skipped for everyone at the same moment by the server, shown on the seek bar and chosen per room. |
+| **Live chat** | Twitch, YouTube, Kick and Owncast chat beside live streams, or any HTTPS chat embed. |
+| **Screen sharing** | Share a game with sound. The browser encodes it, the server relays it to every viewer (about half a second behind), and late joiners still get a picture. |
+| **Shared browser (opt-in)** | A real browser on the server that the room watches and the admin drives, as a [neko](https://github.com/m1k1o/neko) container. Needs a UDP range or a TURN relay; see the [production guide](deploy/README.md#the-shared-browser-neko--opt-in-and-why). |
+| **Audio** | One loudness level per video, measured over the whole programme by the server. Night mode compression and mono audio, per viewer. |
+| **Your session, lent carefully** | The extension syncs your YouTube, Twitch or Kick cookies into server memory only. Opt in, and what the room watches lands in your own YouTube history. |
+| **Seek preview, upscaling, themes** | Frame previews on the timeline, optional in-browser upscaling (WebGPU, with a WebGL fallback), light and dark schemes with six accents and a custom one. |
 
-## Quick Start
+<table>
+  <tr>
+    <td><img src="docs/public/shots/room-light.png" alt="The same room in the light colour scheme"></td>
+    <td><img src="store/chrome-web-store/screenshot-2-popup.png" alt="The Cookie Sync extension popup, connected to an instance"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Light or dark</b>: following the system by default.</td>
+    <td align="center"><b>Cookie Sync</b>: connect your instance once; it keeps your session fresh.</td>
+  </tr>
+</table>
 
-### Prerequisites
-- Docker & Docker Compose
-- (Optional) Cloudflare account for Zero Trust access
+## Quick start
 
-### Deploy with Docker
+Requirements: Docker with Docker Compose. A Cloudflare account is optional, for
+a tunnel and verified sign-in.
 
 ```bash
-# Clone the repository
 git clone https://github.com/rennerdo30/watch-together.git
 cd watch-together
-
-# Copy environment template
 cp .env.example .env
-
-# Start all services
 docker compose up -d --build
 ```
 
-The application will be available at `http://localhost:80` (via nginx proxy).
+Open `http://localhost`. The only variable in `.env` is `TUNNEL_TOKEN`, for the
+optional Cloudflare Tunnel container; leave it unset to run without one.
 
-### Local Development
+For a real deployment behind Cloudflare Tunnel and Access, follow the
+[deployment guide](DEPLOYMENT.md) and the [production guide](deploy/README.md).
+
+### Local development
 
 ```bash
-# Backend (Python 3.11+)
+# Backend (Python 3.11+), port 8000
 cd backend
-python -m venv venv
-source venv/bin/activate  # or `venv\Scripts\activate` on Windows
+python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 
-# Frontend (Node.js 20+) - in a new terminal
+# Frontend (Node.js 20+), port 3000, in a second terminal
 cd frontend
 npm ci
 npm run dev
 ```
 
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:8000
-- API Docs: http://localhost:8000/docs
-
-### Configuration
-
-The only variable in `.env.example` is `TUNNEL_TOKEN`, used by the optional
-Cloudflare Tunnel container. Leave it unset to run without a tunnel.
-
-Backend tunables (cache sizes, TTLs, prefetch depth) are constants in
-`backend/core/config.py` rather than environment variables — cache is capped at
-200 MB on disk with a 100 MB in-memory LRU by default.
+The API documentation is at `http://localhost:8000/docs`. Backend tunables
+(cache sizes, TTLs, prefetch depth) are constants in `backend/core/config.py`.
 
 ### Tests
 
 ```bash
-# Backend (from the repo root)
-pip install -r backend/requirements.txt
-pip install pytest pytest-asyncio httpx
-python -m pytest -v backend/tests
-
-# Frontend
-npm run --prefix frontend lint
-npm run --prefix frontend build
+cd backend && pytest                                # backend, against a temporary data dir
+cd frontend && npm run lint && npm run build        # types and lint
+cd frontend && npm run test:e2e                     # two-client sync and MSE playback in a real browser
 ```
 
-CI runs exactly these, plus manifest/syntax checks on the browser extension.
+CI runs these, plus checks on the browser extension and the documentation site.
 
-## Architecture
+## How it works
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     User Browser                             │
-└─────────────────────────┬───────────────────────────────────┘
-                          │ HTTPS
-┌─────────────────────────▼───────────────────────────────────┐
-│              Cloudflare Tunnel (Optional)                    │
-└─────────────────────────┬───────────────────────────────────┘
-                          │ HTTP
-┌─────────────────────────▼───────────────────────────────────┐
-│                    Nginx Reverse Proxy                       │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────────┐  │
-│  │  /api/*     │    │   /ws/*     │    │      /*         │  │
-│  │  /api/proxy │    │  WebSocket  │    │   Static/SSR    │  │
-│  └──────┬──────┘    └──────┬──────┘    └────────┬────────┘  │
-└─────────┼──────────────────┼───────────────────┼────────────┘
-          │                  │                   │
-┌─────────▼──────────────────▼───────┐  ┌───────▼─────────────┐
-│         FastAPI Backend            │  │   Next.js Frontend  │
-│  • yt-dlp video resolution         │  │   • React 19        │
-│  • WebSocket room sync             │  │   • TailwindCSS 4   │
-│  • HLS/DASH proxy                  │  │   • hls.js player   │
-│  • Cookie management               │  │   • Light/dark UI   │
-└────────────────────────────────────┘  └─────────────────────┘
+ browsers ── HTTPS ── Cloudflare Tunnel + Access (optional)
+                                │
+                              nginx
+              ┌─────────────────┼──────────────────┐
+         /api, /api/proxy     /ws/*               /*
+              └────────┬────────┘                  │
+        FastAPI (one worker)                  Next.js app
+   yt-dlp resolve → DASH manifest        React 19, Shaka / hls.js,
+   SSRF-safe proxy + span cache          one <video> per player
+   rooms, queue, heartbeat sync
+   cookie store (memory only)
 ```
 
-## Cookie Authentication
+- **Rooms** live in the backend's memory, with the queue and playback state
+  persisted to SQLite; a room stays for five minutes after its last member leaves.
+- **Sync**: a heartbeat every five seconds carries the room's position; clients
+  measure their latency with ping/pong and correct by rate or by seek.
+- **Every upstream fetch** goes through one SSRF-safe path: each host validated,
+  the validated address pinned for the connection, every redirect re-validated.
+- **Identity** comes from the verified Cloudflare Access JWT, never from a plain
+  header once Access is configured.
+- **One worker, by design**: room state, caches and the rate limiter are
+  in-process, and startup refuses more than one.
 
-Most videos only play from a server with a signed-in session. Cookies reach
-the server one way only: through the browser extension.
+The [technical specification](SPECIFICATION.md) has the details.
 
-1. Install [Watch Together Cookie Sync from the Chrome Web Store](https://chromewebstore.google.com/detail/watch-together-cookie-syn/beonlkadfoclpnfigngknbjfoifibagn)
+## Your session, and the extension
+
+Most videos only play from a server with a signed-in session. Cookies reach the
+server one way only: through the browser extension.
+
+1. Install [Watch Together Cookie Sync](https://chromewebstore.google.com/detail/watch-together-cookie-syn/beonlkadfoclpnfigngknbjfoifibagn)
    for Chrome or Edge. Settings in any room links to the store and offers a
-   Firefox development ZIP; [Nightly releases](../../releases/tag/nightly)
-   also carry development builds
-2. Log in to YouTube, Twitch or Kick in your browser
-3. Open your Watch Together instance while signed in, then connect it from the
-   extension popup
+   Firefox development ZIP; [nightly releases](../../releases/tag/nightly) also
+   carry development builds.
+2. Sign in to YouTube, Twitch or Kick in your browser.
+3. Open your Watch Together instance, then connect it from the extension popup.
 4. The extension syncs your cookies every ten minutes while the browser is
-   open, and again whenever you open the instance
+   open, and again whenever you open the instance.
 
 > **Cookies are never stored.** The server keeps them in memory only, drops
 > them half an hour after the last sync or as soon as you disconnect the
 > extension, and never writes them to disk or its database. While you are in a
 > room, YouTube, Twitch and Kick links other members paste can be resolved with
-> your session — single videos only, never your feeds, playlists or history.
+> your session: single videos only, never your feeds, playlists or history.
 > Members without the extension are told about it once, above the URL box.
 
-## Project Structure
+Read the [extension privacy policy](PRIVACY.md) before connecting.
 
-```
-watch-together/
-├── backend/                    # FastAPI Python backend
-│   ├── main.py                # App init, streaming proxy, WebSocket entrypoint
-│   ├── connection_manager.py  # WebSocket room management
-│   ├── api/routes/            # rooms, cookies, tokens, extension routers
-│   ├── core/                  # config constants, security helpers
-│   ├── services/              # resolver, cache, prefetcher, database
-│   └── tests/                 # pytest suite
-├── frontend/               # Next.js React frontend
-│   ├── app/               # App router pages
-│   ├── components/        # React components
-│   │   ├── custom-player.tsx  # Video player
-│   │   └── player/hooks/      # Player hooks
-│   ├── lib/               # Utilities, API client, themes, constants
-│   └── README.md          # Frontend structure, theming and storage keys
-├── extension/             # Browser extension for cookie sync
-├── nginx/                 # Nginx configuration
-├── docker-compose.yml     # Container orchestration
-├── CONTRIBUTING.md        # Contribution guidelines
-├── DEPLOYMENT.md          # Deployment guide
-├── SECURITY.md            # Security policy
-└── SUPPORT.md             # Support policy
-```
+## Project
 
-## Documentation
+| | |
+|---|---|
+| `backend/` | FastAPI app: resolver, manifests, proxy, rooms, cookie store, `pytest` suite |
+| `frontend/` | Next.js app: the room, the player and its hooks ([frontend/README.md](frontend/README.md)) |
+| `extension/` | The Cookie Sync browser extension |
+| `deploy/` | Production compose file, scripts and the [operations guide](deploy/README.md) |
+| `docs/` | The website and documentation (Astro + Starlight) |
 
-- [DEPLOYMENT.md](DEPLOYMENT.md) - Detailed deployment guide
-- [CONTRIBUTING.md](CONTRIBUTING.md) - Development guidelines
-- [SPECIFICATION.md](SPECIFICATION.md) - Technical specification
-- [CHANGELOG.md](CHANGELOG.md) - Version history
-- [ISSUES.md](ISSUES.md) - Known issues and roadmap
-- [frontend/README.md](frontend/README.md) - Frontend structure, theming and scripts
-- [SECURITY.md](SECURITY.md) - Responsible vulnerability disclosure
-- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) - Community standards
-- [SUPPORT.md](SUPPORT.md) - Support channels and expectations
+- [Deployment guide](DEPLOYMENT.md) and [production operations](deploy/README.md)
+- [Technical specification](SPECIFICATION.md)
+- [Contributing](CONTRIBUTING.md), [code of conduct](CODE_OF_CONDUCT.md) and [support](SUPPORT.md)
+- [Security policy](SECURITY.md)
+- [Changelog](CHANGELOG.md) and [known issues](ISSUES.md)
+- [Report an issue](https://github.com/rennerdo30/watch-together/issues)
 
-## Tech Stack
-
-| Component | Technology |
-|-----------|------------|
-| Frontend | Next.js 16, React 19, TypeScript, TailwindCSS 4 |
-| Backend | FastAPI, Python 3.11+, yt-dlp, aiosqlite |
-| Player | hls.js, custom DASH sync hooks |
-| Real-time | WebSockets |
-| Proxy | Nginx |
-| Container | Docker Compose |
-| Auth | Cloudflare Zero Trust (optional) |
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Contributing
-
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-### Client error diagnostics
-
-The admin panel's **Client errors** section lists authenticated browser reports,
-including the viewer, room, server receipt time, source, player code, HTTP status,
-resource path, browser version and stack where available. Filter by viewer, room,
-code or message. It captures Shaka failures (including errors recovered by refreshing
-an expired source), fatal HLS errors, native media failures, React error boundaries,
-and uncaught JavaScript errors/rejected promises after hydration.
-
-Reports use `POST /api/client-errors`; identities come from the existing authentication
-layer, never the payload. URL queries/fragments and credentials are removed on the
-client and server. Shaka response bodies and headers are not transmitted. Reports are
-limited to 20 per viewer per minute, with identical events within 30 seconds counted
-together. The admin API returns the latest 500 events, including disconnected viewers;
-this in-memory history resets on backend restart. Redacted first occurrences are also
-written to backend logs under `Client error:`. Reporting is best effort: it cannot
-capture a page that never loads, an offline browser, or failures before hydration.
+Built with Next.js 16, React 19, TailwindCSS 4, FastAPI, yt-dlp, Shaka Player
+and hls.js. License: [MIT](LICENSE).

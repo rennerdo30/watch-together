@@ -223,6 +223,24 @@ false` with `available: true` means the container is not up: add
 - The repo-root `docker-compose.yml` is for local development: it bind-mounts
   the source and publishes nginx on `127.0.0.1:80`.
 
+## Client error diagnostics
+
+The admin panel's **Client errors** section lists authenticated browser reports,
+including the viewer, room, server receipt time, source, player code, HTTP status,
+resource path, browser version and stack where available. Filter by viewer, room,
+code or message. It captures Shaka failures (including errors recovered by refreshing
+an expired source), fatal HLS errors, native media failures, React error boundaries,
+and uncaught JavaScript errors/rejected promises after hydration.
+
+Reports use `POST /api/client-errors`; identities come from the existing authentication
+layer, never the payload. URL queries/fragments and credentials are removed on the
+client and server. Shaka response bodies and headers are not transmitted. Reports are
+limited to 20 per viewer per minute, with identical events within 30 seconds counted
+together. The admin API returns the latest 500 events, including disconnected viewers;
+this in-memory history resets on backend restart. Redacted first occurrences are also
+written to backend logs under `Client error:`. Reporting is best effort: it cannot
+capture a page that never loads, an offline browser, or failures before hydration.
+
 ## Troubleshooting
 
 ```bash

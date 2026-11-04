@@ -7,6 +7,7 @@ const repositoryRoot = path.resolve(root, '..');
 const contentRoot = path.join(root, 'src/content/docs');
 const repository = 'https://github.com/rennerdo30/watch-together';
 const base = '/watch-together';
+const raw = 'https://raw.githubusercontent.com/rennerdo30/watch-together/main';
 
 // These are generated build inputs, ignored by Git. Edit the source document.
 const pages = new Map([
@@ -25,6 +26,10 @@ function rewriteLink(href, source) {
   if (href.startsWith('../../releases/')) return `${repository}/${href.slice(6)}`;
   const [withoutFragment, fragment] = href.split('#', 2);
   const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(source), withoutFragment));
+  // Files the site publishes itself (docs/public/) are linked on the site;
+  // other images come from the repository as raw files, not blob pages.
+  if (resolved.startsWith('docs/public/')) return `${base}/${resolved.slice('docs/public/'.length)}`;
+  if (/\.(?:png|jpe?g|webp|gif|svg)$/i.test(resolved)) return `${raw}/${resolved}`;
   const route = pages.get(resolved);
   if (route) return `${base}/${route}/${fragment ? `#${fragment}` : ''}`;
   return `${repository}/blob/main/${resolved}${fragment ? `#${fragment}` : ''}`;
@@ -35,7 +40,8 @@ for (const [source, route] of pages) {
   const heading = original.match(/^# (.+)\r?\n/);
   if (!heading) throw new Error(`Missing document title: ${source}`);
   const body = original.slice(heading[0].length)
-    .replace(/\]\(([^\s)]+)\)/g, (_, href) => `](${rewriteLink(href, source)})`);
+    .replace(/\]\(([^\s)]+)\)/g, (_, href) => `](${rewriteLink(href, source)})`)
+    .replace(/\b(src|href)="([^"]+)"/g, (_, name, href) => `${name}="${rewriteLink(href, source)}"`);
   const target = path.join(contentRoot, `${route}.md`);
   await mkdir(path.dirname(target), { recursive: true });
   await writeFile(target, `---\ntitle: ${JSON.stringify(heading[1])}\n---\n${body}`);

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Watch Together">
+  <defs><linearGradient id="wtTile" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34cdb9"/><stop offset="1" stop-color="#0e8f7d"/></linearGradient></defs>
+  <rect width="64" height="64" rx="15" fill="url(#wtTile)"/>
+  <rect x="11" y="15" width="42" height="29" rx="9" fill="#ffffff"/>
+  <ellipse cx="25.5" cy="29.5" rx="3.2" ry="4.6" fill="#0b4f46"/>
+  <ellipse cx="38.5" cy="29.5" rx="3.2" ry="4.6" fill="#0b4f46"/>
+  <path d="M24 50h16" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>
+</svg>

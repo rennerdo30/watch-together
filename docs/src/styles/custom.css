@@ -1,18 +1,15 @@
-/**
- * Custom accent colors
- * Change these values to customize your theme
- */
+/* The brand teal from frontend/lib/themes.ts, the same as the homepage. */
 
 /* Dark mode */
 :root {
-  --sl-color-accent-low: hsl(25, 54%, 15%);
-  --sl-color-accent: hsl(25, 95%, 53%);
-  --sl-color-accent-high: hsl(25, 93%, 78%);
+  --sl-color-accent-low: #0b2e2a;
+  --sl-color-accent: #2fc4b2;
+  --sl-color-accent-high: #a7eee5;
 }
 
 /* Light mode */
 :root[data-theme='light'] {
-  --sl-color-accent-low: hsl(25, 90%, 92%);
-  --sl-color-accent: hsl(25, 95%, 45%);
-  --sl-color-accent-high: hsl(25, 80%, 25%);
+  --sl-color-accent-low: #d5f3ef;
+  --sl-color-accent: #0f766e;
+  --sl-color-accent-high: #0b4f46;
 }

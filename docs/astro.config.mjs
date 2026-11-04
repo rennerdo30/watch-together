@@ -14,7 +14,8 @@ export default defineConfig({
       customCss: ['./src/styles/custom.css'],
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/rennerdo30/watch-together' }],
       sidebar: [
-        { label: 'Home', slug: 'index' },
+        { label: 'Home', link: '/' },
+        { label: 'Documentation', slug: 'docs' },
         { label: 'Project overview', slug: 'overview' },
         { label: 'User guides', items: [
           { label: 'Watching in a room', slug: 'guides/rooms' },

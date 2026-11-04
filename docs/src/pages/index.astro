@@ -1,0 +1,218 @@
+---
+// The project homepage. Plain markup with its own stylesheet and script in
+// public/site/: no framework code, no external fonts or requests. The
+// documentation (Starlight) lives under /docs/ and the other content routes.
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+const repo = 'https://github.com/rennerdo30/watch-together';
+const store = 'https://chromewebstore.google.com/detail/watch-together-cookie-syn/beonlkadfoclpnfigngknbjfoifibagn';
+const title = 'Watch Together: press play once, for everyone in the room';
+const description = 'A self-hosted watch party for YouTube, Twitch, Kick and 1800+ other sites. Every viewer stays on one clock, and one signed-in member can play what the room could not.';
+---
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{title}</title>
+  <meta name="description" content={description}>
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#0a0d0f">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; font-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <link rel="canonical" href={`https://rennerdo30.github.io${base}`}>
+  <link rel="icon" href={`${base}favicon.svg`} type="image/svg+xml">
+  <link rel="apple-touch-icon" href={`${base}apple-touch-icon.png`}>
+  <meta property="og:title" content="Watch Together">
+  <meta property="og:description" content={description}>
+  <meta property="og:type" content="website">
+  <meta property="og:url" content={`https://rennerdo30.github.io${base}`}>
+  <meta property="og:image" content={`https://rennerdo30.github.io${base}shots/room-dark.png`}>
+  <link rel="preload" href={`${base}site/fonts/InterTight-Variable.woff2`} as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href={`${base}site/style.css`}>
+  <script is:inline src={`${base}site/site.js`} defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <div class="night">
+    <header class="top">
+      <a class="brand" href="#top" aria-label="Watch Together home">
+        <img src={`${base}site/logo.svg`} width="30" height="30" alt="">
+        <span>Watch Together</span>
+      </a>
+      <nav aria-label="Sections">
+        <a href="#sync">Sync</a>
+        <a href="#room">The room</a>
+        <a href="#session">Your session</a>
+        <a href="#host">Self-host</a>
+        <a href={`${base}docs/`}>Docs</a>
+        <a class="nav-gh" href={repo}>GitHub</a>
+      </nav>
+    </header>
+
+    <section class="hero" id="top" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="kicker"><span class="pill">Open source</span> Self-hosted, MIT licensed</p>
+        <h1 id="hero-title">Press play once. <em>Everyone&rsquo;s watching.</em></h1>
+        <p class="lede">Watch Together is a watch party you run yourself. Paste a link from YouTube, Twitch, Kick or 1800+ other sites, and every browser in the room plays it on one clock: within half a second of each other, from Berlin to Tokyo.</p>
+        <div class="cta">
+          <a class="btn btn-primary" href="#host">Run your own</a>
+          <a class="btn btn-ghost" href={repo}>View the source</a>
+        </div>
+        <p class="platforms">Any modern browser. No account, no app, no download for viewers.</p>
+      </div>
+
+      <figure class="room-demo" aria-labelledby="demo-caption">
+        <div class="demo-bar">
+          <p class="room-clock"><span class="beat" data-beat aria-hidden="true"></span>Room clock <b data-room-time>0:00</b></p>
+          <p class="speed">Shown 8&times; faster</p>
+        </div>
+        <ul class="viewers">
+          <li class="viewer" data-viewer="alex">
+            <div class="screen" aria-hidden="true"><span class="sun"></span><span class="ridge r1"></span><span class="ridge r2"></span><span class="bar"><i data-progress></i></span></div>
+            <p class="who"><b>alex</b> <span>Berlin</span></p>
+            <p class="state"><span class="time" data-time>0:00</span><span class="chip" data-chip>in sync</span></p>
+          </li>
+          <li class="viewer" data-viewer="mia">
+            <div class="screen" aria-hidden="true"><span class="sun"></span><span class="ridge r1"></span><span class="ridge r2"></span><span class="bar"><i data-progress></i></span></div>
+            <p class="who"><b>mia</b> <span>Tokyo, 260 ms away</span></p>
+            <p class="state"><span class="time" data-time>0:00</span><span class="chip" data-chip>in sync</span></p>
+          </li>
+          <li class="viewer" data-viewer="sam">
+            <div class="screen" aria-hidden="true"><span class="sun"></span><span class="ridge r1"></span><span class="ridge r2"></span><span class="bar"><i data-progress></i></span></div>
+            <p class="who"><b>sam</b> <span>Toronto</span></p>
+            <p class="state"><span class="time" data-time>0:00</span><span class="chip" data-chip>in sync</span></p>
+          </li>
+        </ul>
+        <div class="scenes" role="group" aria-label="Show what the room does when">
+          <button type="button" data-scene="pause" aria-pressed="false">Alex pauses</button>
+          <button type="button" data-scene="stall" aria-pressed="false">Mia&rsquo;s Wi-Fi stalls</button>
+          <button type="button" data-scene="sleep" aria-pressed="false">Sam&rsquo;s tab sleeps</button>
+          <button type="button" data-scene="seek" aria-pressed="false">Mia skips ahead</button>
+        </div>
+        <figcaption id="demo-caption" data-caption>Three browsers, one clock. Every five seconds the server sends the room&rsquo;s position, and each player compares it with its own.</figcaption>
+      </figure>
+    </section>
+  </div>
+
+  <main id="main">
+    <section class="band" id="sync" aria-labelledby="sync-title">
+      <div class="split">
+        <div class="prose">
+          <h2 id="sync-title">One clock for the room</h2>
+          <p>The server holds the room&rsquo;s position. Play, pause and seek go through it and reach every member at once, so nobody counts down &ldquo;three, two, one&rdquo; on a call again.</p>
+          <p>Between commands, drift is corrected quietly. A player that falls a little behind speeds up by five percent until it is back; a viewer you would never notice it on. Only a player more than three seconds off, after a stalled connection or a sleeping tab, is moved in one jump.</p>
+          <p>Each browser measures its own round trip to the server and allows for it, so a viewer on the other side of the world is not permanently late by their ping.</p>
+        </div>
+        <dl class="spec">
+          <div><dt>Heartbeat</dt><dd>Every five seconds, the room&rsquo;s authoritative position.</dd></div>
+          <div><dt>Within 0.5 s</dt><dd>In sync. Normal speed.</dd></div>
+          <div><dt>0.5 to 3 s off</dt><dd>Plays at 1.05&times; or 0.95&times; until the gap closes.</dd></div>
+          <div><dt>Over 3 s off</dt><dd>Seeks straight to the room&rsquo;s position.</dd></div>
+          <div><dt>Latency</dt><dd>Measured continuously with ping and pong, half the round trip added to every heartbeat.</dd></div>
+          <div><dt>Live streams</dt><dd>Left to the player&rsquo;s own live-edge catch-up, never dragged to a position.</dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <section class="band" id="room" aria-labelledby="room-title">
+      <h2 id="room-title">Everything a movie night needs</h2>
+      <p class="intro">A room is a link. Whoever opens it joins, sees who else is there and what is queued, and the first one in can name the room and choose its settings.</p>
+      <figure class="shot">
+        <picture>
+          <source media="(prefers-color-scheme: light)" srcset={`${base}shots/room-light.png`}>
+          <img src={`${base}shots/room-dark.png`} width="1440" height="900" loading="lazy" alt="A Watch Together room named Movie night: a video playing with its title and channel, playback controls, a link box with Play and Queue buttons, Share screen and Shared browser, and the Audience tab listing alex, mia and sam, with sam as the room's admin.">
+        </picture>
+        <figcaption>The room, playing. Queue, audience, live chat and an activity log sit beside the player.</figcaption>
+      </figure>
+      <ul class="features">
+        <li><h3>A shared queue</h3><p>Drag to reorder, see who added what, open the original. A link is queued at once and resolved behind it, so pasting never waits.</p></li>
+        <li><h3>SponsorBlock for the room</h3><p>Sponsor, self-promotion and reminder segments are skipped for everyone at the same moment, by the server. The admin chooses which.</p></li>
+        <li><h3>Live chat beside live streams</h3><p>Twitch, YouTube, Kick and Owncast chat in a side panel, or any chat embed you point it at.</p></li>
+        <li><h3>Share your screen</h3><p>Show the room your game, with sound. The server relays it, about half a second behind, and someone who joins halfway still gets a picture.</p></li>
+        <li><h3>Audio that behaves</h3><p>One loudness level per video, measured over the whole programme by the server. Night mode for quiet evenings, mono for one earbud.</p></li>
+        <li><h3>Seek preview</h3><p>Hover the timeline to see the frame under the pointer.</p></li>
+        <li><h3>A shared browser</h3><p>Opt in to a real browser on the server that the whole room watches and the admin drives, for anything a link cannot reach.</p></li>
+        <li><h3>Yours to theme</h3><p>Light and dark, six accents and a custom one. Optional upscaling in the browser, on WebGPU where available.</p></li>
+      </ul>
+    </section>
+
+    <section class="band" id="playback" aria-labelledby="playback-title">
+      <div class="split split-rev">
+        <div class="prose">
+          <h2 id="playback-title">Plays where a site would rather it didn&rsquo;t</h2>
+          <p>Links are resolved on the server with yt-dlp, which knows more than 1800 sites. YouTube hands out audio and video as separate files with no manifest, so Watch Together writes a real DASH manifest for them and plays both through one video element. One clock in the browser too, so lips match words.</p>
+          <p>Every byte comes through your server. The first seconds of a video, the next one in the queue and the spot after a sponsor skip are fetched ahead of time, so starts and jumps do not wait on a slow road between continents.</p>
+        </div>
+        <ol class="flow" aria-label="From a pasted link to playback">
+          <li><b>Paste a link</b><span>Resolved once for the whole room, starting the moment it is pasted</span></li>
+          <li><b>Manifest</b><span>Written from the files&rsquo; own index, up to 4K</span></li>
+          <li><b>Proxy</b><span>Every request validated and pinned to the address it was checked against</span></li>
+          <li><b>One video element</b><span>Media Source Extensions, picture and sound on one clock</span></li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="band" id="session" aria-labelledby="session-title">
+      <div class="split">
+        <div class="prose">
+          <h2 id="session-title">One signed-in member is enough</h2>
+          <p>Many videos only play for a signed-in account, and a server never is. The <a href={store}>Watch Together Cookie Sync</a> extension lends your YouTube, Twitch or Kick session to your own instance, so the videos others in your room paste play too.</p>
+          <p>It is lent, not handed over. Cookies live in the server&rsquo;s memory, for single videos only, and are gone half an hour after you stop syncing.</p>
+          <div class="cta">
+            <a class="btn btn-primary" href={store}>Add to Chrome or Edge</a>
+            <a class="btn" href={`${base}privacy/`}>Extension privacy policy</a>
+          </div>
+        </div>
+        <div class="ledger" role="group" aria-labelledby="ledger-title">
+          <p class="ledger-title" id="ledger-title">Your session, on the server</p>
+          <table>
+            <tbody>
+              <tr><th scope="row">Kept in</th><td>Process memory only. Never a file, never the database.</td></tr>
+              <tr><th scope="row">Gone</th><td>30 minutes after the last sync, when you disconnect, or on restart.</td></tr>
+              <tr><th scope="row">Lent to</th><td>Members of a room you are in, or left less than 30 minutes ago.</td></tr>
+              <tr><th scope="row">Used for</th><td>Single videos on YouTube, Twitch and Kick. Never feeds, playlists or channels.</td></tr>
+              <tr><th scope="row">Sent back</th><td class="none">Never. No response ever contains a cookie value.</td></tr>
+            </tbody>
+          </table>
+          <p class="ledger-foot">Watch history is off until you switch it on; then the videos you watch land in your own YouTube history, where you stopped.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="band host" id="host" aria-labelledby="host-title">
+      <h2 id="host-title">Run your own</h2>
+      <p class="intro">Watch Together is a Docker Compose stack: a FastAPI backend, the Next.js app and nginx in front. Put it behind a Cloudflare Tunnel and Access and only the people you invite get in, verified, with no port opened on your network.</p>
+      <div class="dl-grid">
+        <div class="dl">
+          <h3>Start it</h3>
+          <pre><code>git clone {repo}
+cd watch-together
+cp .env.example .env
+docker compose up -d --build</code></pre>
+          <p>Then open <code>http://localhost</code>. The only setting in <code>.env</code> is the optional tunnel token.</p>
+          <p class="cta"><a class="btn btn-primary" href={`${base}hosting/overview/`}>Deployment guide</a> <a class="btn" href={`${base}hosting/production/`}>Production operations</a></p>
+        </div>
+        <div class="dl">
+          <h3>What you are running</h3>
+          <pre class="diagram" aria-label="Browsers connect over HTTPS through an optional Cloudflare Tunnel to nginx, which routes the API and proxy and the WebSocket to FastAPI, and pages to Next.js."><code>browsers ── HTTPS ── Cloudflare Tunnel (optional)
+                              │
+                            nginx
+                  ┌───────────┴───────────┐
+       FastAPI: yt-dlp, rooms,      Next.js: the app
+       manifests, the proxy</code></pre>
+          <ul class="ticks">
+            <li>One worker, by design: rooms and caches live in its memory.</li>
+            <li>DNS for every container over HTTPS.</li>
+            <li>Identity from Cloudflare Access, verified on every request.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p><img src={`${base}site/logo.svg`} width="20" height="20" alt=""> Watch Together, a project by <a href="https://github.com/rennerdo30">rennerdo30</a>. MIT licensed.</p>
+    <p><a href={`${base}docs/`}>Documentation</a> <a href={`${base}privacy/`}>Privacy</a> <a href={repo}>GitHub</a> <a href="mailto:support@renner.dev">support@renner.dev</a></p>
+  </footer>
+</body>
+</html>
