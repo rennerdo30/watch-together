@@ -2,7 +2,7 @@
 
 Use the public GitHub Pages policy URL:
 
-https://rennerdo30.github.io/watch-together/privacy/
+https://watch-together.renner.dev/privacy/
 
 The documentation site is public, so this URL does not require a Watch Together or
 Cloudflare Access login. Verify it in a signed-out browser before submission.

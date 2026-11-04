@@ -3,6 +3,7 @@
 // public/site/: no framework code, no external fonts or requests. The
 // documentation (Starlight) lives under /docs/ and the other content routes.
 const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+const site = 'https://watch-together.renner.dev/';
 const repo = 'https://github.com/rennerdo30/watch-together';
 const store = 'https://chromewebstore.google.com/detail/watch-together-cookie-syn/beonlkadfoclpnfigngknbjfoifibagn';
 const title = 'Watch Together: press play once, for everyone in the room';
@@ -18,14 +19,14 @@ const description = 'A self-hosted watch party for YouTube, Twitch, Kick and 180
   <meta name="color-scheme" content="light dark">
   <meta name="theme-color" content="#0a0d0f">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; font-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'">
-  <link rel="canonical" href={`https://rennerdo30.github.io${base}`}>
+  <link rel="canonical" href={site}>
   <link rel="icon" href={`${base}favicon.svg`} type="image/svg+xml">
   <link rel="apple-touch-icon" href={`${base}apple-touch-icon.png`}>
   <meta property="og:title" content="Watch Together">
   <meta property="og:description" content={description}>
   <meta property="og:type" content="website">
-  <meta property="og:url" content={`https://rennerdo30.github.io${base}`}>
-  <meta property="og:image" content={`https://rennerdo30.github.io${base}shots/room-dark.png`}>
+  <meta property="og:url" content={site}>
+  <meta property="og:image" content={`${site}shots/room-dark.png`}>
   <link rel="preload" href={`${base}site/fonts/InterTight-Variable.woff2`} as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href={`${base}site/style.css`}>
   <script is:inline src={`${base}site/site.js`} defer></script>

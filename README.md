@@ -11,10 +11,10 @@
 </p>
 
 <p align="center">
-  <a href="https://rennerdo30.github.io/watch-together/"><b>Website</b></a> ·
-  <a href="https://rennerdo30.github.io/watch-together/docs/">Documentation</a> ·
+  <a href="https://watch-together.renner.dev/"><b>Website</b></a> ·
+  <a href="https://watch-together.renner.dev/docs/">Documentation</a> ·
   <a href="https://chromewebstore.google.com/detail/watch-together-cookie-syn/beonlkadfoclpnfigngknbjfoifibagn">Browser extension</a> ·
-  <a href="https://rennerdo30.github.io/watch-together/privacy/">Privacy</a> ·
+  <a href="https://watch-together.renner.dev/privacy/">Privacy</a> ·
   <a href="LICENSE">MIT license</a>
 </p>
 

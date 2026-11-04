@@ -31,7 +31,7 @@ class Page(HTMLParser):
 class DocumentationSite(unittest.TestCase):
     def test_home_links_directly_to_public_policy(self) -> None:
         page = Page((SITE / "index.html").read_text())
-        self.assertIn("/watch-together/privacy/", page.links)
+        self.assertIn("/privacy/", page.links)
         self.assertIn("support@renner.dev", "".join(page.text))
 
     def test_policy_is_imported_from_its_canonical_source(self) -> None:
@@ -44,7 +44,7 @@ class DocumentationSite(unittest.TestCase):
         for phrase in ["authentication cookies", "other members", "30 minutes", "Limited Use", "support@renner.dev"]:
             self.assertIn(phrase, text)
 
-    def test_internal_links_and_assets_resolve_under_the_project_path(self) -> None:
+    def test_internal_links_and_assets_resolve_from_the_domain_root(self) -> None:
         for path in SITE.rglob("*.html"):
             for link in Page(path.read_text()).links:
                 parts = urlsplit(link)
@@ -52,8 +52,8 @@ class DocumentationSite(unittest.TestCase):
                     continue
                 relative = unquote(parts.path)
                 if relative.startswith("/"):
-                    self.assertTrue(relative == "/watch-together" or relative.startswith("/watch-together/"), link)
-                    target = SITE / relative.removeprefix("/watch-together").lstrip("/")
+                    self.assertFalse(relative.startswith("/watch-together/"), f"{link}: the site lives at the domain root")
+                    target = SITE / relative.lstrip("/")
                 else:
                     target = path.parent / relative
                 if target.is_dir():
@@ -71,14 +71,14 @@ class DocumentationSite(unittest.TestCase):
             self.assertNotIn("style", attrs, f"inline style on <{tag}>")
             if tag in {"script", "img", "source"} or (tag == "link" and attrs.get("rel") in {"stylesheet", "preload", "icon"}):
                 url = attrs.get("src") or attrs.get("href") or attrs.get("srcset") or ""
-                self.assertTrue(url.startswith("/watch-together/"), f"<{tag}> loads {url!r}")
+                self.assertTrue(url.startswith("/") and not url.startswith("//"), f"<{tag}> loads {url!r}")
         html = (SITE / "index.html").read_text()
         self.assertNotRegex(html, r"<script(?![^>]*\bsrc=)[^>]*>", "inline script on the homepage")
         self.assertNotIn("<style", html)
 
     def test_homepage_links_the_documentation_and_its_demo_assets_exist(self) -> None:
         page = Page((SITE / "index.html").read_text())
-        for link in ["/watch-together/docs/", "/watch-together/hosting/overview/", "/watch-together/shots/room-dark.png"]:
+        for link in ["/docs/", "/hosting/overview/", "/shots/room-dark.png"]:
             self.assertIn(link, page.links)
         for name in ["site/style.css", "site/site.js", "site/fonts/InterTight-Variable.woff2", "site/fonts/OFL.txt", "shots/room-light.png"]:
             self.assertTrue((SITE / name).is_file(), name)
@@ -87,9 +87,15 @@ class DocumentationSite(unittest.TestCase):
     def test_readme_images_are_served_not_linked_to_blob_pages(self) -> None:
         page = Page((SITE / "overview/index.html").read_text())
         images = [a.get("src") or "" for t, a in page.tags if t == "img"]
-        self.assertIn("/watch-together/shots/room-dark.png", images)
+        self.assertIn("/shots/room-dark.png", images)
         for src in images:
             self.assertNotIn("/blob/", src)
+
+    def test_custom_domain_is_published(self) -> None:
+        self.assertEqual((SITE / "CNAME").read_text().strip(), "watch-together.renner.dev")
+        page = Page((SITE / "index.html").read_text())
+        canonical = [a.get("href") for t, a in page.tags if t == "link" and a.get("rel") == "canonical"]
+        self.assertEqual(canonical, ["https://watch-together.renner.dev/"])
 
     def test_search_is_built_and_build_sources_are_not_published(self) -> None:
         self.assertTrue((SITE / "pagefind/pagefind.js").is_file())

@@ -37,8 +37,11 @@ npm ci
 npm run dev
 ```
 
-Astro prints the local development address. The site is served under the
-`/watch-together/` base path so previews exercise the GitHub Pages paths.
+Astro prints the local development address. The site is served from the root
+of its own domain, `watch-together.renner.dev` (`docs/public/CNAME`; the custom
+domain is also set in the repository's Pages settings, since an Actions deploy
+ignores the file). The old `rennerdo30.github.io/watch-together/` addresses
+redirect there.
 
 ## Source documents
 
@@ -64,6 +67,6 @@ Pages using the `github-pages` environment.
 
 The public privacy URL is:
 
-https://rennerdo30.github.io/watch-together/privacy/
+https://watch-together.renner.dev/privacy/
 
 It must remain accessible without a Watch Together or Cloudflare Access login.

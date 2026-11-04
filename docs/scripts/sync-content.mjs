@@ -6,7 +6,8 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const repositoryRoot = path.resolve(root, '..');
 const contentRoot = path.join(root, 'src/content/docs');
 const repository = 'https://github.com/rennerdo30/watch-together';
-const base = '/watch-together';
+// The site is served from the root of its own domain (docs/public/CNAME).
+const base = '';
 const raw = 'https://raw.githubusercontent.com/rennerdo30/watch-together/main';
 
 // These are generated build inputs, ignored by Git. Edit the source document.

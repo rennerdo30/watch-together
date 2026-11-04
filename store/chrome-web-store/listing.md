@@ -29,7 +29,7 @@ This extension lets your Watch Together instance use your own session for that.
 You decide which sites sync, can sync by hand or turn automatic sync off, and can reset everything from the settings page.
 
 Watch Together is open source and self-hostable: https://github.com/rennerdo30/watch-together
-Privacy policy: https://rennerdo30.github.io/watch-together/privacy/
+Privacy policy: https://watch-together.renner.dev/privacy/
 ```
 
 ## Images
