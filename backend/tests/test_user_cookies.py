@@ -244,6 +244,7 @@ class TestLending:
         "https://clips.twitch.tv/SomeClip",
         "https://kick.com/somechannel",
         "https://kick.com/somechannel/clips/clip_01ABC",
+        "https://kick.com/somechannel/videos/0e5c0b4a-1b2c-4d3e-8f90-123456789abc",
     ])
     def test_single_video_pages_of_allowlisted_sites_are_shareable(self, url):
         assert is_shareable(url)
@@ -256,6 +257,11 @@ class TestLending:
         "https://www.youtube.com/playlist?list=PLabc",
         "https://www.youtube.com/@somechannel/videos",
         "https://www.youtube.com/results?search_query=x",
+        # A channel's lists on Twitch and Kick: many videos, not one.
+        "https://www.twitch.tv/somechannel/clips",
+        "https://www.twitch.tv/somechannel/videos",
+        "https://kick.com/somechannel/clips",
+        "https://kick.com/somechannel/videos",
         # Sites outside the allowlist, however popular.
         "https://vimeo.com/123456",
         "https://www.dailymotion.com/video/x8abc",
