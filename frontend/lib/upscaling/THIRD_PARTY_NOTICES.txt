@@ -50,7 +50,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-LiteRT.js 2.5.3: https://github.com/google-ai-edge/LiteRT
+LiteRT.js 2.6.0: https://github.com/google-ai-edge/LiteRT
 Copyright 2025 Google LLC
 
 

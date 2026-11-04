@@ -15,7 +15,7 @@ Served to browsers from `frontend/public/`, each with its licence text alongside
 |---|---|---|---|
 | [WebSR](https://github.com/sb2702/websr) 0.0.16, with its CNN weights and MobileNetV3 content classifier | Video enhancement (opt-in) | MIT | `frontend/public/upscaling/v1/` |
 | [Anime4K](https://github.com/bloc97/Anime4K) CNN and weights | Video enhancement (opt-in) | MIT | `frontend/public/upscaling/v1/THIRD_PARTY_NOTICES.txt` |
-| [LiteRT.js](https://github.com/google-ai-edge/LiteRT) 2.5.3 | Running the classifier | Apache-2.0 | `frontend/public/upscaling/v1/THIRD_PARTY_NOTICES.txt` |
+| [LiteRT.js](https://github.com/google-ai-edge/LiteRT) 2.6.0 | Running the classifier | Apache-2.0 | `frontend/public/upscaling/v1/THIRD_PARTY_NOTICES.txt` |
 | [Framegen](https://github.com/MONZikWasTaken/Framegen) 1.4.0 runtime | Motion smoothing (opt-in) | MIT | `frontend/public/framegen/v1/LICENSE.txt` |
 | Framegen v7-small **model weights** (`rt_v7s.*`) | Motion smoothing (opt-in) | **Non-commercial research and personal use only**; redistributed unchanged with its notice | `frontend/public/framegen/v1/WEIGHTS_LICENSE.md` |
 

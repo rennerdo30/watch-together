@@ -70,3 +70,15 @@ def test_readme_and_website_point_to_the_notices_and_disclaim_affiliation():
     homepage = _read("docs/src/pages/index.astro")
     assert "THIRD_PARTY_NOTICES.md" in homepage and "not affiliated" in homepage
     assert "not affiliated" in _read("store/chrome-web-store/listing.md")
+
+
+def test_bundled_versions_in_the_notices_match_the_pins():
+    # Dependabot bumps package.json; a notice naming the old version is wrong.
+    import json
+    deps = json.loads(_read("frontend/package.json"))["dependencies"]
+    for package, label in (("@litertjs/core", "LiteRT.js"), ("@websr/websr", "WebSR"), ("framegen", "Framegen")):
+        version = deps[package].lstrip("^~")
+        assert f"{version}" in NOTICES.read_text(encoding="utf-8"), f"{label} {version} in THIRD_PARTY_NOTICES.md"
+    upscaling = _read("frontend/lib/upscaling/THIRD_PARTY_NOTICES.txt")
+    assert f"LiteRT.js {deps['@litertjs/core']}" in upscaling
+    assert f"WebSR {deps['@websr/websr']}" in upscaling
