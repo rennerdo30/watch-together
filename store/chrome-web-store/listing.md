@@ -16,22 +16,29 @@ from the running app, so they follow the app's look.
 ## Description
 
 ```
-Watch Together plays YouTube, Twitch, Kick and other videos in sync for everyone in a room. Many of those videos only play for a signed-in account: age-restricted videos, members-only streams, and anything a site's bot check holds back.
+Watch Together Cookie Sync is the companion extension for Watch Together, a self-hosted watch party app where everyone in a room watches the same video in sync.
 
-This extension lets your Watch Together instance use your own session for that.
+Some videos only play for a signed-in account: age-restricted videos, members-only content, subscriber streams. This extension shares your sign-in with the Watch Together server you connect, so your room can play what your own account can.
 
-• Connect once from the popup, on your Watch Together site.
-• Your cookies for the sites you choose are sent to that instance over HTTPS, and refreshed every 10 minutes while your browser is open.
-• The instance keeps them in memory only, never on disk, and drops them 30 minutes after the last sync or as soon as you disconnect.
-• While you are in a room, single videos other members paste from YouTube, Twitch or Kick can be played with your session. Feeds, playlists and channels never are.
-• Send the page you are on to a room's queue in one click.
+WHAT IT DOES
+• Keeps your sign-in for supported video sites synced to your Watch Together server while your browser is open, refreshed every 10 minutes
+• Queues the page you are looking at into a room with one click
+• Keeps open Watch Together room tabs from being unloaded in the background, so playback and sync keep going
 
-You decide which sites sync, can sync by hand or turn automatic sync off, and can reset everything from the settings page.
+YOU STAY IN CONTROL
+• Nothing is sent until you connect a Watch Together site yourself. The extension asks for access to that one site only, and only over HTTPS.
+• Choose which sites are synced, sync by hand, switch auto-sync off, or reset everything in the settings
+• Your sign-in goes only to the server you connected. The server keeps it in memory only, never on disk, and drops it 30 minutes after the last sync or as soon as you disconnect.
+• While you are in a room, other members can play single videos from YouTube, Twitch or Kick with your sign-in. Never your feeds, playlists, channels or history.
+• No analytics, no tracking, no ads
 
-Watch Together is open source and self-hostable: https://github.com/rennerdo30/watch-together
+REQUIREMENTS
+You need access to a Watch Together server, either your own or one a friend runs. The extension does nothing on its own.
+
+Open source: https://github.com/rennerdo30/watch-together
 Privacy policy: https://watch-together.renner.dev/privacy/
 
-YouTube, Twitch and Kick are trademarks of their owners. Watch Together is an independent project, not affiliated with or endorsed by them.
+YouTube, Twitch, Kick and the other sites named are trademarks of their owners. Watch Together is an independent project, not affiliated with or endorsed by any of them.
 ```
 
 ## Images
