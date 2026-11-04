@@ -29,12 +29,16 @@ def test_notices_cover_what_is_not_mit():
 
 
 def test_bundled_assets_ship_their_licence_texts():
-    public = REPO_ROOT / "frontend" / "public"
-    for notice in (
-        "framegen/v1/LICENSE.txt", "framegen/v1/WEIGHTS_LICENSE.md",
-        "upscaling/v1/LICENSE-WebSR.txt", "upscaling/v1/THIRD_PARTY_NOTICES.txt",
+    # frontend/public/{framegen,upscaling}/ are generated, not committed: the
+    # build script must copy each licence next to the asset it covers.
+    build = _read("frontend/scripts/build-upscaling.mjs")
+    for copied in (
+        "'LICENSE-WebSR.txt'", "'THIRD_PARTY_NOTICES.txt'", "'LICENSE.txt'", "'WEIGHTS_LICENSE.md'",
     ):
-        assert (public / notice).is_file(), notice
+        assert copied in build, copied
+    for source in ("frontend/lib/upscaling/THIRD_PARTY_NOTICES.txt", "frontend/lib/framegen/WEIGHTS_LICENSE.md"):
+        assert (REPO_ROOT / source).is_file(), source
+    assert "Non-commercial" in _read("frontend/lib/framegen/WEIGHTS_LICENSE.md")
     assert (REPO_ROOT / "docs/public/site/fonts/OFL.txt").is_file()
 
 
