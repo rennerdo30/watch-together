@@ -13,7 +13,7 @@ import {
     COOKIE_MEMORY_TTL_MINUTES, COPY_FEEDBACK_DURATION_MS, EXTENSION_SOURCE_URL, EXTENSION_STORE_URL,
     FONT_SIZE_MAX, FONT_SIZE_MIN,
 } from '@/lib/constants';
-import { SPONSORBLOCK_CATEGORIES, SPONSOR_CATEGORY_LABELS, type SponsorBlockSettings } from '@/lib/sponsorblock';
+import { SPONSORBLOCK_CATEGORIES, SPONSORBLOCK_LICENSE, SPONSORBLOCK_SITE, SPONSOR_CATEGORY_LABELS, type SponsorBlockSettings } from '@/lib/sponsorblock';
 import { CUSTOM_THEME_ID, THEMES, createCustomTheme, type Theme } from '@/lib/themes';
 import { cn, getErrorMessage } from '@/lib/utils';
 
@@ -159,7 +159,14 @@ function RoomSection({ roomId, roomName, onRename, isPermanent, onTogglePermanen
                 <SettingRow
                     testId="sponsorblock-settings"
                     title="Skip SponsorBlock segments"
-                    description="Segments the community marked in YouTube videos are skipped for everyone in the room."
+                    description={(
+                        <>
+                            Segments the community marked in YouTube videos are skipped for everyone in the room.{' '}
+                            {/* Required by the data's licence (CC BY-NC-SA 4.0), in SponsorBlock's own attribution wording. */}
+                            Uses <a href={SPONSORBLOCK_SITE} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-neutral-100">SponsorBlock</a> data,
+                            licensed under <a href={SPONSORBLOCK_LICENSE} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-neutral-100">CC BY-NC-SA 4.0</a>.
+                        </>
+                    )}
                     control={(
                         <Switch
                             checked={sponsorBlock.enabled}

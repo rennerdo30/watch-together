@@ -49,7 +49,7 @@ disk.
 | **Real adaptive playback** | YouTube serves audio and video as separate files with no manifest, so the server writes a real DASH manifest from their own index and Shaka plays both through **one** video element. HLS sources play through hls.js. |
 | **Fast starts and jumps** | The opening seconds, the next queue entry and the destination of every sponsor skip are fetched ahead, at exactly the byte spans the player will ask for. |
 | **A shared queue** | Drag to reorder, see who added what. A link is queued at once and resolved behind it. |
-| **SponsorBlock for the room** | Sponsor, self-promotion and reminder segments are skipped for everyone at the same moment by the server, shown on the seek bar and chosen per room. |
+| **SponsorBlock for the room** | Sponsor, self-promotion and reminder segments are skipped for everyone at the same moment by the server, shown on the seek bar and chosen per room. Uses [SponsorBlock](https://sponsor.ajay.app/) data, licensed under CC BY-NC-SA 4.0. |
 | **Live chat** | Twitch, YouTube, Kick and Owncast chat beside live streams, or any HTTPS chat embed. |
 | **Screen sharing** | Share a game with sound. The browser encodes it, the server relays it to every viewer (about half a second behind), and late joiners still get a picture. |
 | **Shared browser (opt-in)** | A real browser on the server that the room watches and the admin drives, as a [neko](https://github.com/m1k1o/neko) container. Needs a UDP range or a TURN relay; see the [production guide](deploy/README.md#the-shared-browser-neko--opt-in-and-why). |
@@ -184,4 +184,17 @@ Read the [extension privacy policy](PRIVACY.md) before connecting.
 - [Report an issue](https://github.com/rennerdo30/watch-together/issues)
 
 Built with Next.js 16, React 19, TailwindCSS 4, FastAPI, yt-dlp, Shaka Player
-and hls.js. License: [MIT](LICENSE).
+and hls.js.
+
+## License
+
+Watch Together's code is [MIT](LICENSE). Bundled components, the published
+container images and the data it uses carry their own terms, listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Two are **non-commercial**:
+the motion-smoothing model weights and SponsorBlock's data (CC BY-NC-SA 4.0).
+Running it for yourself and friends is fine; a paid service is not, without
+removing those parts or getting permission.
+
+YouTube, Twitch, Kick and the other names here are trademarks of their owners.
+Watch Together is an independent project, not affiliated with or endorsed by
+any of them.

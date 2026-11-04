@@ -30,6 +30,8 @@ You decide which sites sync, can sync by hand or turn automatic sync off, and ca
 
 Watch Together is open source and self-hostable: https://github.com/rennerdo30/watch-together
 Privacy policy: https://watch-together.renner.dev/privacy/
+
+YouTube, Twitch and Kick are trademarks of their owners. Watch Together is an independent project, not affiliated with or endorsed by them.
 ```
 
 ## Images

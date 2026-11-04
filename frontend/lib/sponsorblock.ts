@@ -46,6 +46,13 @@ export interface SkippedSegment {
     end: number;
 }
 
+/**
+ * Where the segment data comes from, and its licence. The licence
+ * (CC BY-NC-SA 4.0) requires attribution wherever the feature is offered.
+ */
+export const SPONSORBLOCK_SITE = 'https://sponsor.ajay.app/';
+export const SPONSORBLOCK_LICENSE = 'https://creativecommons.org/licenses/by-nc-sa/4.0/';
+
 export const SPONSOR_CATEGORY_LABELS: Record<SponsorCategory, string> = {
     sponsor: 'Sponsor',
     selfpromo: 'Unpaid / self promotion',
