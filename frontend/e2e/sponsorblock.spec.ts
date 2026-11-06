@@ -9,8 +9,8 @@ import { stubAdaptiveStream } from './adaptive-fixture';
  * Playwright config) for the segments of the video the room plays, marks
  * them on every viewer's seek bar, and moves the whole room past the ones
  * the admin has chosen to skip. The stub's video has a sponsor segment at
- * 1-3s, which the room skips by default, and an intro at 4-5.5s, which it
- * does not.
+ * 1-3s, which the room skips by default, an intro at 4-5.5s, which it
+ * does not, and a highlight at 5s, which viewers can jump to.
  */
 
 const ADMIN = 'sb-admin@example.com';
@@ -127,4 +127,24 @@ test('with skipping off the segment still shows but plays through', async ({ pag
     .poll(() => media.evaluate((v: HTMLVideoElement) => v.currentTime), { timeout: 15_000 })
     .toBeGreaterThan(2);
   await expect(page.getByText(/skipped sponsor/i)).toHaveCount(0);
+});
+
+test('the highlight is marked on the seek bar and one click jumps the room to it', async ({ page }) => {
+  await joinRoom(page, uniqueRoomId('sb-highlight'), ADMIN);
+  const media = await playVideo(page);
+  await expect(page.locator('[data-sponsor-highlight]')).toHaveCount(1, { timeout: 10_000 });
+  // A point, not a range: it is never drawn (or skipped) as a segment.
+  await expect(page.locator('[data-sponsor-segment="poi_highlight"]')).toHaveCount(0);
+
+  await expect.poll(() => media.evaluate((v: HTMLVideoElement) => v.readyState >= 2), { timeout: 20_000 }).toBe(true);
+  await media.evaluate((v: HTMLVideoElement) => v.pause());
+  await page.locator('video[data-stream-type="mse"]').hover();
+  const jump = page.getByRole('button', { name: /highlight/i });
+  await expect(jump).toBeVisible();
+  await jump.click();
+  await expect
+    .poll(() => media.evaluate((v: HTMLVideoElement) => v.currentTime), { timeout: 10_000 })
+    .toBeGreaterThanOrEqual(4.9);
+  // Reached: no longer offered.
+  await expect(jump).toHaveCount(0);
 });

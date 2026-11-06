@@ -3,7 +3,8 @@
  *
  * The backend looks segments up by the first characters of the video id's
  * SHA-256, so this answers every prefix with the same two videos: the one
- * the e2e suite plays (with a sponsor segment right after the start) and an
+ * the e2e suite plays (with a sponsor segment right after the start and a
+ * highlight near the end) and an
  * unrelated one that shares the prefix, as a real hash-prefix response would.
  */
 import { createServer } from 'node:http';
@@ -23,6 +24,7 @@ const RESPONSE = [
     segments: [
       { segment: [1, 3], category: 'sponsor', actionType: 'skip', UUID: 'e2e-sponsor', videoDuration: 6, locked: 0, votes: 5, description: '' },
       { segment: [4, 5.5], category: 'intro', actionType: 'skip', UUID: 'e2e-intro', videoDuration: 6, locked: 0, votes: 2, description: '' },
+      { segment: [5, 5], category: 'poi_highlight', actionType: 'poi', UUID: 'e2e-highlight', videoDuration: 6, locked: 0, votes: 3, description: '' },
     ],
   },
 ];

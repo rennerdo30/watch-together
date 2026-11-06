@@ -492,6 +492,10 @@ SPONSORBLOCK_CATEGORIES = (
 # What a new room skips: paid promotion and the like/subscribe reminders.
 # Intros, outros and filler are a matter of taste and stay opt-in.
 SPONSORBLOCK_DEFAULT_CATEGORIES = ("sponsor", "selfpromo", "interaction")
+# The one point a video's viewers marked as where the good part starts
+# ("Highlight" in SponsorBlock). It is a place to jump to on request, never
+# something the room skips, so it is not one of the categories above.
+SPONSORBLOCK_HIGHLIGHT_CATEGORY = "poi_highlight"
 SPONSORBLOCK_DEFAULT_ENABLED = True
 # A jump shorter than this is not worth interrupting playback for.
 SPONSORBLOCK_MIN_SEGMENT_SECONDS = 1.0

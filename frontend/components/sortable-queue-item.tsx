@@ -5,6 +5,8 @@ import { Trash2, ListVideo, Pin, Play, Loader2, ExternalLink } from 'lucide-reac
 
 import { displayHost, displayName } from '@/lib/utils';
 import { HOVER_PREWARM_DELAY_MS } from '@/lib/constants';
+import { entryLength } from '@/lib/queue-length';
+import { formatPlaybackTime as formatTime } from '@/lib/room-log';
 
 interface ResolveResponse {
     original_url: string;
@@ -23,13 +25,16 @@ interface ResolveResponse {
 const LIVE_BADGE_CLASSES =
     'absolute top-1 left-1 px-1.5 py-0.5 bg-[color:var(--accent-primary)] text-2xs font-semibold on-accent rounded';
 
-function formatTime(seconds: number): string {
-    if (!seconds || !isFinite(seconds)) return '0:00';
-    const hrs = Math.floor(seconds / 3600);
-    const mins = Math.floor((seconds % 3600) / 60);
-    const secs = Math.floor(seconds % 60);
-    if (hrs > 0) return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
+/** A row's length, in the corner of its thumbnail as video sites show it. */
+function LengthBadge({ seconds }: { seconds: number }) {
+    return (
+        <span
+            data-queue-length
+            className="absolute bottom-0.5 right-0.5 px-1 rounded bg-black/80 text-2xs leading-tight ui-numeric font-medium text-white"
+        >
+            {formatTime(seconds)}
+        </span>
+    );
 }
 
 interface SortableQueueItemProps {
@@ -97,7 +102,7 @@ export function SortableQueueItem({
 
     // Watch progress is only meaningful for a video with a known length; a
     // livestream has no position to return to.
-    const duration = !pending && !item.is_live && typeof item.duration === 'number' ? item.duration : 0;
+    const duration = entryLength(item) ?? 0;
     const watched = duration > 0
         ? Math.min(Math.max(0, progress ?? item.progress ?? 0), duration)
         : 0;
@@ -146,6 +151,7 @@ export function SortableQueueItem({
                         <ListVideo aria-hidden="true" className="w-4 h-4 text-neutral-500" />
                     </span>
                 )}
+                {duration > 0 && <LengthBadge seconds={duration} />}
                 {/* Play/Load overlay */}
                 <span className={`absolute inset-0 bg-black/50 transition-opacity flex items-center justify-center ${isLoading ? 'opacity-100' : 'opacity-0 group-hover/thumb:opacity-100'}`}>
                     {isLoading ? (
@@ -276,6 +282,7 @@ export function SortableQueueItem({
 
 // Separate component for DragOverlay (pure visual, no hooks)
 export function QueueItemOverlay({ item, isActive, fontSize }: Omit<SortableQueueItemProps, 'id' | 'index' | 'onRemove' | 'onPlay' | 'onPin'>) {
+    const length = entryLength(item);
     return (
         <div className={`
              flex items-center gap-1.5 p-1.5 rounded-xl border border-neutral-600 bg-neutral-900 shadow-2xl cursor-grabbing select-none
@@ -294,6 +301,7 @@ export function QueueItemOverlay({ item, isActive, fontSize }: Omit<SortableQueu
                         <ListVideo className="w-4 h-4 text-neutral-600" />
                     </div>
                 )}
+                {length !== null && <LengthBadge seconds={length} />}
                 {item.is_live && (
                     <div className={LIVE_BADGE_CLASSES}>
                         Live

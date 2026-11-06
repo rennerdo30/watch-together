@@ -21,6 +21,14 @@ export const SPONSORBLOCK_CATEGORIES = [
 
 export type SponsorCategory = (typeof SPONSORBLOCK_CATEGORIES)[number];
 
+/**
+ * The point viewers marked as where the video gets going ("Highlight" in
+ * SponsorBlock). The server sends it among the segments with `start === end`;
+ * it is offered as a jump, never skipped to.
+ */
+export const HIGHLIGHT_CATEGORY = 'poi_highlight';
+export const HIGHLIGHT_COLOR = '#ff1684';
+
 /** Matches the server's defaults; used until the room's `sync` arrives. */
 export const DEFAULT_SPONSORBLOCK_SETTINGS: SponsorBlockSettings = {
     enabled: true,
@@ -109,11 +117,27 @@ export function parseSponsorSegments(raw: unknown): SponsorSegment[] {
         if (!entry || typeof entry !== 'object') continue;
         const { start, end, category, uuid } = entry as Record<string, unknown>;
         if (typeof start !== 'number' || typeof end !== 'number' || typeof category !== 'string') continue;
-        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+        if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+        // Only the highlight is a point; anything else must have a length.
+        if (category === HIGHLIGHT_CATEGORY ? start < 0 : end <= start) continue;
         segments.push({ start, end, category, uuid: typeof uuid === 'string' ? uuid : undefined });
     }
     return segments;
 }
+
+/** Where the video's highlight is, if it has one. */
+export function sponsorHighlight(segments: readonly SponsorSegment[]): number | null {
+    const highlight = segments.find((segment) => segment.category === HIGHLIGHT_CATEGORY);
+    return highlight ? highlight.start : null;
+}
+
+/** Whether the jump to the highlight is still worth offering at `currentTime`. */
+export function highlightAhead(highlight: number | null, currentTime: number): highlight is number {
+    return highlight !== null && currentTime < highlight - HIGHLIGHT_PASSED_SECONDS;
+}
+
+/** Once playback is this close to the highlight, or past it, it has been reached. */
+const HIGHLIGHT_PASSED_SECONDS = 1;
 
 /** The notice shown when the server moves the room past a segment. */
 export function skippedSegmentMessage(skipped: SkippedSegment): string {

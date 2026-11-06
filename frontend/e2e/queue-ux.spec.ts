@@ -1,7 +1,8 @@
 import { test, expect, type Page } from '@playwright/test';
 
 import { looksLikeUrl } from '../lib/utils';
-import { stubAdaptiveStream } from './adaptive-fixture';
+import { entryLength, queueLength } from '../lib/queue-length';
+import { FIXTURE_DURATION_SECONDS, stubAdaptiveStream } from './adaptive-fixture';
 import { emulateQueueResolution } from './queue-emulation';
 
 /**
@@ -35,6 +36,19 @@ test('only a complete-looking link is worth resolving', () => {
   expect(looksLikeUrl('youtu.be/abc')).toBe(false);
   expect(looksLikeUrl('ftp://example.com/file')).toBe(false);
   expect(looksLikeUrl('https://youtu.be/a b')).toBe(false);
+});
+
+test('the queue length counts every entry with a known length, and says when it is a lower bound', () => {
+  expect(entryLength({ duration: 90 })).toBe(90);
+  expect(entryLength({ duration: 90, is_live: true })).toBeNull();
+  expect(entryLength({ duration: 90, pending: true })).toBeNull();
+  expect(entryLength({})).toBeNull();
+  expect(entryLength({ duration: 0 })).toBeNull();
+  expect(entryLength({ duration: Number.NaN })).toBeNull();
+
+  expect(queueLength([])).toEqual({ seconds: 0, unknown: 0 });
+  expect(queueLength([{ duration: 90 }, { duration: 3600 }])).toEqual({ seconds: 3690, unknown: 0 });
+  expect(queueLength([{ duration: 90 }, { is_live: true }, { pending: true }])).toEqual({ seconds: 90, unknown: 2 });
 });
 
 test('a pasted link is resolved before the click, and the click joins it', async ({ page }) => {
@@ -119,6 +133,12 @@ test('queueing shows the link at once, then the video it resolved to', async ({ 
   await expect(rows).toHaveCount(3); // header + two queue rows
   await expect(page.locator('header').getByText(/added by/i)).toContainText('queue-ux');
   await expect(page.getByTitle(`Added by ${USER}`)).toHaveCount(3);
+
+  // Each row shows its length, and the queue its total.
+  const length = `0:${String(FIXTURE_DURATION_SECONDS).padStart(2, '0')}`;
+  await expect(page.locator('[data-queue-length]')).toHaveText([length, length]);
+  await expect(page.getByTestId('queue-length')).toHaveText(
+    `2 videos0:${String(FIXTURE_DURATION_SECONDS * 2).padStart(2, '0')} total`);
 });
 
 test('a link the server cannot resolve is taken back, and the sender told why', async ({ page }) => {

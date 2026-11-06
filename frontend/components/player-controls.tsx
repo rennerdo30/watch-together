@@ -3,11 +3,19 @@
 import type { FramegenMode } from '@/lib/framegen/policy';
 
 import { useEffect, useRef, useState } from 'react';
-import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, Settings, Activity, PictureInPicture, Ear } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, Settings, Activity, PictureInPicture, Ear, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { UpscaleMode } from '@/lib/upscaling/policy';
 import type { QualityMode } from '@/lib/quality-mode';
-import { sponsorCategoryColor, sponsorCategoryLabel, type SponsorSegment } from '@/lib/sponsorblock';
+import {
+    HIGHLIGHT_CATEGORY,
+    HIGHLIGHT_COLOR,
+    highlightAhead,
+    sponsorCategoryColor,
+    sponsorCategoryLabel,
+    sponsorHighlight,
+    type SponsorSegment,
+} from '@/lib/sponsorblock';
 import { chapterAt, type VideoChapter } from '@/lib/chapters';
 import { storyboardFrame, type Storyboard } from '@/lib/storyboard';
 import { HOVER_PREWARM_DELAY_MS } from '@/lib/constants';
@@ -189,6 +197,7 @@ export function PlayerControls({
     const displayCurrentTime = seekableForDVR ? currentTime - seekableForDVR.start : currentTime;
     const progress = displayDuration > 0 ? (displayCurrentTime / displayDuration) * 100 : 0;
     const currentChapter = chapterAt(chapters, currentTime);
+    const highlight = sponsorHighlight(sponsorSegments);
 
     return (
         <>
@@ -262,6 +271,7 @@ export function PlayerControls({
                             />
                             {/* SponsorBlock segments, in the category colours viewers know from the extension */}
                             {displayDuration > 0 && sponsorSegments.map((segment) => {
+                                if (segment.category === HIGHLIGHT_CATEGORY) return null;
                                 const start = Math.max(0, Math.min(segment.start, displayDuration));
                                 const end = Math.max(start, Math.min(segment.end, displayDuration));
                                 if (end <= start) return null;
@@ -279,6 +289,18 @@ export function PlayerControls({
                                     />
                                 );
                             })}
+                            {/* The highlight: one marker where the good part starts */}
+                            {displayDuration > 0 && highlight !== null && highlight < displayDuration && (
+                                <div
+                                    data-sponsor-highlight
+                                    title="Highlight"
+                                    className="absolute top-0 h-full w-1 -translate-x-1/2 pointer-events-none"
+                                    style={{
+                                        left: `${(highlight / displayDuration) * 100}%`,
+                                        backgroundColor: HIGHLIGHT_COLOR,
+                                    }}
+                                />
+                            )}
                             {/* Chapter boundaries: a notch where each chapter after the first begins */}
                             {displayDuration > 0 && chapters.map((chapter) => {
                                 if (chapter.start <= 0 || chapter.start >= displayDuration) return null;
@@ -383,6 +405,20 @@ export function PlayerControls({
                                 </>
                             )}
                         </div>
+
+                        {/* Jump to the highlight, while it is still ahead */}
+                        {!isLive && highlightAhead(highlight, currentTime) && (
+                            <button
+                                type="button"
+                                onClick={() => onSeek(highlight)}
+                                title={`Jump to the highlight at ${formatTime(highlight)}`}
+                                className="ml-1 flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-white/10 px-3 text-xs font-medium text-white transition-colors hover:bg-white/20 [&_svg]:h-3.5 [&_svg]:w-3.5"
+                            >
+                                <Sparkles aria-hidden="true" style={{ color: HIGHLIGHT_COLOR }} />
+                                <span className="max-sm:hidden">Jump to highlight</span>
+                                <span className="sm:hidden">Highlight</span>
+                            </button>
+                        )}
 
                         {/* Live Latency */}
                         {liveLatency !== undefined && (

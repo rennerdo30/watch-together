@@ -29,6 +29,7 @@ from services.sponsorblock import (
 from core.config import (
     SPONSORBLOCK_CATEGORIES,
     SPONSORBLOCK_DEFAULT_CATEGORIES,
+    SPONSORBLOCK_HIGHLIGHT_CATEGORY,
     SPONSORBLOCK_MIN_SEGMENT_SECONDS,
 )
 
@@ -100,17 +101,37 @@ def test_parse_segments_keeps_only_skippable_segments_of_this_video():
                    (30.5, 60, "sponsor", "skip"),
                    (5, 8, "intro", "skip"),
                    (100, 120, "sponsor", "mute"),        # not a skip
-                   (200, 201, "poi_highlight", "poi"),   # not a skip
+                   (200, 201, "poi_highlight", "poi"),   # the highlight: kept as a point
+                   (250, 250, "sponsor", "poi"),         # a poi of a skip category: dropped
                    (300, 300.4, "filler", "skip"),       # shorter than the minimum
                    (400, 410, "made_up", "skip"),        # unknown category
                    (500, "x", "sponsor", "skip")),       # malformed bounds
     ]
     segments = parse_segments(body, VIDEO_ID)
     assert [(s.start, s.end, s.category) for s in segments] == [
-        (5.0, 8.0, "intro"), (30.5, 60.0, "sponsor")]
+        (5.0, 8.0, "intro"), (30.5, 60.0, "sponsor"), (200.0, 200.0, "poi_highlight")]
     assert parse_segments({"not": "a list"}, VIDEO_ID) == []
     assert parse_segments([], VIDEO_ID) == []
     assert SPONSORBLOCK_MIN_SEGMENT_SECONDS > 0.4
+
+
+def test_parse_segments_offers_one_highlight_the_locked_or_best_voted():
+    def poi(at, uuid, votes, locked=0):
+        return {"segment": [at, at], "category": SPONSORBLOCK_HIGHLIGHT_CATEGORY, "actionType": "poi",
+                "UUID": uuid, "videoDuration": 600, "locked": locked, "votes": votes, "description": ""}
+
+    voted = [{"videoID": VIDEO_ID, "segments": [poi(90, "low", 1), poi(120, "best", 9)]}]
+    assert [(s.start, s.uuid) for s in parse_segments(voted, VIDEO_ID)] == [(120.0, "best")]
+    locked = [{"videoID": VIDEO_ID, "segments": [poi(90, "locked", 0, locked=1), poi(120, "best", 9)]}]
+    assert [(s.start, s.uuid) for s in parse_segments(locked, VIDEO_ID)] == [(90.0, "locked")]
+
+
+def test_select_segments_never_picks_the_highlight():
+    known = [Segment(10, 20, "sponsor", "a"), Segment(15, 15, SPONSORBLOCK_HIGHLIGHT_CATEGORY, "h")]
+    # Not even a stale or hostile setting naming it gets it skipped.
+    settings = normalize_settings({"enabled": True, "categories": ["sponsor", SPONSORBLOCK_HIGHLIGHT_CATEGORY]})
+    assert settings["categories"] == ["sponsor"]
+    assert [s.category for s in select_segments(known, settings["categories"])] == ["sponsor"]
 
 
 def test_select_segments_filters_by_category_and_merges_neighbours():
@@ -164,8 +185,9 @@ async def test_client_asks_by_hash_prefix_for_every_category():
     expected_prefix = hashlib.sha256(VIDEO_ID.encode()).hexdigest()[:4]
     assert request.url.path == f"/api/skipSegments/{expected_prefix}"
     assert VIDEO_ID not in str(request.url)  # privacy: the id itself never leaves
-    assert json.loads(request.url.params["categories"]) == list(SPONSORBLOCK_CATEGORIES)
-    assert json.loads(request.url.params["actionTypes"]) == ["skip"]
+    assert json.loads(request.url.params["categories"]) == [
+        *SPONSORBLOCK_CATEGORIES, SPONSORBLOCK_HIGHLIGHT_CATEGORY]
+    assert json.loads(request.url.params["actionTypes"]) == ["skip", "poi"]
     assert "watch-together" in request.headers["user-agent"]
 
     # Second lookup is served from the cache.
@@ -307,6 +329,20 @@ async def test_skipper_skips_immediately_when_the_room_is_inside_a_segment():
     await skipper.wait_idle()
     assert clock.slept == []
     assert [m["payload"]["timestamp"] for m in manager.broadcasts if m["type"] == "seek"] == [20.0]
+
+
+async def test_the_highlight_is_announced_but_never_skipped_to():
+    clock = FakeClock()
+    manager = FakeManager(_playing_state(clock), clock)
+    skipper = _skipper(manager, clock, _segments_handler(
+        (30, 30, SPONSORBLOCK_HIGHLIGHT_CATEGORY, "poi")))
+    skipper.video_changed("room")
+    await skipper.wait_idle()
+    announced = [m for m in manager.broadcasts if m["type"] == "sponsorblock_segments"]
+    assert [(s["start"], s["end"], s["category"]) for s in announced[0]["payload"]["segments"]] == [
+        (30.0, 30.0, SPONSORBLOCK_HIGHLIGHT_CATEGORY)]
+    assert not [m for m in manager.broadcasts if m["type"] == "seek"]
+    assert clock.slept == []
 
 
 async def test_skipper_respects_the_room_setting():

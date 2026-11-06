@@ -78,10 +78,12 @@ import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, us
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { SortableQueueItem, QueueItemOverlay } from '@/components/sortable-queue-item';
 import {
+    formatPlaybackTime,
     mergeRoomActivity,
     normalizeRoomActivity,
     type RoomActivityEvent,
 } from '@/lib/room-log';
+import { queueLength } from '@/lib/queue-length';
 
 function getWsUrl(roomId: string) {
     if (typeof window === "undefined") return "";
@@ -2120,6 +2122,23 @@ export default function RoomPage() {
                                         ) : null}
                                     </DragOverlay>
                                     <div className="shrink-0 border-t border-white/10 p-2">
+                                        {queue.length > 0 && (() => {
+                                            const total = queueLength(queue);
+                                            return (
+                                                <p
+                                                    data-testid="queue-length"
+                                                    className="mb-2 flex items-center justify-between px-1 text-xs text-neutral-400"
+                                                    title={total.unknown > 0
+                                                        ? `${total.unknown} ${total.unknown === 1 ? 'entry has' : 'entries have'} no known length (live or still resolving)`
+                                                        : undefined}
+                                                >
+                                                    <span>{queue.length} {queue.length === 1 ? 'video' : 'videos'}</span>
+                                                    <span className="ui-numeric">
+                                                        {formatPlaybackTime(total.seconds)}{total.unknown > 0 ? '+' : ''} total
+                                                    </span>
+                                                </p>
+                                            );
+                                        })()}
                                         <button
                                             type="button"
                                             disabled={queue.length === 0}

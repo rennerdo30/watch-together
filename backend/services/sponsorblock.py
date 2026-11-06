@@ -30,6 +30,7 @@ from core.config import (
     SPONSORBLOCK_CATEGORIES,
     SPONSORBLOCK_DEFAULT_CATEGORIES,
     SPONSORBLOCK_DEFAULT_ENABLED,
+    SPONSORBLOCK_HIGHLIGHT_CATEGORY,
     SPONSORBLOCK_HASH_PREFIX_LENGTH,
     SPONSORBLOCK_MIN_SEGMENT_SECONDS,
     SPONSORBLOCK_SKIP_TOLERANCE_SECONDS,
@@ -41,9 +42,13 @@ from services.video_identity import youtube_video_id
 
 logger = logging.getLogger(__name__)
 
-# Only segments meant to be jumped over. Mute, chapter and highlight entries
-# describe the video rather than tell a player what to skip.
+# Segments meant to be jumped over. Mute and chapter entries describe the
+# video rather than tell a player what to skip, and are never fetched.
 SKIP_ACTION_TYPE = "skip"
+# A highlight is a single point ("poi"), offered to viewers as a jump target.
+# It travels with the segments as one of zero length; the room's category
+# selection never contains it, so it is never skipped.
+HIGHLIGHT_ACTION_TYPE = "poi"
 
 # The state keys a room carries for this feature. `sponsorblock` is the
 # admin's setting and is persisted; the other two describe the video that is
@@ -108,27 +113,41 @@ def hash_prefix(video_id: str) -> str:
 
 
 def parse_segments(body, video_id: str) -> List[Segment]:
-    """Skippable segments for `video_id` from a hash-prefix response."""
+    """Skippable segments, plus the highlight if any, for `video_id` from a hash-prefix response."""
     segments: List[Segment] = []
+    highlights: List[Tuple[Tuple[int, float], Segment]] = []
     if not isinstance(body, list):
         return segments
     for entry in body:
         if not isinstance(entry, dict) or entry.get("videoID") != video_id:
             continue
         for raw in entry.get("segments") or []:
-            if not isinstance(raw, dict) or raw.get("actionType") != SKIP_ACTION_TYPE:
+            if not isinstance(raw, dict):
                 continue
             category = raw.get("category")
-            if category not in SPONSORBLOCK_CATEGORIES:
-                continue
             bounds = raw.get("segment")
             try:
                 start, end = float(bounds[0]), float(bounds[1])
             except (TypeError, ValueError, IndexError):
                 continue
+            uuid = str(raw.get("UUID", ""))
+            if raw.get("actionType") == HIGHLIGHT_ACTION_TYPE and category == SPONSORBLOCK_HIGHLIGHT_CATEGORY:
+                if start < 0:
+                    continue
+                votes = raw.get("votes")
+                votes = votes if isinstance(votes, (int, float)) else 0
+                locked = 1 if raw.get("locked") else 0
+                highlights.append(((locked, votes), Segment(start, start, category, uuid)))
+                continue
+            if raw.get("actionType") != SKIP_ACTION_TYPE or category not in SPONSORBLOCK_CATEGORIES:
+                continue
             if end - start < SPONSORBLOCK_MIN_SEGMENT_SECONDS:
                 continue
-            segments.append(Segment(start, end, category, str(raw.get("UUID", ""))))
+            segments.append(Segment(start, end, category, uuid))
+    if highlights:
+        # A video has one highlight; when several were submitted, the one a
+        # moderator locked, else the best voted, is the one to offer.
+        segments.append(max(highlights, key=lambda h: h[0])[1])
     segments.sort(key=lambda s: (s.start, s.end))
     return segments
 
@@ -229,7 +248,7 @@ class SponsorBlockClient:
             self._client = None
 
     async def segments_for(self, video_id: str) -> List[Segment]:
-        """Every skippable segment of every category, cached per video.
+        """Every skippable segment of every category and the highlight, cached per video.
 
         All categories are fetched at once so that changing the room's
         selection is a filter over what is already known, not another
@@ -240,8 +259,8 @@ class SponsorBlockClient:
             return cached
         url = f"{self._api_url}/api/skipSegments/{hash_prefix(video_id)}"
         params = {
-            "categories": json.dumps(list(SPONSORBLOCK_CATEGORIES)),
-            "actionTypes": json.dumps([SKIP_ACTION_TYPE]),
+            "categories": json.dumps([*SPONSORBLOCK_CATEGORIES, SPONSORBLOCK_HIGHLIGHT_CATEGORY]),
+            "actionTypes": json.dumps([SKIP_ACTION_TYPE, HIGHLIGHT_ACTION_TYPE]),
         }
         try:
             response = await self._http().get(url, params=params)

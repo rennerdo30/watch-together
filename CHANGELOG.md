@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Jump to a video's highlight
+
+- The SponsorBlock lookup now also fetches the video's **Highlight** (the
+  point viewers marked as where it gets going). It is marked on the seek bar
+  in pink, and a "Jump to highlight" button in the control bar moves the
+  whole room there until playback reaches it. It is never skipped to
+  automatically and is not one of the room's skip categories.
+
+### Queue lengths
+
+- Every queue row shows the video's length on its thumbnail, and the queue
+  footer shows the number of videos and their total length. Livestreams and
+  links still resolving have no length; when the queue holds any, the total
+  is marked as a lower bound (`+`).
+
 ### A refresh no longer moves the room
 
 - Reloading the page started the video at the room's position, and the
