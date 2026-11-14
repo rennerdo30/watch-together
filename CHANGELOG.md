@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Videos start in a room left in a background tab
+
+- Chrome holds back every start, muted or not, in a hidden tab that has not
+  yet played any media, and releases it only when the tab is shown. The room's
+  startup check played exactly the silent clip that would have unlocked the
+  tab, then gave up on it after 3 seconds and unloaded it. A room restored in a
+  background tab, or clicked once and then left, sat on a held video until
+  someone looked at it. The clip is now kept waiting until the tab is first
+  shown, even for a moment, and played again on the first click; after that,
+  a video someone queues starts in the background.
+- Skipping the click for good is a browser setting only the viewer can change
+  (in Chrome: Site settings → Sound → Allow; measured: a setting made by an
+  extension does not count). The click prompt and the "Click to join playback"
+  overlay now say where it is for Chrome, Edge, Firefox and Safari.
+
 ### Jump to a video's highlight
 
 - The SponsorBlock lookup now also fetches the video's **Highlight** (the

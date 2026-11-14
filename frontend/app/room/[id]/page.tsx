@@ -19,6 +19,7 @@ import { prewarmPosition, prewarmVideo } from '@/lib/prewarm';
 import { StartupTimer, type PlaybackEngine } from '@/lib/playback-timing';
 import { resumePosition, type PlaybackStart } from '@/lib/playback';
 import { usePlaybackAttention } from '@/lib/hooks/usePlaybackAttention';
+import { permanentAutoplayHint } from '@/lib/playback-attention';
 import { isLiveCatchUpRate } from '@/lib/live-latency';
 import { autoQualityCap, openingPlan } from '@/lib/abr';
 import { readOpeningEstimate } from '@/lib/bandwidth-memory';
@@ -1337,11 +1338,16 @@ export default function RoomPage() {
 
             {/* The one click that lets this tab start videos with sound.
                 Asked for while nothing is at stake: the moment someone
-                queues a video, this viewer is usually somewhere else. */}
+                queues a video, this viewer is usually somewhere else.
+                The browser setting that makes it unnecessary is named too:
+                only the viewer can change it, not this page or the extension. */}
             {attention.needsGesture && (
                 <div role="status" className="shrink-0 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 px-3 py-2 text-sm border-b border-[color:var(--accent-primary)]/30 bg-[color:var(--accent-glow)] text-neutral-200">
                     <Volume2 aria-hidden="true" className="w-4 h-4 text-[color:var(--accent-primary)]" />
                     <span>Click anywhere in this tab so videos can start with sound when someone adds one.</span>
+                    <span data-autoplay-hint className="text-neutral-400">
+                        To never need the click here: {permanentAutoplayHint(navigator.userAgent)}.
+                    </span>
                     {attention.notifyState === 'off' && (
                         <button
                             type="button"

@@ -13,6 +13,7 @@ import {
     type ShakaLoadPlan, type ShakaPreloadTarget,
 } from './player/hooks';
 import { startPlayback, type PlaybackStart } from '@/lib/playback';
+import { permanentAutoplayHint } from '@/lib/playback-attention';
 import type { SponsorSegment } from '@/lib/sponsorblock';
 import type { Storyboard } from '@/lib/storyboard';
 import type { VideoChapter } from '@/lib/chapters';
@@ -1014,6 +1015,9 @@ export function CustomPlayer({
                     <span className="text-zinc-400 text-sm max-w-xs text-center">
                         Your browser blocks video from starting on its own. The
                         room is already playing.
+                    </span>
+                    <span data-autoplay-hint className="text-zinc-400 text-xs max-w-xs text-center">
+                        To never need this click here: {permanentAutoplayHint(navigator.userAgent)}.
                     </span>
                 </button>
             )}

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 
 import type { PlaybackStart } from '@/lib/playback';
 import {
-    NOTIFY_STORAGE_KEY, attentionNotice, attentionTitle, canAutoplayAudibly, hasBeenActivated,
+    NOTIFY_STORAGE_KEY, attentionNotice, attentionTitle, hasBeenActivated, primeAudiblePlayback,
 } from '@/lib/playback-attention';
 import { parseStoredBoolean, useLocalStorageState } from './useLocalStorageState';
 
@@ -43,7 +43,8 @@ const subscribeVisibility = (notify: () => void) => {
  *
  * - `needsGesture`: the browser would not let a video start here with sound;
  *   the page asks for the one click that changes that, once, while nothing
- *   is playing yet. Any click or key press in the page answers it.
+ *   is playing yet. Any click or key press in the page answers it. In a
+ *   hidden tab the question stays open until the viewer first looks.
  * - The tab title says what is playing, and says it loudest when the start
  *   needs the viewer: muted, or held back entirely.
  * - With the viewer's opt-in, a desktop notification when a video starts in a
@@ -68,16 +69,19 @@ export function usePlaybackAttention(video: AttentionVideo | null, gate: Playbac
         let disposed = false;
         const armed = () => {
             setNeedsGesture(false);
+            // Inside the gesture this start is allowed, and a tab that has
+            // played once is not held back when it next starts in the background.
+            void primeAudiblePlayback();
             window.removeEventListener('click', armed, true);
             window.removeEventListener('keydown', armed, true);
         };
         window.addEventListener('click', armed, true);
         window.addEventListener('keydown', armed, true);
-        if (!hasBeenActivated()) {
-            void canAutoplayAudibly().then((allowed) => {
-                if (!disposed && !allowed && !hasBeenActivated()) setNeedsGesture(true);
-            });
-        }
+        // Also when the page was clicked already: the clip that answers the
+        // question is the one that unlocks this tab for background starts.
+        void primeAudiblePlayback().then((allowed) => {
+            if (!disposed && !allowed && !hasBeenActivated()) setNeedsGesture(true);
+        });
         return () => {
             disposed = true;
             window.removeEventListener('click', armed, true);

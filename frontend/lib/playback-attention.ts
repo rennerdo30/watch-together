@@ -10,17 +10,15 @@
  * nobody is looking at, and nobody notices the room is playing.
  *
  * So the page asks for that one click up front, while nothing is at stake,
- * and when a start goes wrong anyway it says so where the viewer can see it:
- * the tab title and, if they opted in, a desktop notification.
+ * says where the browser setting is that makes the click unnecessary, and
+ * when a start goes wrong anyway it says so where the viewer can see it: the
+ * tab title and, if they opted in, a desktop notification.
  */
 
 import type { PlaybackStart } from './playback';
 
 /** The viewer's own opt-in to desktop notifications, per browser. */
 export const NOTIFY_STORAGE_KEY = 'w2g-notify-video-start';
-
-/** How long a probe may stay pending before it counts as refused. */
-const PROBE_TIMEOUT_MS = 3000;
 
 /**
  * The tab's title while the room has a video: whether it is playing for this
@@ -80,39 +78,60 @@ function silentWavUrl(): string {
 }
 
 /**
- * Whether this page may start a media element with sound right now, without
- * a gesture. Firefox answers directly; elsewhere an unmuted, silent element is
- * started and its promise is the answer. A probe the browser holds pending —
- * Chrome defers media in a tab that has never been shown — counts as refused.
+ * Play 0.1 s of silence, unmuted, and let the browser take its time deciding.
+ *
+ * Its answer is whether this page may start a video with sound without a
+ * click. Playing it also unlocks the tab: Chrome holds back every start, muted
+ * or not, in a hidden tab that has not yet played any media, and releases it
+ * only when the tab is shown. Once this clip has played, a video someone
+ * queues later starts while the tab sits in the background.
+ *
+ * So a hidden tab's clip is kept waiting, not given up on: the first time the
+ * viewer so much as glances at the tab, it plays and the tab stays unlocked.
+ * (A clip given up on after a timeout, and unloaded, is exactly the start that
+ * would have done it.) Muted silence does not count: Chrome refuses a muted
+ * audio element and pauses a muted hidden video before it ever plays.
+ *
+ * Resolves `true` once it played, `false` if the browser refused it.
  */
-export async function canAutoplayAudibly(): Promise<boolean> {
-    const query = (navigator as Navigator & {
-        getAutoplayPolicy?: (type: 'mediaelement') => 'allowed' | 'allowed-muted' | 'disallowed';
-    }).getAutoplayPolicy;
-    if (typeof query === 'function') {
-        try {
-            return query.call(navigator, 'mediaelement') === 'allowed';
-        } catch {
-            // Fall through to the probe.
-        }
-    }
+export function primeAudiblePlayback(): Promise<boolean> {
     const url = silentWavUrl();
     const audio = new Audio(url);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-        const played = audio.play().then(() => true, () => false);
-        const timedOut = new Promise<boolean>((resolve) => {
-            timer = setTimeout(() => resolve(false), PROBE_TIMEOUT_MS);
-        });
-        return await Promise.race([played, timedOut]);
-    } catch {
-        return false;
-    } finally {
-        clearTimeout(timer);
-        audio.pause();
+    const release = () => {
         audio.removeAttribute('src');
         URL.revokeObjectURL(url);
+    };
+    let started: Promise<void>;
+    try {
+        started = audio.play();
+    } catch {
+        release();
+        return Promise.resolve(false);
     }
+    return started.then(
+        () => {
+            audio.addEventListener('ended', release, { once: true });
+            return true;
+        },
+        () => {
+            release();
+            return false;
+        },
+    );
+}
+
+/** Where a viewer turns off the click for this site for good, in their browser. */
+export function permanentAutoplayHint(userAgent: string): string {
+    if (/Firefox\//.test(userAgent)) {
+        return 'click the icon left of the address, then set Autoplay to Allow Audio and Video';
+    }
+    if (/Edg\//.test(userAgent)) {
+        return 'click the icon left of the address, open Permissions for this site, and set Media autoplay to Allow';
+    }
+    if (/Safari\//.test(userAgent) && !/Chrome\/|Chromium\//.test(userAgent)) {
+        return 'open Safari › Settings for This Website and set Auto-Play to Allow All Auto-Play';
+    }
+    return 'click the icon left of the address, open Site settings, and set Sound to Allow';
 }
 
 /** The page has had a click or key press since it loaded, as far as the browser says. */

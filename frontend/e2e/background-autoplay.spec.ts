@@ -109,8 +109,8 @@ const REFUSE_ALL_UNTIL_ACTIVATED = TRACK_ACTIVATION + `
 `;
 
 /** A tab the test can send to the background, and a notification inbox. */
-const BACKGROUND_TAB = `
-  let hidden = false;
+const backgroundTab = (startHidden = false) => `
+  let hidden = ${startHidden};
   Object.defineProperty(Document.prototype, 'hidden', { configurable: true, get: () => hidden });
   Object.defineProperty(Document.prototype, 'visibilityState', {
     configurable: true, get: () => (hidden ? 'hidden' : 'visible'),
@@ -131,6 +131,38 @@ const BACKGROUND_TAB = `
     close() {}
   }
   window.Notification = FakeNotification;
+`;
+const BACKGROUND_TAB = backgroundTab();
+
+/**
+ * Chrome's other rule, as measured in Chrome itself: in a hidden tab that has
+ * not played any media yet, every start, muted or not, is held until the tab
+ * is shown. Showing it for a moment releases what is waiting; once anything
+ * has played, later starts in the background are not held. A held start whose
+ * element was unloaded meanwhile never happens.
+ */
+const HOLD_IN_HIDDEN_TAB_UNTIL_PLAYED = `
+  let playedOnce = false;
+  const shown = () => new Promise((resolve) => {
+    if (!document.hidden) return resolve();
+    const onChange = () => {
+      if (document.hidden) return;
+      document.removeEventListener('visibilitychange', onChange);
+      resolve();
+    };
+    document.addEventListener('visibilitychange', onChange);
+  });
+  const next = HTMLMediaElement.prototype.play;
+  HTMLMediaElement.prototype.play = function () {
+    const start = () => next.apply(this, arguments).then(() => { playedOnce = true; });
+    if (playedOnce || !document.hidden) return start();
+    return shown().then(() => {
+      if (!this.src && !this.srcObject) {
+        throw new DOMException('The element was unloaded while its start was held', 'AbortError');
+      }
+      return start();
+    });
+  };
 `;
 
 const setHidden = (page: Page, hidden: boolean) =>
@@ -167,15 +199,59 @@ test('a tab that has not been clicked yet asks for the click, and one anywhere a
 
   const prompt = page.getByText(/click anywhere in this tab so videos can start with sound/i);
   await expect(prompt).toBeVisible();
+  // And where the setting is that makes the click unnecessary for good.
+  await expect(page.locator('[data-autoplay-hint]')).toContainText('open Site settings, and set Sound to Allow');
   await clickElsewhere(page);
   await expect(prompt).toHaveCount(0);
 });
 
+test('a room restored in a background tab is unlocked by one glance, and a video queued later starts there with sound',
+  async ({ page, browser }) => {
+    // The viewer allowed sound for the site, so no click is needed; what
+    // remains is Chrome holding starts in a tab that has never played.
+    const roomId = uniqueRoomId('glance-unlock');
+    await page.addInitScript(backgroundTab(true));
+    await page.addInitScript(HOLD_IN_HIDDEN_TAB_UNTIL_PLAYED);
+    await openRoom(page, roomId, 'sitter@example.com');
+
+    // Long after any probe timeout, the viewer glances at the tab and leaves.
+    await page.waitForTimeout(4000);
+    await setHidden(page, false);
+    await setHidden(page, true);
+
+    const other = await queueFromAnotherMember(browser, roomId);
+    const media = page.locator('video');
+    await expect.poll(() => media.evaluate((v: HTMLVideoElement) => !v.paused && !v.muted), { timeout: 20_000 }).toBe(true);
+    expect(await page.evaluate(() => document.hidden)).toBe(true);
+    await expect(page).toHaveTitle(new RegExp(`^▶ ${TITLE}`));
+
+    await other.close();
+  });
+
+test('the one click also unlocks the tab, so a video queued after the viewer left starts in the background',
+  async ({ page, browser }) => {
+    const roomId = uniqueRoomId('click-unlock');
+    await page.addInitScript(BACKGROUND_TAB);
+    await page.addInitScript(REFUSE_AUDIBLE_UNTIL_ACTIVATED);
+    await page.addInitScript(HOLD_IN_HIDDEN_TAB_UNTIL_PLAYED);
+    await openRoom(page, roomId, 'sitter@example.com');
+
+    await expect(page.getByText(/click anywhere in this tab so videos can start with sound/i)).toBeVisible();
+    await clickElsewhere(page);
+    await setHidden(page, true);
+
+    const other = await queueFromAnotherMember(browser, roomId);
+    const media = page.locator('video');
+    await expect.poll(() => media.evaluate((v: HTMLVideoElement) => !v.paused && !v.muted), { timeout: 20_000 }).toBe(true);
+    expect(await page.evaluate(() => document.hidden)).toBe(true);
+
+    await other.close();
+  });
+
 test('a browser that already allows sound is not asked for anything', async ({ page }) => {
-  // Model the allowed policy explicitly; headless tabs may defer a real audio
-  // probe when other pages in the full suite have focus.
+  // Model the allowed policy explicitly: every start succeeds.
   await page.addInitScript(() => {
-    Object.defineProperty(navigator, 'getAutoplayPolicy', { value: () => 'allowed' });
+    HTMLMediaElement.prototype.play = () => Promise.resolve();
   });
   await openRoom(page, uniqueRoomId('arm-allowed'), 'sitter@example.com');
   await page.waitForTimeout(1500);
@@ -226,6 +302,7 @@ test('a video held back entirely says so in the tab title, and a click anywhere 
     const other = await queueFromAnotherMember(browser, roomId);
 
     await expect(page.getByRole('button', { name: /click to join playback/i })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole('button', { name: /click to join playback/i })).toContainText('set Sound to Allow');
     await expect(page).toHaveTitle(new RegExp(`^⏸ Click to join · ${TITLE}`));
 
     await clickElsewhere(page);
