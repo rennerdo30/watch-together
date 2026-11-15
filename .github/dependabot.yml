@@ -1,70 +1,57 @@
-# Standardized Dependabot configuration.
+# Dependabot configuration.
 #
-# Minor and patch updates for each ecosystem are grouped into a single weekly
-# pull request. This keeps the review queue small and — importantly — makes it
-# impossible to split version-locked pairs (react/react-dom, @mui/material and
-# @mui/icons-material, next and eslint-config-next) across separate PRs, which
-# has broken main before.
-#
-# Major updates are intentionally NOT grouped: they arrive as individual pull
-# requests so each one gets evaluated on its own.
+# Every version update across all ecosystems lands in ONE pull request per
+# week (a multi-ecosystem group), so the review queue never holds more than
+# one dependency PR. A short cooldown skips releases that are only hours old.
+# Security updates are not delayed and arrive as soon as an advisory matches.
 version: 2
 
+multi-ecosystem-groups:
+  weekly-dependencies:
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "deps"
+
 updates:
+  - package-ecosystem: "npm"
+    directories:
+      - "/docs"
+      - "/frontend"
+    patterns: ["*"]
+    multi-ecosystem-group: "weekly-dependencies"
+    cooldown:
+      default-days: 3
+
   - package-ecosystem: "pip"
     directory: "/backend"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 5
-    commit-message:
-      prefix: "deps(pip):"
-      prefix-development: "deps(pip-dev):"
-    groups:
-      pip-minor-patch:
-        applies-to: version-updates
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
+    patterns: ["*"]
+    multi-ecosystem-group: "weekly-dependencies"
+    cooldown:
+      default-days: 3
 
-  - package-ecosystem: "npm"
-    directory: "/frontend"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 5
-    commit-message:
-      prefix: "deps(npm):"
-      prefix-development: "deps(npm-dev):"
-    groups:
-      npm-minor-patch:
-        applies-to: version-updates
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
+  - package-ecosystem: "docker"
+    directories:
+      - "/backend"
+      - "/frontend"
+    patterns: ["*"]
+    multi-ecosystem-group: "weekly-dependencies"
+    cooldown:
+      default-days: 3
 
-  - package-ecosystem: "npm"
-    directory: "/docs"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 5
-    commit-message:
-      prefix: "deps(docs):"
-    groups:
-      docs-minor-patch:
-        applies-to: version-updates
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
+  - package-ecosystem: "docker-compose"
+    directories:
+      - "/"
+      - "/deploy"
+    patterns: ["*"]
+    multi-ecosystem-group: "weekly-dependencies"
+    cooldown:
+      default-days: 3
 
   - package-ecosystem: "github-actions"
     directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 3
-    commit-message:
-      prefix: "deps(actions):"
-    groups:
-      actions-minor-patch:
-        applies-to: version-updates
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
+    patterns: ["*"]
+    multi-ecosystem-group: "weekly-dependencies"
+    cooldown:
+      default-days: 3
