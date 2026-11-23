@@ -600,60 +600,65 @@ async def cache_cleanup_task():
             total_size = 0
             files = []
 
-            # 1. Scan files and remove expired
+            # 1. Scan files and remove expired. Concurrent eviction by
+            # make_room() can delete any entry between listdir() and stat()/
+            # remove(), so a vanished file is normal and must not abort the
+            # rest of the pass.
             if os.path.exists(CACHE_DIR):
                 for f in os.listdir(CACHE_DIR):
                     path = os.path.join(CACHE_DIR, f)
+                    try:
+                        if f.endswith(".tmp"):  # Clean up stale temp files
+                            if current_time - os.path.getmtime(path) > STALE_TEMP_FILE_SECONDS:
+                                os.remove(path)
+                                logger.info(f"Removed abandoned partial download: {f}")
+                            continue
 
-                    if f.endswith(".tmp"):  # Clean up stale temp files
-                        if current_time - os.path.getmtime(path) > STALE_TEMP_FILE_SECONDS:
+                        # Sidecars are handled with the body they describe, never
+                        # on their own: expiring or evicting one half leaves an
+                        # entry that can never be served but still takes space.
+                        if f.endswith(".meta"):
+                            if not os.path.exists(path[:-len(".meta")]):
+                                os.remove(path)
+                                logger.info(f"Removed orphaned cache metadata: {f}")
+                            continue
+
+                        if not os.path.isfile(path):
+                            continue
+
+                        stat = os.stat(path)
+
+                        # A body whose metadata is gone cannot describe its own
+                        # range, so the read path will not use it.
+                        if not os.path.exists(path + ".meta"):
                             os.remove(path)
-                            logger.info(f"Removed abandoned partial download: {f}")
-                        continue
+                            logger.info(f"Removed cache body with no metadata: {f}")
+                            continue
 
-                    # Sidecars are handled with the body they describe, never
-                    # on their own: expiring or evicting one half leaves an
-                    # entry that can never be served but still takes space.
-                    if f.endswith(".meta"):
-                        if not os.path.exists(path[:-len(".meta")]):
+                        # Extract URL hash from filename for adaptive TTL.
+                        # Filename format: seg_<hash>_<range>[_u<identity>]
+                        url_hash = None
+                        if f.startswith('seg_'):
+                            parts = f.split('_')
+                            if len(parts) >= 2:
+                                url_hash = parts[1]
+
+                        # Adaptive TTL: double TTL for actively watched content
+                        effective_ttl = CACHE_TTL_SECONDS
+                        if url_hash and is_content_active(url_hash):
+                            effective_ttl = CACHE_TTL_SECONDS * 2
+
+                        # Remove if older than effective TTL
+                        if current_time - stat.st_mtime > effective_ttl:
                             os.remove(path)
-                            logger.info(f"Removed orphaned cache metadata: {f}")
+                            logger.info(f"Removed expired cache file: {f}")
+                            if os.path.exists(path + ".meta"):
+                                os.remove(path + ".meta")
+                        else:
+                            files.append((stat.st_mtime, stat.st_size, path))
+                            total_size += stat.st_size
+                    except FileNotFoundError:
                         continue
-
-                    if not os.path.isfile(path):
-                        continue
-
-                    stat = os.stat(path)
-
-                    # A body whose metadata is gone cannot describe its own
-                    # range, so the read path will not use it.
-                    if not os.path.exists(path + ".meta"):
-                        os.remove(path)
-                        logger.info(f"Removed cache body with no metadata: {f}")
-                        continue
-
-                    # Extract URL hash from filename for adaptive TTL.
-                    # Filename format: seg_<hash>_<range>[_u<identity>]
-                    url_hash = None
-                    if f.startswith('seg_'):
-                        parts = f.split('_')
-                        if len(parts) >= 2:
-                            url_hash = parts[1]
-
-                    # Adaptive TTL: double TTL for actively watched content
-                    effective_ttl = CACHE_TTL_SECONDS
-                    if url_hash and is_content_active(url_hash):
-                        effective_ttl = CACHE_TTL_SECONDS * 2
-
-                    # Remove if older than effective TTL
-                    if current_time - stat.st_mtime > effective_ttl:
-                        os.remove(path)
-                        logger.info(f"Removed expired cache file: {f}")
-                        if os.path.exists(path + ".meta"):
-                            os.remove(path + ".meta")
-                    else:
-                        files.append((stat.st_mtime, stat.st_size, path))
-                        total_size += stat.st_size
 
             # 2. Enforce size limit (LRU-ish: delete oldest mtime)
             if total_size > MAX_CACHE_SIZE_BYTES:
@@ -688,6 +693,10 @@ async def cache_cleanup_task():
             cleaned = await cleanup_expired_format_cache()
             if cleaned:
                 logger.info(f"Cleaned {cleaned} expired format cache entries from DB")
+
+            # Bound yt-dlp's preprocessed player cache on disk
+            from services.resolver import prune_ytdlp_cache
+            prune_ytdlp_cache()
 
             # Clean stale active content tracking entries
             await cleanup_active_content()

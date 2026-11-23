@@ -728,6 +728,35 @@ class TestStaleCacheEntriesAreRemoved:
         assert cache_module.get_current_cache_size() == \
             cache_module.measure_cache_size()
 
+    async def test_vanished_file_during_cleanup_does_not_abort_sweep(
+            self, cache_dir, monkeypatch, caplog):
+        """Concurrent eviction by make_room() removes files mid-scan."""
+        import logging
+        import services.cache as cache_module
+
+        monkeypatch.setattr(cache_module, "is_content_active", lambda h: False)
+        self.write_entry(cache_dir, "seg_gone_0-99", size=100)
+        kept = self.write_entry(cache_dir, "seg_kept_0-99", size=50)
+
+        real_listdir = cache_module.os.listdir
+
+        def listdir_with_vanished(path):
+            names = real_listdir(path)
+            # Simulate make_room() evicting seg_gone_0-99 right after listdir().
+            for suffix in ("", ".meta"):
+                p = cache_dir / f"seg_gone_0-99{suffix}"
+                if p.exists():
+                    p.unlink()
+            return names
+
+        monkeypatch.setattr(cache_module.os, "listdir", listdir_with_vanished)
+        with caplog.at_level(logging.ERROR, logger="services.cache"):
+            await self.run_one_pass(monkeypatch, cache_module)
+
+        assert not caplog.records
+        assert kept.exists()
+        assert cache_module.get_current_cache_size() == 50
+
     async def run_one_pass(self, monkeypatch, cache_module):
         """Run the janitor's body once, without waiting out its interval."""
         import asyncio

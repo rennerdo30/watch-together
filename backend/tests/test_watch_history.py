@@ -100,10 +100,13 @@ def test_capture_hook_reads_the_same_fields_yt_dlp_does():
 
 
 async def test_capture_keeps_urls_when_format_selection_fails_afterwards(monkeypatch):
-    """The URLs are captured before format selection, which may still fail."""
+    """The URLs are captured before format selection, and skip JS solving."""
+    seen = []
+
     class FakeYoutubeDL:
         def __init__(self, opts):
             self.opts = opts
+            seen.append(opts)
 
         def __enter__(self):
             return self
@@ -111,16 +114,20 @@ async def test_capture_keeps_urls_when_format_selection_fails_afterwards(monkeyp
         def __exit__(self, *exc):
             return False
 
-        def extract_info(self, url, download=False):
+        def extract_info(self, url, download=False, process=True):
+            assert process is False
             assert self.opts["mark_watched"] is True and "cookiefile" in self.opts
+            assert self.opts["extractor_args"]["youtube"]["player_skip"] == ["js"]
+            assert "cachedir" in self.opts and "cache_dir" not in self.opts
             self.opts[CAPTURE_PARAM].update({PLAYBACK_URL_KEY: PLAYBACK, WATCHTIME_URL_KEY: WATCHTIME})
             raise RuntimeError("Requested format is not available")
 
     monkeypatch.setattr(watch_history.yt_dlp, "YoutubeDL", FakeYoutubeDL)
     assert await watch_history.capture_tracking_urls(VIDEO_URL, "/tmp/cookies.txt") == URLS
+    assert seen
 
     class EmptyYoutubeDL(FakeYoutubeDL):
-        def extract_info(self, url, download=False):
+        def extract_info(self, url, download=False, process=True):
             return {}
 
     monkeypatch.setattr(watch_history.yt_dlp, "YoutubeDL", EmptyYoutubeDL)
@@ -378,6 +385,77 @@ async def test_the_room_moving_on_during_extraction_starts_nothing(opted_in):
     gate.set()
     await asyncio.sleep(0.01)
     assert pings.sent == []
+
+
+async def test_remembered_tracking_urls_skip_duplicate_extraction(opted_in):
+    """Tracking URLs captured during /api/resolve avoid a second yt-dlp run."""
+    clock = FakeClock()
+    pings = Pings()
+    manager = FakeManager(_state(clock), clock, [MEMBER])
+    reporter = _reporter(manager, clock, pings)
+    reporter._sleep = lambda _s: asyncio.Event().wait()
+
+    assert reporter.remember_captured(
+        MEMBER, VIDEO_URL, {PLAYBACK_URL_KEY: PLAYBACK, WATCHTIME_URL_KEY: WATCHTIME}
+    )
+    reporter.video_changed("room")
+    while not reporter.active_for("room", MEMBER):
+        await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert reporter.captured == [], "reused resolve capture instead of running yt-dlp again"
+    assert pings.sent[0][0] == "playback"
+    reporter._end(("room", MEMBER))
+
+
+async def test_reconnect_reuses_cached_tracking_urls_without_reextracting(opted_in):
+    """Background-tab WebSocket reconnects must not spawn yt-dlp every 15 minutes."""
+    clock = FakeClock()
+    pings = Pings()
+    manager = FakeManager(_state(clock), clock, [MEMBER])
+    reporter = _reporter(manager, clock, pings)
+    reporter._sleep = lambda _s: asyncio.Event().wait()
+
+    reporter.video_changed("room")
+    while not reporter.active_for("room", MEMBER):
+        await asyncio.sleep(0)
+    assert len(reporter.captured) == 1
+
+    # Member's socket drops and reconnects to the same video.
+    manager.active_connections["room"] = []
+    reporter.member_left("room", MEMBER)
+    await asyncio.sleep(0)
+    manager.active_connections["room"] = [FakeSocket(MEMBER)]
+    reporter.member_joined("room", MEMBER)
+    while not reporter.active_for("room", MEMBER):
+        await asyncio.sleep(0)
+
+    assert len(reporter.captured) == 1
+    reporter._end(("room", MEMBER))
+
+
+async def test_refusal_evicts_cached_tracking_urls(opted_in):
+    """A 403 from YouTube drops the cached URLs so the next session re-extracts."""
+    clock = FakeClock()
+    pings = Pings(status=403)
+    manager = FakeManager(_state(clock), clock, [MEMBER])
+    reporter = _reporter(manager, clock, pings)
+    reporter.remember_captured(
+        MEMBER, VIDEO_URL, {PLAYBACK_URL_KEY: PLAYBACK, WATCHTIME_URL_KEY: WATCHTIME}
+    )
+
+    reporter.video_changed("room")
+    await reporter.wait_idle()
+    assert reporter.captured == []
+
+    # Cache was evicted on 403, so a subsequent start calls capture().
+    pings.status = 204
+    reporter._sleep = lambda _s: asyncio.Event().wait()
+    reporter.video_changed("room")
+    while not reporter.active_for("room", MEMBER):
+        await asyncio.sleep(0)
+    assert len(reporter.captured) == 1
+    reporter._end(("room", MEMBER))
 
 
 # ---------------------------------------------------------------------------

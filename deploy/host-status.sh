@@ -482,10 +482,10 @@ def resolve():
             print("no cookie file for %s" % as_user)
 
     attempts = [
-        ("app options", {**base, "cache_dir": YTDLP_CACHE_DIR}),
-        ("without cache_dir", dict(base)),
+        ("app options", {**base, "cachedir": YTDLP_CACHE_DIR}),
+        ("without cachedir", {**base, "cachedir": False}),
         ("remote challenge components",
-         {**base, "cache_dir": YTDLP_CACHE_DIR, "remote_components": "ejs:github"}),
+         {**base, "cachedir": YTDLP_CACHE_DIR, "remote_components": ["ejs:github"]}),
     ]
     chosen = None
     for label, opts in attempts:

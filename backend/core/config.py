@@ -5,9 +5,13 @@ import os
 
 # Cache configuration
 CACHE_DIR = "data/cache"
-# yt-dlp's own cache (player JS, signature timestamps). Kept on the data
-# volume so a container rebuild does not force it to re-fetch everything.
+# yt-dlp's own cache (preprocessed player JS, signature functions). Kept on
+# the data volume so a container rebuild does not force it to re-fetch and
+# re-parse YouTube's player script on every resolve. Bounded by size and age
+# in cache_cleanup_task() because preprocessed players are ~4.5 MB each.
 YTDLP_CACHE_DIR = "data/yt_dlp_cache"
+YTDLP_CACHE_MAX_BYTES = 64 * 1024 * 1024  # 64 MB (~14 preprocessed players)
+YTDLP_CACHE_TTL_SECONDS = 7 * 24 * 3600  # 7 days
 # Segment cache budget. Once it is reached, nothing new is cached at all
 # until the janitor evicts — so a budget smaller than a viewing session
 # silently turns caching off partway through. An hour of 1080p is a couple
@@ -520,6 +524,11 @@ YOUTUBE_HISTORY_MIN_RANGE_SECONDS = 1.0
 # A position that differs from the expected one by more than this was a seek.
 YOUTUBE_HISTORY_SEEK_THRESHOLD_SECONDS = 2.0
 YOUTUBE_HISTORY_CPN_LENGTH = 16  # Client playback nonce, as the web player generates it
+# Tracking URLs captured during a resolve or an earlier session are valid for
+# hours (same window as signed stream URLs). Reusing them avoids spawning a
+# second yt-dlp extraction on video start or every background-tab reconnect.
+YOUTUBE_HISTORY_TRACKING_CACHE_TTL_SECONDS = FORMAT_CACHE_TTL_SECONDS
+YOUTUBE_HISTORY_TRACKING_CACHE_MAX_ENTRIES = 200
 
 # Per-user preferences and their defaults. Anything not listed here is dropped.
 USER_SETTINGS_DEFAULTS = {

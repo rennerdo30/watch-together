@@ -80,7 +80,7 @@ async def discover(url: str, requester: str, user_agent: Optional[str] = None) -
         "extract_flat": "in_playlist",
         "playlist_items": f"1:{MAX_PLAYLIST_VIDEOS + 1}",
         "ignoreerrors": True,
-        "cache_dir": YTDLP_CACHE_DIR,
+        "cachedir": YTDLP_CACHE_DIR,
     })
     os.makedirs(YTDLP_CACHE_DIR, exist_ok=True)
     owner = requester if is_signed_in(requester, canonical) else None

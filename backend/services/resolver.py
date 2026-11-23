@@ -2,17 +2,86 @@
 Video URL resolution service using yt-dlp.
 """
 import logging
+import os
 import re
+import time
 from typing import Optional
 from urllib.parse import urlparse, parse_qs
 
 from core.config import (
     DEFAULT_USER_AGENT, POT_PROVIDER_EXTRACTOR_ARGS,
     QUALITY_LADDER_SIZE, STORYBOARD_PREFERRED_FRAME_WIDTH, YTDLP_CACHE_DIR,
+    YTDLP_CACHE_MAX_BYTES, YTDLP_CACHE_TTL_SECONDS,
     MANIFEST_MAX_AUDIO_REPRESENTATIONS,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def enable_ejs_player_cache() -> bool:
+    """Allow yt-dlp's EJS solver to reuse preprocessed YouTube player scripts.
+
+    yt-dlp ships with `_ENABLE_PREPROCESSED_PLAYER_CACHE = False` solely
+    because it does not rotate its own cache directory (`prune_ytdlp_cache`
+    bounds it here). Without it, Deno re-downloads and AST-parses the ~2.5 MB
+    player JS from scratch on every single resolve (~3.2 s vs ~1.1 s warm).
+    """
+    try:
+        from yt_dlp.extractor.youtube.jsc._builtin.ejs import EJSBaseJCP
+    except ImportError:
+        return False
+    EJSBaseJCP._ENABLE_PREPROCESSED_PLAYER_CACHE = True
+    return True
+
+
+def prune_ytdlp_cache(
+    cache_dir: str = YTDLP_CACHE_DIR,
+    max_bytes: int = YTDLP_CACHE_MAX_BYTES,
+    max_age_seconds: float = YTDLP_CACHE_TTL_SECONDS,
+) -> int:
+    """Drop stale yt-dlp cache files and evict oldest entries over `max_bytes`."""
+    if not os.path.isdir(cache_dir):
+        return 0
+    now = time.time()
+    removed = 0
+    kept = []
+    total_bytes = 0
+    for root, _dirs, filenames in os.walk(cache_dir):
+        for name in filenames:
+            path = os.path.join(root, name)
+            try:
+                stat = os.stat(path)
+            except OSError:
+                continue
+            if now - stat.st_mtime > max_age_seconds:
+                try:
+                    os.remove(path)
+                    removed += 1
+                except OSError:
+                    pass
+            else:
+                kept.append((stat.st_mtime, stat.st_size, path))
+                total_bytes += stat.st_size
+
+    if total_bytes > max_bytes:
+        kept.sort(key=lambda entry: entry[0])
+        for _mtime, size, path in kept:
+            if total_bytes <= max_bytes:
+                break
+            try:
+                os.remove(path)
+                total_bytes -= size
+                removed += 1
+            except OSError:
+                continue
+
+    if removed:
+        logger.info("Pruned %d yt-dlp cache file(s) (%.1f MB remaining)",
+                    removed, total_bytes / (1024 * 1024))
+    return removed
+
+
+enable_ejs_player_cache()
 
 #: yt-dlp's `live_status` for a stream that is broadcasting right now. The
 #: other values ('not_live', 'is_upcoming', 'was_live', 'post_live') all
@@ -50,6 +119,7 @@ def build_ydl_opts(cookie_path: Optional[str], user_agent: Optional[str] = None,
     the same browser identity and both reach the PO token provider: without
     it the extractor gets storyboards only.
     """
+    enable_ejs_player_cache()
     opts = {
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         'quiet': True,
@@ -58,7 +128,7 @@ def build_ydl_opts(cookie_path: Optional[str], user_agent: Optional[str] = None,
         'logger': logger,
         'skip_download': True,
         'noplaylist': True,
-        'cache_dir': cache_dir,
+        'cachedir': cache_dir,
         'http_headers': {
             'User-Agent': user_agent or DEFAULT_USER_AGENT,
             'Accept-Language': 'en-US,en;q=0.9',

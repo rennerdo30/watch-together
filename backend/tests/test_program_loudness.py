@@ -212,3 +212,40 @@ def test_a_long_measurement_answers_pending_and_finishes_for_the_next_request(mo
         assert client.get("/api/loudness", params=params).json() == {"integrated_lufs": None, "pending": True}
         release.append(True)
         assert client.get("/api/loudness", params=params).json() == {"integrated_lufs": -16.0, "pending": False}
+
+
+async def test_ffmpeg_runs_single_threaded_and_niced(monkeypatch):
+    """Background loudness decoding must not starve yt-dlp/Deno on a 2-vCPU container."""
+    captured = {}
+
+    class FakeStdin:
+        def write(self, data): pass
+        async def drain(self): pass
+        def close(self): pass
+
+    class FakeStderr:
+        async def read(self):
+            return b"Integrated loudness:\n    I:   -18.5 LUFS\n"
+
+    class FakeProcess:
+        returncode = 0
+        stdin = FakeStdin()
+        stderr = FakeStderr()
+        async def wait(self): return 0
+
+    async def fake_exec(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return FakeProcess()
+
+    async def fake_read_stream(client, url, owner, write):
+        await write(b"audio")
+        return 5
+
+    monkeypatch.setattr(program_loudness.asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(program_loudness, "read_stream", fake_read_stream)
+    assert await program_loudness.measure(object(), AUDIO_URL, None) == -18.5
+    args = captured["args"]
+    idx = args.index("-threads")
+    assert args[idx + 1] == "1"
+    assert captured["kwargs"].get("preexec_fn") is program_loudness._lower_cpu_priority

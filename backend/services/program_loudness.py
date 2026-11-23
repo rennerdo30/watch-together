@@ -24,6 +24,7 @@ retried by the next request, not cached as "unmeasurable".
 
 import asyncio
 import logging
+import os
 import re
 from collections import OrderedDict
 from typing import Awaitable, Callable, Dict, Optional
@@ -138,12 +139,22 @@ async def _measure_and_remember(client: httpx.AsyncClient, url: str,
     return lufs
 
 
+def _lower_cpu_priority() -> None:
+    """Keep background ffmpeg decoding from starving yt-dlp/Deno or proxying."""
+    try:
+        os.nice(10)
+    except OSError:
+        pass
+
+
 async def measure(client: httpx.AsyncClient, url: str, owner: Optional[str]) -> Optional[float]:
     """Read the whole stream through ffmpeg's EBU R128 meter."""
+    extra = {"preexec_fn": _lower_cpu_priority} if hasattr(os, "nice") else {}
     process = await asyncio.create_subprocess_exec(
-        LOUDNESS_FFMPEG_BINARY, "-hide_banner", "-nostats",
+        LOUDNESS_FFMPEG_BINARY, "-hide_banner", "-nostats", "-threads", "1",
         "-i", "pipe:0", "-map", "0:a:0", "-af", "ebur128=framelog=quiet", "-f", "null", "-",
-        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+        **extra)
     log_task = asyncio.create_task(process.stderr.read())
 
     async def write(chunk: bytes) -> None:

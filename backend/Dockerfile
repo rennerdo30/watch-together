@@ -52,12 +52,13 @@ COPY . .
 COPY start.sh .
 RUN chmod +x start.sh
 
-# Create the data directory inside the image, owned by the app user.
-# `data/` is in .dockerignore, so without this the directory does not exist
-# at build time — and a named volume mounted onto a path the image lacks is
-# created root-owned, which the non-root process below cannot write to.
-# Startup then dies creating its cache/cookie directories.
-RUN mkdir -p /app/data
+# Create the data directory (and a writable XDG cache dir under it so neither
+# yt-dlp nor Deno ever falls back to appuser's /nonexistent home directory).
+# `data/` is in .dockerignore, so without an explicit mkdir the directory does
+# not exist at build time — and a named volume mounted onto a path the image
+# lacks is created root-owned, which the non-root process below cannot write to.
+ENV XDG_CACHE_HOME="/app/data/.cache"
+RUN mkdir -p /app/data /app/data/.cache
 
 # Fix ownership. The virtualenv is included so the boot-time yt-dlp upgrade
 # can write to it as the non-root user.

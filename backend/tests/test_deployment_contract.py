@@ -30,6 +30,12 @@ class TestBackendImage:
         chown_at = dockerfile.index("chown -R appuser:appgroup")
         assert mkdir_at < chown_at, "the data directory must be created before ownership is set"
 
+    def test_xdg_cache_home_lives_in_writable_data_dir(self):
+        """appuser has HOME=/nonexistent, so XDG_CACHE_HOME must point under /app/data."""
+        dockerfile = (BACKEND / "Dockerfile").read_text()
+        assert 'ENV XDG_CACHE_HOME="/app/data/.cache"' in dockerfile
+        assert "/app/data/.cache" in dockerfile.split("chown -R appuser:appgroup")[0]
+
     def test_packages_live_somewhere_the_app_user_can_write(self):
         """yt-dlp is upgraded at boot by the non-root user."""
         dockerfile = (BACKEND / "Dockerfile").read_text()

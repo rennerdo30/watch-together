@@ -74,7 +74,7 @@ from services.metrics import (
     TIER_MEMORY, TIER_DISK,
 )
 from services.database import init_database, cache_format, get_cached_format
-from services.resolver import _extract_stream_url, _build_resolve_response
+from services.resolver import _extract_stream_url, _build_resolve_response, enable_ejs_player_cache
 from core.rate_limit import check_rate_limit
 from api.routes.cookies import router as cookies_router
 from api.routes.rooms import router as rooms_router
@@ -86,8 +86,8 @@ from api.routes.user_settings import router as user_settings_router
 from api.routes.browser import router as browser_router
 from api.routes.playlists import router as playlists_router
 from connection_manager import manager
-from services.sponsorblock import SponsorSkipper
-from services.watch_history import reporter as history_reporter
+from services.sponsorblock import SponsorSkipper, youtube_video_id
+from services.watch_history import attach_tracking_capture, reporter as history_reporter
 from services import stream_owner
 from services import stream_expiry
 from services import shared_browser
@@ -660,6 +660,48 @@ def sanitize_room_id(room_id: Optional[str]) -> str:
     return ROOM_ID_DISALLOWED.sub('', room_id or '')
 
 
+# DASH URLs currently being probed right after /api/resolve.
+_probing_resolved: set = set()
+
+
+def _schedule_manifest_probe(video: dict) -> None:
+    """Start probing a freshly resolved DASH ladder before /api/dash-manifest arrives.
+
+    `/api/resolve` finishes before the client sends `set_video` and requests the
+    manifest (and speculative paste-time resolves sit even longer). Overlapping
+    the index probes with that round-trip removes 1-2 s from cold starts;
+    `probe_index` coalesces per stream so the manifest request joins in-flight
+    probes rather than duplicating them. Only triggered by `/api/resolve` —
+    never by playlist imports (`_resolve_queued`) — so bulk queueing cannot
+    evict active entries from the index cache.
+    """
+    if _proxy_client is None or not isinstance(video, dict) or video.get("stream_type") != "dash":
+        return
+    original_url = video.get("original_url")
+    if not original_url or original_url in _probing_resolved:
+        return
+    video_formats, audio_formats = manifest_formats(video)
+    if not video_formats or not audio_formats:
+        return
+    _probing_resolved.add(original_url)
+
+    async def _probe() -> None:
+        try:
+            stream_owner.remember(video)
+            identity = video.get(stream_owner.RESOLVED_BY_KEY)
+            headers = {"User-Agent": DEFAULT_USER_AGENT, "Referer": "https://www.youtube.com/"}
+            cookie_header = get_cookie_header(identity, video_formats[0]["url"]) if identity else None
+            if cookie_header:
+                headers["Cookie"] = cookie_header
+            await probe_formats(_proxy_client, video_formats + audio_formats, headers)
+        except Exception as exc:
+            logger.debug("Post-resolve manifest probe for %s failed: %s", original_url, exc)
+        finally:
+            _probing_resolved.discard(original_url)
+
+    _run_detached(_probe())
+
+
 @app.get("/api/resolve")
 async def resolve_stream(
     request: Request,
@@ -671,7 +713,9 @@ async def resolve_stream(
     """
     Uses yt-dlp to resolve the input URL to a playable stream URL.
     """
-    return await resolve_video(request, url, user_agent, refresh=refresh, room_id=sanitize_room_id(room))
+    result = await resolve_video(request, url, user_agent, refresh=refresh, room_id=sanitize_room_id(room))
+    _schedule_manifest_probe(result)
+    return result
 
 
 _resolve_tasks: dict[tuple, asyncio.Task] = {}
@@ -752,6 +796,7 @@ async def _resolve_video(user_email: Optional[str], url: str, user_agent: str = 
     logger.info(f"Resolving URL: {url} (User: {user_email or 'anonymous'})")
 
     os.makedirs(YTDLP_CACHE_DIR, exist_ok=True)
+    enable_ejs_player_cache()
 
     base_opts = {
         'quiet': False,
@@ -765,7 +810,7 @@ async def _resolve_video(user_email: Optional[str], url: str, user_agent: str = 
         'skip_download': True,
         'noplaylist': True,
         'ignore_no_formats_error': True,
-        'cache_dir': YTDLP_CACHE_DIR,
+        'cachedir': YTDLP_CACHE_DIR,
         # The PO token provider address must be passed explicitly: the bgutil
         # plugin otherwise looks for it on localhost, gets no token, and
         # YouTube answers "Sign in to confirm you're not a bot" with no
@@ -791,21 +836,25 @@ async def _resolve_video(user_email: Optional[str], url: str, user_agent: str = 
         # JavaScript challenge; the second lets yt-dlp fetch the challenge
         # script from GitHub in case the local runtime cannot run it.
         #
-        # The value must be the string 'ejs:github'. Passing {'ejs': 'github'}
-        # makes yt-dlp log "Ignoring unsupported remote component(s): ejs" and
-        # carry on without it.
+        # `remote_components` must be an iterable of component strings such as
+        # ['ejs:github']: yt-dlp passes it to `set(...)`, so a bare string
+        # ('ejs:github') splits into single characters and is silently ignored.
         attempts = [
             ("local challenge runtime", dict(base_opts)),
-            ("remote challenge components", {**base_opts, 'remote_components': 'ejs:github'}),
+            ("remote challenge components", {**base_opts, 'remote_components': ['ejs:github']}),
         ]
 
+        capture_history = bool(has_cookies and cookie_owner and youtube_video_id(url))
         last_error = None
         for attempt, (label, ydl_opts) in enumerate(attempts, start=1):
             try:
+                tracking_sink = attach_tracking_capture(ydl_opts) if capture_history else None
                 attempt_started = time.monotonic()
                 info = await asyncio.to_thread(_extract_with_options, url, ydl_opts)
                 logger.info("%s took %.0f ms for %s", label,
                             (time.monotonic() - attempt_started) * 1000, url)
+                if tracking_sink:
+                    history_reporter.remember_captured(cookie_owner, url, tracking_sink)
                 stream_info = _extract_stream_url(info)
 
                 if stream_info and stream_info.get('url'):

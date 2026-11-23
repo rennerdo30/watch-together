@@ -23,6 +23,7 @@ import asyncio
 import logging
 import random
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
@@ -40,6 +41,8 @@ from core.config import (
     YOUTUBE_HISTORY_PING_INTERVAL_SECONDS,
     YOUTUBE_HISTORY_SEEK_THRESHOLD_SECONDS,
     YOUTUBE_HISTORY_TIMEOUT_SECONDS,
+    YOUTUBE_HISTORY_TRACKING_CACHE_MAX_ENTRIES,
+    YOUTUBE_HISTORY_TRACKING_CACHE_TTL_SECONDS,
 )
 from services.resolver import build_ydl_opts
 from services.sponsorblock import youtube_video_id
@@ -118,6 +121,27 @@ def install_tracking_capture() -> None:
         YoutubeIE._mark_watched = _capturing_mark_watched
 
 
+def attach_tracking_capture(opts: dict) -> Dict[str, str]:
+    """Wire a yt-dlp option dict to capture tracking URLs without pinging YouTube.
+
+    Used by both the main resolver (so the resolving member's history costs
+    zero extra extractions) and the standalone capture fallback below.
+    """
+    install_tracking_capture()
+    sink: Dict[str, str] = {}
+    opts["mark_watched"] = True
+    opts[CAPTURE_PARAM] = sink
+    return sink
+
+
+def tracking_urls_from_sink(sink: Dict[str, str]) -> Optional[TrackingUrls]:
+    """Turn a populated capture sink into `TrackingUrls`, or None if incomplete."""
+    playback, watchtime = sink.get(PLAYBACK_URL_KEY), sink.get(WATCHTIME_URL_KEY)
+    if not playback or not watchtime:
+        return None
+    return TrackingUrls(playback=playback, watchtime=watchtime)
+
+
 async def capture_tracking_urls(original_url: str, cookie_path: str,
                                 user_agent: Optional[str] = None) -> Optional[TrackingUrls]:
     """Extract the video with this member's cookies and keep the tracking URLs.
@@ -125,16 +149,23 @@ async def capture_tracking_urls(original_url: str, cookie_path: str,
     yt-dlp only calls mark-watched when cookies were passed, which is also
     the only case in which the URLs are worth anything: they identify the
     signed-in session whose history is to be updated.
+
+    `player_skip=['js']` and `process=False` skip downloading YouTube's player
+    JS and running Deno/format selection: `playbackTracking` arrives in the
+    raw player API JSON and needs no signature or n-challenge decryption.
     """
-    install_tracking_capture()
-    sink: Dict[str, str] = {}
     opts = build_ydl_opts(cookie_path, user_agent)
-    opts["mark_watched"] = True
-    opts[CAPTURE_PARAM] = sink
+    opts["ignore_no_formats_error"] = True
+    extractor_args = dict(opts.get("extractor_args") or {})
+    youtube_args = dict(extractor_args.get("youtube") or {})
+    youtube_args["player_skip"] = ["js"]
+    extractor_args["youtube"] = youtube_args
+    opts["extractor_args"] = extractor_args
+    sink = attach_tracking_capture(opts)
 
     def extract() -> None:
         with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.extract_info(original_url, download=False)
+            ydl.extract_info(original_url, download=False, process=False)
 
     try:
         await asyncio.to_thread(extract)
@@ -143,11 +174,11 @@ async def capture_tracking_urls(original_url: str, cookie_path: str,
         # selection, which runs afterwards, can still fail without making
         # them any less valid.
         logger.warning("History: extraction for %s reported: %s", original_url, exc)
-    playback, watchtime = sink.get(PLAYBACK_URL_KEY), sink.get(WATCHTIME_URL_KEY)
-    if not playback or not watchtime:
+    urls = tracking_urls_from_sink(sink)
+    if urls is None:
         logger.info("History: no tracking URLs in the player response for %s", original_url)
         return None
-    return TrackingUrls(playback=playback, watchtime=watchtime)
+    return urls
 
 
 # ----- reporting ------------------------------------------------------------
@@ -190,6 +221,45 @@ class HistoryReporter:
         self._rng = rng
         self._sessions: Dict[Tuple[str, str], HistorySession] = {}
         self._starting: Dict[Tuple[str, str], asyncio.Task] = {}
+        # (user_email, video_id) -> (TrackingUrls, captured_at). Reused across
+        # the resolve -> set_video handoff and WebSocket reconnects so neither
+        # spawns a fresh yt-dlp extraction for URLs already in hand.
+        self._tracking_cache: "OrderedDict[Tuple[str, str], Tuple[TrackingUrls, float]]" = OrderedDict()
+
+    def remember_captured(self, user_email: Optional[str], original_url: str,
+                          sink: Dict[str, str]) -> bool:
+        """Store tracking URLs captured during a main resolve for `user_email`."""
+        if not user_email or user_email == "Guest":
+            return False
+        video_id = youtube_video_id(original_url)
+        urls = tracking_urls_from_sink(sink)
+        if not video_id or urls is None:
+            return False
+        self._cache_urls(user_email, video_id, urls)
+        return True
+
+    def _cache_urls(self, user_email: str, video_id: str, urls: TrackingUrls) -> None:
+        key = (user_email, video_id)
+        self._tracking_cache[key] = (urls, self._now())
+        self._tracking_cache.move_to_end(key)
+        while len(self._tracking_cache) > YOUTUBE_HISTORY_TRACKING_CACHE_MAX_ENTRIES:
+            self._tracking_cache.popitem(last=False)
+
+    def _cached_urls(self, user_email: str, video_id: str) -> Optional[TrackingUrls]:
+        key = (user_email, video_id)
+        entry = self._tracking_cache.get(key)
+        if entry is None:
+            return None
+        urls, captured_at = entry
+        if self._now() - captured_at > YOUTUBE_HISTORY_TRACKING_CACHE_TTL_SECONDS:
+            self._tracking_cache.pop(key, None)
+            return None
+        self._tracking_cache.move_to_end(key)
+        return urls
+
+    def _forget_cached_urls(self, user_email: str, video_id: Optional[str]) -> None:
+        if video_id:
+            self._tracking_cache.pop((user_email, video_id), None)
 
     def configure(self, *, capture: Optional[CaptureFn] = None,
                   transport: Optional[httpx.AsyncBaseTransport] = None) -> None:
@@ -332,15 +402,23 @@ class HistoryReporter:
                 return
             video = state.get("video_data") or {}
             video_key = self._video_key(state)
-            if not video_key or video.get("is_live") or not youtube_video_id(video_key):
+            video_id = youtube_video_id(video_key) if video_key else None
+            if not video_key or video.get("is_live") or not video_id:
                 return
-            async with cookie_file(user_email) as cookie_path:
-                if not cookie_path:
+            urls = self._cached_urls(user_email, video_id)
+            if urls is not None:
+                if not get_cookie_header(user_email, urls.playback):
                     logger.info("History: %s opted in but has no cookies; nothing reported", user_email)
                     return
-                urls = await self._capture(video_key, cookie_path)
-            if urls is None:
-                return
+            else:
+                async with cookie_file(user_email) as cookie_path:
+                    if not cookie_path:
+                        logger.info("History: %s opted in but has no cookies; nothing reported", user_email)
+                        return
+                    urls = await self._capture(video_key, cookie_path)
+                if urls is None:
+                    return
+                self._cache_urls(user_email, video_id, urls)
             state = self._manager.room_states.get(room_id)
             if not state or self._video_key(state) != video_key:
                 return  # The room moved on during the extraction.
@@ -447,6 +525,7 @@ class HistoryReporter:
         if response.status_code >= 400:
             logger.warning("History: YouTube answered %s for %s; stopping this video",
                            response.status_code, session.user_email)
+            self._forget_cached_urls(session.user_email, youtube_video_id(session.video_key))
             self._sessions.pop((session.room_id, session.user_email), None)
             raise asyncio.CancelledError
         logger.debug("History: %s at %.1fs (%s)", session.user_email, position,

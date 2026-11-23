@@ -109,12 +109,13 @@ class TestPlayerClientIsNotPinned:
 
 
 class TestRemoteComponents:
-    """yt-dlp ignores this option unless it is the string form."""
+    """yt-dlp runs `set(params['remote_components'])`, so it must be an iterable of strings."""
 
     def test_fallback_asks_for_remote_components_in_the_accepted_form(
         self, client, monkeypatch
     ):
         """The first attempt uses the local runtime; only the retry sets this."""
+        import yt_dlp
         import main as main_module
 
         seen = []
@@ -136,10 +137,13 @@ class TestRemoteComponents:
         assert "remote_components" not in seen[0], (
             "the first attempt should use the runtime in the image"
         )
-        # A dict here makes yt-dlp log "Ignoring unsupported remote
-        # component(s)" and carry on without it.
-        assert seen[1]["remote_components"] == "ejs:github"
-        assert isinstance(seen[1]["remote_components"], str)
+        # A bare string ('ejs:github') splits into single letters when yt-dlp
+        # builds set(remote_components) and is silently ignored. Verify against
+        # a real YoutubeDL instance so yt-dlp's own parser pins the format.
+        assert seen[1]["remote_components"] == ["ejs:github"]
+        assert not isinstance(seen[1]["remote_components"], str)
+        with yt_dlp.YoutubeDL({**seen[1], "quiet": True}) as ydl:
+            assert ydl.params["remote_components"] == {"ejs:github"}
 
     def test_both_attempts_still_pass_the_provider(self, client, monkeypatch):
         import main as main_module
@@ -158,6 +162,129 @@ class TestRemoteComponents:
 
         for opts in seen:
             assert opts["extractor_args"].get("youtubepot-bgutilhttp")
+
+
+class TestYtDlpCache:
+    """yt-dlp reads `cachedir` (no underscore); `cache_dir` was silently ignored."""
+
+    def test_resolve_and_helper_pass_cachedir_recognized_by_ytdlp(self, client, captured_options):
+        import yt_dlp
+        from core.config import YTDLP_CACHE_DIR
+        from services.resolver import build_ydl_opts
+
+        response = client.get("/api/resolve",
+                              params={"url": "https://youtu.be/cachedir-check", "user": "a@example.com"})
+        assert response.status_code == 200
+        assert captured_options
+
+        expected = os.path.abspath(YTDLP_CACHE_DIR)
+        for opts in (captured_options[0], build_ydl_opts(None)):
+            assert "cache_dir" not in opts
+            assert opts.get("cachedir") == YTDLP_CACHE_DIR
+            with yt_dlp.YoutubeDL({**opts, "quiet": True}) as ydl:
+                assert os.path.abspath(ydl.cache._get_root_dir()) == expected
+
+    @pytest.mark.parametrize("rel_path", [
+        "backend/main.py",
+        "backend/services/resolver.py",
+        "backend/services/playlists.py",
+        "deploy/host-status.sh",
+    ])
+    def test_no_source_passes_misspelled_cache_dir_to_ytdlp(self, rel_path):
+        text = (BACKEND_ROOT.parent / rel_path).read_text()
+        assert "'cache_dir'" not in text and '"cache_dir"' not in text
+
+    def test_ejs_preprocessed_player_cache_is_enabled(self):
+        from yt_dlp.extractor.youtube.jsc._builtin.ejs import EJSBaseJCP
+        from services.resolver import enable_ejs_player_cache
+
+        assert enable_ejs_player_cache() is True
+        assert EJSBaseJCP._ENABLE_PREPROCESSED_PLAYER_CACHE is True
+
+    def test_prune_ytdlp_cache_drops_expired_and_oversized_entries(self, tmp_path):
+        import time
+        from services.resolver import prune_ytdlp_cache
+
+        sub = tmp_path / "challenge-solver"
+        sub.mkdir()
+        expired = sub / "old.json"
+        oldest = sub / "first.json"
+        newest = sub / "second.json"
+        expired.write_bytes(b"a" * 100)
+        oldest.write_bytes(b"b" * 100)
+        newest.write_bytes(b"c" * 100)
+        now = time.time()
+        os.utime(expired, (now - 1000, now - 1000))
+        os.utime(oldest, (now - 100, now - 100))
+        os.utime(newest, (now - 10, now - 10))
+
+        removed = prune_ytdlp_cache(str(tmp_path), max_bytes=150, max_age_seconds=500)
+        assert removed == 2
+        assert not expired.exists()
+        assert not oldest.exists()
+        assert newest.exists()
+
+    def test_resolve_endpoint_starts_background_manifest_probe(self, client, captured_options, monkeypatch):
+        import main as main_module
+
+        probed = []
+
+        async def fake_probe(http_client, formats, headers=None):
+            probed.extend(fmt["url"] for fmt in formats)
+            return len(formats)
+
+        monkeypatch.setattr(main_module, "_proxy_client", object())
+        monkeypatch.setattr(main_module, "probe_formats", fake_probe)
+
+        response = client.get("/api/resolve",
+                              params={"url": "https://youtu.be/bg-probe", "user": "a@example.com"})
+        assert response.status_code == 200
+        assert len(probed) == 2
+
+    def test_signed_in_youtube_resolve_captures_watch_history_urls(self, client, monkeypatch, tmp_path):
+        from contextlib import asynccontextmanager
+        import main as main_module
+        from services.watch_history import CAPTURE_PARAM, PLAYBACK_URL_KEY, WATCHTIME_URL_KEY
+
+        cookie_path = tmp_path / "cookies.txt"
+        cookie_path.write_text("# Netscape HTTP Cookie File\n")
+
+        @asynccontextmanager
+        async def fake_cookie_file(email):
+            yield str(cookie_path) if email == "a@example.com" else None
+
+        remembered = []
+        monkeypatch.setattr(main_module, "choose_cookie_source", lambda *a, **kw: "a@example.com")
+        monkeypatch.setattr(main_module, "cookie_file", fake_cookie_file)
+        monkeypatch.setattr(
+            main_module.history_reporter,
+            "remember_captured",
+            lambda email, url, sink: remembered.append((email, url, dict(sink))) or True,
+        )
+
+        seen = []
+
+        def fake_extract(url, ydl_opts):
+            seen.append(ydl_opts)
+            if CAPTURE_PARAM in ydl_opts:
+                ydl_opts[CAPTURE_PARAM][PLAYBACK_URL_KEY] = "https://s.youtube.com/api/stats/playback?x=1"
+                ydl_opts[CAPTURE_PARAM][WATCHTIME_URL_KEY] = "https://s.youtube.com/api/stats/watchtime?x=1"
+            return FAKE_INFO
+
+        monkeypatch.setattr(main_module, "_extract_with_options", fake_extract)
+
+        # YouTube video attaches the capture sink and caches the URLs.
+        yt_url = "https://www.youtube.com/watch?v=histCapt001"
+        assert client.get("/api/resolve", params={"url": yt_url, "user": "a@example.com"}).status_code == 200
+        assert seen[0].get("mark_watched") is True
+        assert CAPTURE_PARAM in seen[0]
+        assert len(remembered) == 1 and remembered[0][0] == "a@example.com"
+
+        # Non-YouTube sites must not have mark_watched enabled.
+        other_url = "https://www.twitch.tv/videos/123456"
+        assert client.get("/api/resolve", params={"url": other_url, "user": "a@example.com"}).status_code == 200
+        assert "mark_watched" not in seen[1]
+        assert CAPTURE_PARAM not in seen[1]
 
 
 class TestResolveCachesItsResult:
