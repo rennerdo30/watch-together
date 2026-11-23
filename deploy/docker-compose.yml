@@ -141,7 +141,7 @@ services:
           cpus: '1.0'
 
   nginx:
-    image: nginx:1.30.6-alpine
+    image: nginx:1.31.9-alpine
     restart: unless-stopped
     logging: *capped_logs
     dns: *doh_resolver
