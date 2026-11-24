@@ -12,6 +12,17 @@ CACHE_DIR = "data/cache"
 YTDLP_CACHE_DIR = "data/yt_dlp_cache"
 YTDLP_CACHE_MAX_BYTES = 64 * 1024 * 1024  # 64 MB (~14 preprocessed players)
 YTDLP_CACHE_TTL_SECONDS = 7 * 24 * 3600  # 7 days
+# Periodic yt-dlp update check. `start.sh` refreshes yt-dlp at container boot,
+# and when `YTDLP_AUTO_UPDATE=true` the running process also checks PyPI on
+# this interval and gracefully restarts once idle if a newer stable release is
+# published (Docker restarts the container through `start.sh`).
+YTDLP_AUTO_UPDATE = os.environ.get("YTDLP_AUTO_UPDATE", "true").strip().lower() == "true"
+YTDLP_UPDATE_CHECK_INTERVAL_SECONDS = max(
+    60, int(os.environ.get("YTDLP_UPDATE_CHECK_INTERVAL_SECONDS", "3600"))
+)
+YTDLP_UPDATE_IDLE_POLL_SECONDS = 60
+YTDLP_UPDATE_CHECK_TIMEOUT_SECONDS = 15.0
+YTDLP_PYPI_JSON_URL = "https://pypi.org/pypi/yt-dlp/json"
 # Segment cache budget. Once it is reached, nothing new is cached at all
 # until the janitor evicts — so a budget smaller than a viewing session
 # silently turns caching off partway through. An hour of 1080p is a couple

@@ -51,7 +51,17 @@ class TestBackendImage:
         assert "YTDLP_SOURCE" not in start
         # A failed update is reported, not fatal.
         assert "starting with" in start
+        # Periodic runtime checks are only enabled when start.sh supervises restarts.
+        auto_block = start.split('if [ "${YTDLP_AUTO_UPDATE,,}" = "true" ]; then', 1)[1].split("\nelse\n", 1)[0]
+        assert "export YTDLP_UPDATE_MANAGED=1" in auto_block
         assert start.rstrip().endswith("exec uvicorn main:app --host 0.0.0.0 --port 8000")
+
+    def test_production_compose_enables_periodic_ytdlp_checks_and_restart(self):
+        compose = (REPO_ROOT / "deploy" / "docker-compose.yml").read_text()
+        backend_block = compose.split("  backend:\n", 1)[1].split("\n  bgutil-provider:\n", 1)[0]
+        assert "restart: unless-stopped" in backend_block
+        assert "YTDLP_AUTO_UPDATE:" in backend_block
+        assert "YTDLP_UPDATE_CHECK_INTERVAL_SECONDS:" in backend_block
 
 
 class TestExtensionManifest:

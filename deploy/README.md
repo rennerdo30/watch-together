@@ -104,7 +104,10 @@ the tunnel — but the verified path is still the one to run.
 ## yt-dlp stays current
 
 The backend refreshes yt-dlp from the latest stable PyPI release on every container
-start, so a deploy or restart checks for the newest stable extractor release.
+start **and** checks PyPI every hour while running. When a newer stable release is
+published, the backend waits until no room is actively playing (and no screen share
+or shared browser session is active), then triggers a graceful restart so Docker
+brings it back up through `start.sh` with the updated extractor and PO token plugins.
 YouTube changes its requirements frequently and the failure mode is total —
 zero playable formats, not reduced quality — so a version frozen at image
 build time goes stale within days.
@@ -114,7 +117,8 @@ lets a non-root container upgrade them at boot. Update failures are never
 fatal: an offline or rate-limited host starts with the version it has.
 
 ```bash
-YTDLP_AUTO_UPDATE=false        # pin to whatever the image was built with
+YTDLP_AUTO_UPDATE=false                  # pin to whatever the image was built with
+YTDLP_UPDATE_CHECK_INTERVAL_SECONDS=3600 # hourly PyPI check (default)
 ```
 
 To pick up new extractor code without a full deploy:

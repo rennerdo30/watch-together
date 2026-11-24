@@ -43,6 +43,7 @@ from core.config import (
     SHARE_CHUNK_MAX_BYTES, SHARE_CONTROL_FORMAT, SHARE_CONTROL_MAX_BYTES,
     SHARE_CLOSE_PROTOCOL, SHARE_CLOSE_NOT_AUTHORIZED, SHARE_CLOSE_NO_SHARE,
     BROWSER_TITLE_MAX_LENGTH, BROWSER_BUSY_LIVE_SHARE,
+    YTDLP_UPDATE_CHECK_INTERVAL_SECONDS, YTDLP_UPDATE_IDLE_POLL_SECONDS,
 )
 from core.security import (
     get_user_from_request, get_user_from_websocket,
@@ -94,6 +95,7 @@ from services import shared_browser
 from services import program_loudness
 from services import startup_timing
 from services.share_relay import RelayRefused, relay as share_relay
+from services.ytdlp_updater import updater as ytdlp_updater
 
 # Endpoints whose error responses must never be stored by any cache.
 ERROR_NO_STORE_PATHS = frozenset({"/api/proxy", "/api/dash-manifest", "/api/segment-spans", "/api/loudness"})
@@ -490,6 +492,16 @@ async def sync_heartbeat_task():
             await asyncio.sleep(min(2 ** consecutive_errors, 30))
 
 
+def _is_backend_idle() -> bool:
+    """True when restarting the backend will not interrupt live room activity."""
+    if manager.live_shares or manager.browser_sessions or _queued_resolves:
+        return False
+    for room_id, state in manager.room_states.items():
+        if state.get("is_playing") and manager.active_connections.get(room_id):
+            return False
+    return True
+
+
 # ============================================================================
 # Application Lifecycle
 # ============================================================================
@@ -515,7 +527,15 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(sync_heartbeat_task()),
             asyncio.create_task(prefetch_cleanup_task()),
         ]
-        logger.info("Started background tasks: room cleanup, cache cleanup, sync heartbeat, prefetch cleanup")
+        task_names = ["room cleanup", "cache cleanup", "sync heartbeat", "prefetch cleanup"]
+        if ytdlp_updater.is_enabled():
+            tasks.append(asyncio.create_task(ytdlp_updater.run(
+                _is_backend_idle,
+                check_interval=YTDLP_UPDATE_CHECK_INTERVAL_SECONDS,
+                idle_poll=YTDLP_UPDATE_IDLE_POLL_SECONDS,
+            )))
+            task_names.append("yt-dlp auto-update")
+        logger.info("Started background tasks: %s", ", ".join(task_names))
         yield
     finally:
         # Cancel and await all background tasks (even on startup failure)
@@ -534,6 +554,7 @@ async def lifespan(app: FastAPI):
         await shutdown_prefetch()
         await sponsor_skipper.client.aclose()
         await history_reporter.aclose()
+        await ytdlp_updater.aclose()
 
         # Clean up HTTP client. Closing can fail if the client was created
         # on a different event loop than the one shutting down, which must

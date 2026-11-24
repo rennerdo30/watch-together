@@ -46,6 +46,9 @@ if [ "${YTDLP_AUTO_UPDATE,,}" = "true" ]; then
     else
         log "yt-dlp update failed (offline or rate limited); starting with ${before}"
     fi
+    # Tell the Python process it is running inside a supervised container that
+    # refreshes yt-dlp on restart, enabling periodic runtime update checks.
+    export YTDLP_UPDATE_MANAGED=1
 else
     log "yt-dlp auto-update disabled; using $(current_version)"
 fi

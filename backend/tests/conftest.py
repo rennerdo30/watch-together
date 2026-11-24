@@ -186,3 +186,21 @@ def empty_client_errors():
     history.reset()
     yield
     history.reset()
+
+
+@pytest.fixture(autouse=True)
+def offline_ytdlp_updater():
+    """Never let a test hit real PyPI or send SIGTERM to pytest."""
+    import httpx
+    from services.ytdlp_updater import updater
+
+    def reset_offline():
+        updater.configure(
+            pypi_url="http://pypi.test/yt-dlp/json",
+            transport=httpx.MockTransport(lambda request: httpx.Response(304)),
+            request_restart=lambda: None,
+        )
+
+    reset_offline()
+    yield
+    reset_offline()

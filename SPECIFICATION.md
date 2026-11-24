@@ -363,7 +363,7 @@ type ServerMessage =
 ## Roadmap
 
 ### Completed
-- [x] Universal video resolution (yt-dlp)
+- [x] Universal video resolution (yt-dlp, with boot-time + hourly idle-safe PyPI auto-updates)
 - [x] Real-time WebSocket sync
 - [x] DASH A/V synchronization
 - [x] HLS playback with hls.js

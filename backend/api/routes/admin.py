@@ -28,6 +28,7 @@ from services import user_cookies
 from services.playback_quality import history as playback_history, verdict as playback_verdict
 from services.startup_timing import history as startup_history
 from services.client_errors import history as client_error_history
+from services.ytdlp_updater import updater as ytdlp_updater
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +116,7 @@ async def admin_overview(request: Request, response: Response):
         # How long resolves, manifests and player starts take, with medians
         # and 90th percentiles; the same events are INFO lines in the log.
         "startup_timing": startup_history.snapshot(limit=config.ADMIN_STARTUP_TIMING_LIMIT),
+        "yt_dlp": ytdlp_updater.snapshot(),
     }
 
 

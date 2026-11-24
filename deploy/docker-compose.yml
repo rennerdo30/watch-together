@@ -65,10 +65,11 @@ services:
       # Room state, caches and the rate limiter are in process memory, so a
       # second worker would split rooms. Startup refuses anything above 1.
       WEB_CONCURRENCY: "1"
-      # Fetch the latest stable yt-dlp release on every start. YouTube breaks
-      # extraction often and the fix usually ships within days, so a version
-      # frozen at image build time goes stale quickly. Set to "false" to pin.
+      # Fetch the latest stable yt-dlp release on every start, and check PyPI
+      # hourly while running so a long-lived container restarts cleanly once
+      # idle whenever a new release ships. Set YTDLP_AUTO_UPDATE=false to pin.
       YTDLP_AUTO_UPDATE: ${YTDLP_AUTO_UPDATE:-true}
+      YTDLP_UPDATE_CHECK_INTERVAL_SECONDS: ${YTDLP_UPDATE_CHECK_INTERVAL_SECONDS:-3600}
       # DEBUG adds a line per proxied transfer with the byte range the origin
       # saw, which is what distinguishes a player's range request from an
       # intermediary fetching the whole object.
