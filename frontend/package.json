@@ -18,20 +18,20 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@litertjs/core": "2.6.0",
-    "@websr/websr": "0.0.16",
+    "@websr/websr": "0.1.1",
     "clsx": "^2.1.1",
     "framegen": "1.4.0",
     "hls.js": "^1.7.4",
-    "lucide-react": "^1.64.0",
-    "next": "^16.4.3",
+    "lucide-react": "^1.76.0",
+    "next": "^16.4.6",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-hot-toast": "^2.6.1",
-    "shaka-player": "^5.3.3",
-    "tailwind-merge": "^3.7.0"
+    "shaka-player": "^5.3.5",
+    "tailwind-merge": "^3.7.1"
   },
   "devDependencies": {
-    "@playwright/test": "^1.64.1",
+    "@playwright/test": "^1.65.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^26.6.6",
     "@types/pngjs": "6.0.5",
@@ -39,10 +39,10 @@
     "@types/react-dom": "^19",
     "@webgpu/types": "^0.1.74",
     "esbuild": "0.28.2",
-    "eslint": "^10.13.0",
-    "eslint-config-next": "^16.4.3",
+    "eslint": "^10.15.0",
+    "eslint-config-next": "^16.4.6",
     "pngjs": "7.0.0",
     "tailwindcss": "^4",
-    "typescript": "6.0.3"
+    "typescript": "7.0.2"
   }
 }
